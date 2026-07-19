@@ -114,6 +114,9 @@ test("TXT 与 Markdown 资料可上传并生成知识骨架", async () => {
   assert.ok(data.retrieval.chunks >= 2);
   assert.ok(data.modules.length >= 3);
   assert.ok(data.modules.flatMap((module) => module.concepts).length >= 5);
+  assert.ok(data.questions.length >= 5);
+  assert.match(data.questions[0].question, /解释|例子|什么情况下|如何|比较/);
+  assert.ok(data.questions[0].concept);
 });
 
 test("原始资料会落盘并可通过受控接口重新下载", async () => {
@@ -156,6 +159,11 @@ test("费曼教练会针对黑话追问", async () => {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      question: {
+        id: "q-data-loop",
+        question: "请不用专业术语解释数据飞轮为什么会运转。",
+        concept: "数据飞轮"
+      },
       concept: { title: "数据飞轮" },
       answer: "它能赋能业务并形成闭环。",
       role: "child",

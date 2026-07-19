@@ -183,6 +183,24 @@ const navItems = [
 
 const stageLabels = ["资料就绪", "掌握骨架", "费曼输出", "定向补漏", "成果沉淀"];
 
+function questionsForProject(project) {
+  if (project.analysis?.questions?.length) return project.analysis.questions;
+  const concepts = project.analysis?.modules?.flatMap((module) => module.concepts || []) || [];
+  const templates = [
+    (title) => `请不用专业术语，向一个12岁孩子解释“${title}”是什么，以及它为什么重要。`,
+    (title) => `请用一个真实例子说明“${title}”是如何发挥作用的。`,
+    (title) => `“${title}”在什么情况下会失效？请给出一个反例。`
+  ];
+  return concepts.map((concept, index) => ({
+    id: `legacy-q-${concept.id || index}`,
+    question: templates[index % templates.length](concept.title),
+    conceptId: concept.id,
+    concept: concept.title,
+    why: "检验是否真正理解资料中的核心逻辑",
+    sourceRefs: concept.sourceRefs || []
+  }));
+}
+
 function App() {
   const [projects, setProjects] = useState(() => {
     try {
@@ -783,33 +801,40 @@ function RagAssistant({ project, navigate, showToast }) {
 
 function Coach({ project, updateProject, showToast, navigate }) {
   const concepts = project.analysis?.modules?.flatMap((module) => module.concepts) || [];
+  const questions = questionsForProject(project);
   const stored = (() => {
     try { return JSON.parse(sessionStorage.getItem("zhifan-selected-concept")); } catch { return null; }
   })();
-  const initialConcept = stored || concepts.find((item) => item.mastery < 3) || concepts[0];
-  const [concept, setConcept] = useState(initialConcept);
+  const initialQuestion =
+    questions.find((item) => item.id === stored?.questionId) ||
+    questions.find((item) => item.conceptId === stored?.id || item.concept === stored?.title) ||
+    questions[0];
+  const [question, setQuestion] = useState(initialQuestion);
+  const concept =
+    concepts.find((item) => item.id === question?.conceptId || item.title === question?.concept) ||
+    concepts[0];
   const [role, setRole] = useState("child");
   const [answer, setAnswer] = useState("");
   const [turn, setTurn] = useState(1);
   const [loading, setLoading] = useState(false);
   const [evaluation, setEvaluation] = useState(null);
   const [messages, setMessages] = useState(() => [
-    { from: "ai", text: `现在请你向我解释「${initialConcept?.title || "这个概念"}」。假设我完全不了解这个领域，不要背定义，用你自己的话告诉我：它是什么，为什么重要？` }
+    { from: "ai", text: initialQuestion?.question || "请先上传资料，让AI根据资料生成问题。" }
   ]);
 
   useEffect(() => {
     sessionStorage.removeItem("zhifan-selected-concept");
   }, []);
 
-  if (!concept) return <NoAnalysis navigate={navigate} />;
+  if (!question || !concept) return <NoAnalysis navigate={navigate} />;
 
-  const changeConcept = (event) => {
-    const next = concepts.find((item) => item.id === event.target.value);
-    setConcept(next);
+  const changeQuestion = (event) => {
+    const next = questions.find((item) => item.id === event.target.value);
+    setQuestion(next);
     setTurn(1);
     setRole("child");
     setEvaluation(null);
-    setMessages([{ from: "ai", text: `请向我解释「${next.title}」。不用背定义，用你自己的话告诉我它是什么、为什么重要。` }]);
+    setMessages([{ from: "ai", text: next.question }]);
   };
 
   const submit = async () => {
@@ -822,7 +847,7 @@ function Coach({ project, updateProject, showToast, navigate }) {
       const response = await fetch("/api/coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: project.id, concept, answer: userText, role, turn })
+        body: JSON.stringify({ projectId: project.id, question, concept, answer: userText, role, turn })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "教练无法回应");
@@ -840,7 +865,7 @@ function Coach({ project, updateProject, showToast, navigate }) {
                 id: `b-${Date.now()}`,
                 ...data.blindspot,
                 concept: concept.title,
-                source: concept.sourceRefs?.[0]?.file || "相关学习资料",
+                source: (question.sourceRefs?.[0] || concept.sourceRefs?.[0])?.file || "相关学习资料",
                 status: "open"
               }
             ],
@@ -865,7 +890,7 @@ function Coach({ project, updateProject, showToast, navigate }) {
     const passed = avg >= 75;
     updateProject({
       sessions: [
-        { id: `ss-${Date.now()}`, concept: concept.title, score: avg, date: "刚刚", status: passed ? "通过" : "需补漏" },
+        { id: `ss-${Date.now()}`, concept: concept.title, question: question.question, score: avg, date: "刚刚", status: passed ? "通过" : "需补漏" },
         ...(project.sessions || [])
       ],
       blindspots: (project.blindspots || []).map((item) =>
@@ -889,7 +914,7 @@ function Coach({ project, updateProject, showToast, navigate }) {
       <div className="coach-layout">
         <section className="coach-main">
           <div className="coach-toolbar">
-            <div><span>当前概念</span><select value={concept.id} onChange={changeConcept}>{concepts.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></div>
+            <div className="coach-question-select"><span>当前问题</span><select value={question.id} onChange={changeQuestion}>{questions.map((item) => <option value={item.id} key={item.id}>{item.question}</option>)}</select></div>
             <div className="role-switch">
               <button className={role === "child" ? "active" : ""} onClick={() => setRole("child")}>小白模式</button>
               <button className={role === "expert" ? "active" : ""} onClick={() => setRole("expert")}>专家模式</button>
@@ -925,10 +950,10 @@ function Coach({ project, updateProject, showToast, navigate }) {
 
         <aside className="coach-side">
           <div className="concept-note">
-            <span className="section-kicker">概念备忘</span>
+            <span className="section-kicker">问题依据 · {question.concept}</span>
             <h3>{concept.title}</h3>
-            <p>{concept.explanation}</p>
-            <button className="source-link"><FileText size={14} /> {concept.sourceRefs?.[0]?.file}</button>
+            <p>{question.why || concept.explanation}</p>
+            <button className="source-link"><FileText size={14} /> {(question.sourceRefs?.[0] || concept.sourceRefs?.[0])?.file}</button>
           </div>
           <div className="live-score">
             <span className="section-kicker">实时观察</span>

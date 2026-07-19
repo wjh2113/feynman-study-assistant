@@ -215,6 +215,8 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 .coach-toolbar > div:first-child { display: flex; align-items: center; gap: 8px; }
 .coach-toolbar span { color: #888c83; font-size: 9px; }
 .coach-toolbar select { max-width: 190px; border: 0; background: transparent; color: #3c413b; font-weight: 600; font-size: 11px; }
+.coach-toolbar .coach-question-select { min-width: 0; flex: 1; }
+.coach-toolbar .coach-question-select select { width: min(100%, 620px); max-width: 620px; overflow: hidden; text-overflow: ellipsis; }
 .role-switch { display: flex; padding: 3px; border-radius: 8px; background: #efefea; }
 .role-switch button { border: 0; border-radius: 6px; padding: 6px 9px; color: #898c84; background: transparent; cursor: pointer; font-size: 9px; }
 .role-switch button.active { color: var(--green); background: white; box-shadow: 0 2px 5px rgba(40,45,40,.07); font-weight: 600; }

@@ -233,6 +233,45 @@ function demoAnalysis(title, mode, sources) {
   };
 }
 
+function questionsFromAnalysis(analysis) {
+  const concepts = (analysis?.modules || []).flatMap((module) => module.concepts || []);
+  const prompts = [
+    (title) => `请不用专业术语，向一个12岁孩子解释“${title}”是什么，以及它为什么重要。`,
+    (title) => `请用一个来自真实工作或生活的例子说明“${title}”是如何发挥作用的。`,
+    (title) => `“${title}”在什么情况下会失效？请说出关键前提和一个反例。`,
+    (title) => `如果资源和时间都减少一半，你会如何运用“${title}”解决问题？`,
+    (title) => `请比较“${title}”与一个容易混淆的做法，并说明你会如何做出选择。`
+  ];
+  return concepts.slice(0, 8).map((concept, index) => ({
+    id: `q-${concept.id || index + 1}`,
+    question: prompts[index % prompts.length](concept.title),
+    conceptId: concept.id,
+    concept: concept.title,
+    why: concept.importance === "核心" ? "检验是否真正掌握核心逻辑" : "检验能否迁移和应用",
+    sourceRefs: concept.sourceRefs || []
+  }));
+}
+
+function normalizeQuestions(questions, analysis) {
+  const concepts = (analysis?.modules || []).flatMap((module) => module.concepts || []);
+  const input = Array.isArray(questions) && questions.length ? questions : questionsFromAnalysis(analysis);
+  return input.slice(0, 10).map((question, index) => {
+    const matched = concepts.find(
+      (concept) =>
+        concept.id === question.conceptId ||
+        concept.title === question.concept
+    );
+    return {
+      id: question.id || `q-${index + 1}`,
+      question: question.question || `请用自己的话解释“${matched?.title || question.concept || "这个知识点"}”。`,
+      conceptId: question.conceptId || matched?.id || "",
+      concept: question.concept || matched?.title || "综合理解",
+      why: question.why || "检验是否真正理解资料中的核心逻辑",
+      sourceRefs: question.sourceRefs?.length ? question.sourceRefs : matched?.sourceRefs || []
+    };
+  });
+}
+
 app.get("/api/health", async (_req, res) => {
   try {
     res.json({
@@ -351,16 +390,18 @@ app.post("/api/analyze", upload.array("files", 12), async (req, res) => {
  }],
  "tacitKnowledge":[{"title":"","type":"实战经验|案例|踩坑|反直觉观点","detail":"",
    "sourceRef":{"file":"原文件名","page":1}}],
- "scenarios":[{"id":"s1","title":"","context":"","constraint":"","goal":"","concepts":[""]}]
+ "scenarios":[{"id":"s1","title":"","context":"","constraint":"","goal":"","concepts":[""]}],
+ "questions":[{"id":"q1","question":"基于资料、能检验真实理解的完整问题","conceptId":"c1","concept":"对应概念","why":"考察意图",
+   "sourceRefs":[{"file":"原文件名","page":1,"quote":"出题依据"}]}]
 }
-要求：3-5个模块，每模块1-4个概念；5个左右核心概念；3条高价值知识；课程模式重点交叉对比课件与转写；生成2个真实场景题。若资料没有依据，明确写“资料未覆盖”，不要虚构引用。
+要求：3-5个模块，每模块1-4个概念；5个左右核心概念；3条高价值知识；课程模式重点交叉对比课件与转写；生成2个真实场景题；再生成5-8个费曼问题，覆盖通俗解释、举例、边界、比较和真实应用，问题必须来自资料而不是通用题库。若资料没有依据，明确写“资料未覆盖”，不要虚构引用。
 
 资料如下：
 ${corpus}`
         }
       ]);
     }
-    const analysis = {
+    const mergedAnalysis = {
       ...demo,
       ...result,
       sources: storedSources,
@@ -371,6 +412,10 @@ ${corpus}`
         strategy: "pgvector + PostgreSQL full-text RRF"
       },
       demo: !apiKey
+    };
+    const analysis = {
+      ...mergedAnalysis,
+      questions: normalizeQuestions(result.questions, mergedAnalysis)
     };
     await saveProject({
       ...(existingProject || {}),
@@ -397,12 +442,13 @@ ${corpus}`
 
 app.post("/api/coach", async (req, res) => {
   try {
-    const { projectId, concept, answer, role = "child", turn = 1 } = req.body || {};
+    const { projectId, question, concept, answer, role = "child", turn = 1 } = req.body || {};
     if (!answer?.trim()) return res.status(400).json({ error: "请先写下你的解释" });
     let evidence = [];
     if (projectId) {
-      const [queryEmbedding] = await embedTexts([`${concept?.title || ""} ${answer}`]);
-      evidence = await hybridSearch(projectId, `${concept?.title || ""} ${answer}`, queryEmbedding, 4);
+      const retrievalQuery = `${question?.question || ""} ${concept?.title || question?.concept || ""} ${answer}`;
+      const [queryEmbedding] = await embedTexts([retrievalQuery]);
+      evidence = await hybridSearch(projectId, retrievalQuery, queryEmbedding, 4);
     }
     if (!apiKey) {
       const hasExample = /比如|例如|就像|好比/.test(answer);
@@ -445,7 +491,8 @@ app.post("/api/coach", async (req, res) => {
       },
       {
         role: "user",
-        content: `概念：${JSON.stringify(concept)}
+        content: `资料生成的问题：${JSON.stringify(question)}
+对应概念：${JSON.stringify(concept)}
 当前角色：${role === "child" ? "好奇的12岁小孩" : "严厉的行业专家"}
 对话轮次：${turn}
 用户解释：${answer}
