@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "concurrently -k \"vite\" \"node server.mjs\"",
     "build": "vite build",
+    "test": "node --test --test-concurrency=1 tests/*.test.mjs",
+    "check": "npm run test && npm run build",
     "start": "node server.mjs",
     "preview": "vite preview"
   },

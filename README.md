@@ -14,6 +14,14 @@ npm run dev
 
 没有设置 `DEEPSEEK_API_KEY` 时，应用会运行在演示模式；配置后将调用 `deepseek-v4-pro` 完成资料分析、费曼追问和一页纸生成。
 
+## 测试
+
+```powershell
+npm run check
+```
+
+该命令会执行服务端集成测试，并完成一次生产构建。
+
 ## 已实现
 
 - 学习项目创建

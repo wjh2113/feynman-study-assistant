@@ -57,20 +57,26 @@ async function parsePdf(buffer, filename) {
   return { filename, type: "PDF", pages };
 }
 
+function decodeUploadName(filename) {
+  const decoded = Buffer.from(filename, "latin1").toString("utf8");
+  return decoded.includes("\uFFFD") ? filename : decoded;
+}
+
 async function parseFile(file) {
-  const ext = path.extname(file.originalname).toLowerCase();
-  if (ext === ".pdf") return parsePdf(file.buffer, file.originalname);
+  const filename = decodeUploadName(file.originalname);
+  const ext = path.extname(filename).toLowerCase();
+  if (ext === ".pdf") return parsePdf(file.buffer, filename);
   if (ext === ".docx") {
     const result = await mammoth.extractRawText({ buffer: file.buffer });
     return {
-      filename: file.originalname,
+      filename,
       type: "DOCX",
       pages: [{ page: 1, text: result.value.replace(/\s+/g, " ").trim() }]
     };
   }
   if ([".txt", ".md", ".markdown"].includes(ext)) {
     return {
-      filename: file.originalname,
+      filename,
       type: ext.slice(1).toUpperCase(),
       pages: [{ page: 1, text: file.buffer.toString("utf8").replace(/\s+/g, " ").trim() }]
     };

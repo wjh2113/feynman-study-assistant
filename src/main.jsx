@@ -312,8 +312,8 @@ function App() {
           {activeView === "overview" && <Overview project={project} navigate={changeView} />}
           {activeView === "sources" && <Sources project={project} updateProject={updateProject} navigate={changeView} showToast={showToast} />}
           {activeView === "map" && <KnowledgeMap project={project} navigate={changeView} />}
-          {activeView === "coach" && <Coach project={project} updateProject={updateProject} showToast={showToast} />}
-          {activeView === "blindspots" && <Blindspots project={project} updateProject={updateProject} showToast={showToast} />}
+          {activeView === "coach" && <Coach project={project} updateProject={updateProject} showToast={showToast} navigate={changeView} />}
+          {activeView === "blindspots" && <Blindspots project={project} updateProject={updateProject} showToast={showToast} navigate={changeView} />}
           {activeView === "output" && <OutputStudio project={project} updateProject={updateProject} showToast={showToast} />}
         </div>
       </main>
@@ -639,7 +639,7 @@ function MasteryDot({ level }) {
   return <i className={`mastery-dot level-${level}`}>{level >= 3 && <Check size={10} />}</i>;
 }
 
-function Coach({ project, updateProject, showToast }) {
+function Coach({ project, updateProject, showToast, navigate }) {
   const concepts = project.analysis?.modules?.flatMap((module) => module.concepts) || [];
   const stored = (() => {
     try { return JSON.parse(sessionStorage.getItem("zhifan-selected-concept")); } catch { return null; }
@@ -659,7 +659,7 @@ function Coach({ project, updateProject, showToast }) {
     sessionStorage.removeItem("zhifan-selected-concept");
   }, []);
 
-  if (!concept) return <NoAnalysis navigate={() => {}} />;
+  if (!concept) return <NoAnalysis navigate={navigate} />;
 
   const changeConcept = (event) => {
     const next = concepts.find((item) => item.id === event.target.value);
@@ -715,15 +715,25 @@ function Coach({ project, updateProject, showToast }) {
   };
 
   const finish = () => {
-    const avg = evaluation ? Math.round(Object.values(evaluation).reduce((a, b) => a + b, 0) / 4) : 70;
+    if (!evaluation) {
+      showToast("请至少完成一轮解释和追问后再保存");
+      return;
+    }
+    const avg = Math.round(Object.values(evaluation).reduce((a, b) => a + b, 0) / 4);
+    const passed = avg >= 75;
     updateProject({
       sessions: [
-        { id: `ss-${Date.now()}`, concept: concept.title, score: avg, date: "刚刚", status: avg >= 75 ? "通过" : "需补漏" },
+        { id: `ss-${Date.now()}`, concept: concept.title, score: avg, date: "刚刚", status: passed ? "通过" : "需补漏" },
         ...(project.sessions || [])
       ],
-      progress: Math.max(project.progress || 0, 60)
+      blindspots: (project.blindspots || []).map((item) =>
+        passed && item.concept === concept.title && item.status === "review"
+          ? { ...item, status: "done" }
+          : item
+      ),
+      progress: Math.max(project.progress || 0, passed ? 76 : 60)
     });
-    showToast("本次对练已保存到学习记录");
+    showToast(passed ? "对练已通过，相关待复测盲区已标记为掌握" : "对练已保存，相关盲区仍需继续练习");
   };
 
   return (
@@ -800,7 +810,7 @@ function ScoreBar({ label, value }) {
   return <div className="score-bar"><div><span>{label}</span><b>{value}</b></div><div className="bar"><i style={{ width: `${value}%` }} /></div></div>;
 }
 
-function Blindspots({ project, updateProject, showToast }) {
+function Blindspots({ project, updateProject, showToast, navigate }) {
   const blindspots = project.blindspots || [];
   const [filter, setFilter] = useState("all");
   const visible = blindspots.filter((item) => filter === "all" || item.status === filter);
@@ -811,6 +821,15 @@ function Blindspots({ project, updateProject, showToast }) {
       progress: status === "done" ? Math.max(project.progress || 0, 76) : project.progress
     });
     showToast(status === "done" ? "盲区已通过复测" : "已加入复测队列");
+  };
+
+  const startRetest = (blind) => {
+    const concept = project.analysis?.modules
+      ?.flatMap((module) => module.concepts)
+      .find((item) => item.title === blind.concept);
+    if (concept) sessionStorage.setItem("zhifan-selected-concept", JSON.stringify(concept));
+    navigate("coach");
+    showToast(`开始复测「${blind.concept}」，通过后会自动消除盲区`);
   };
 
   return (
@@ -837,7 +856,7 @@ function Blindspots({ project, updateProject, showToast }) {
               <button className="source-link"><FileText size={14} /> 回到原文：{blind.source}</button>
               <div className="blind-actions">
                 {blind.status === "open" && <button className="secondary-btn" onClick={() => setStatus(blind.id, "review")}>我已看懂，安排复测 <ArrowRight size={16} /></button>}
-                {blind.status === "review" && <button className="primary-btn" onClick={() => setStatus(blind.id, "done")}><RotateCcw size={16} /> 开始变式复测</button>}
+                {blind.status === "review" && <button className="primary-btn" onClick={() => startRetest(blind)}><RotateCcw size={16} /> 开始变式复测</button>}
                 {blind.status === "done" && <span className="mastered-note"><Check size={15} /> 已通过迁移测试</span>}
               </div>
             </div>
