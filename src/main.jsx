@@ -1700,13 +1700,13 @@ function ModelSettingsPage({ showToast }) {
       <PageHeading
         eyebrow="应用设置 · 模型服务"
         title="模型设置"
-        description="DeepSeek 负责资料总结与学习；Qwen3.5-OCR 负责识别 PDF 扫描页、文档截图和图片文字。"
+        description="支持 DeepSeek、Kimi 等 OpenAI 兼容接口；Qwen3.5-OCR 负责识别 PDF 扫描页、文档截图和图片文字。"
       />
       <div className="settings-layout">
         <div className="settings-main">
           <section className="panel settings-form">
           <div className="settings-head">
-            <div className="settings-provider"><Sparkles size={20} /><div><strong>DeepSeek</strong><span>OpenAI 兼容接口</span></div></div>
+            <div className="settings-provider"><Sparkles size={20} /><div><strong>{saved?.provider || "文本模型"}</strong><span>OpenAI 兼容接口</span></div></div>
             <span className={`config-status ${saved?.configured ? "ready" : ""}`}>
               {saved?.configured ? <><Check size={13} /> 已配置</> : <><CircleAlert size={13} /> 未配置</>}
             </span>
@@ -1716,16 +1716,23 @@ function ModelSettingsPage({ showToast }) {
             <div className="settings-fields">
               <label>
                 <span>API 地址</span>
-                <input value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://api.deepseek.com" />
-                <small>DeepSeek官方地址通常不需要修改。</small>
+                <input value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://api.deepseek.com 或 https://api.moonshot.cn/v1" />
+                <small>DeepSeek 官方地址通常不需要修改；Kimi 请填 https://api.moonshot.cn/v1</small>
               </label>
               <label>
                 <span>模型名称</span>
                 <select value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })}>
-                  <option value="deepseek-v4-pro">deepseek-v4-pro</option>
-                  <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+                  <optgroup label="DeepSeek">
+                    <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+                    <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+                  </optgroup>
+                  <optgroup label="Kimi">
+                    <option value="moonshot-v1-8k">moonshot-v1-8k</option>
+                    <option value="moonshot-v1-32k">moonshot-v1-32k</option>
+                    <option value="moonshot-v1-128k">moonshot-v1-128k</option>
+                  </optgroup>
                 </select>
-                <small>资料分析和出题推荐使用 Pro。</small>
+                <small>资料分析和出题推荐用 DeepSeek Pro；Kimi 8k 响应更快。</small>
               </label>
               <label>
                 <span>API Key</span>
@@ -1734,7 +1741,7 @@ function ModelSettingsPage({ showToast }) {
                   autoComplete="off"
                   value={form.apiKey}
                   onChange={(event) => setForm({ ...form, apiKey: event.target.value })}
-                  placeholder={saved?.configured ? `已保存：${saved.apiKeyMasked}` : "输入 DeepSeek API Key"}
+                  placeholder={saved?.configured ? `已保存：${saved.apiKeyMasked}` : "输入 API Key"}
                 />
                 <small>{saved?.configured ? "留空会继续使用已保存的密钥。" : "密钥只发送到本机后端，不写入浏览器存储。"}</small>
               </label>

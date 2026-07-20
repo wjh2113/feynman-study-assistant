@@ -33,10 +33,18 @@ export async function getModelConfig() {
   };
 }
 
+function providerFromBaseUrl(baseUrl) {
+  const host = String(baseUrl || "").toLowerCase();
+  if (host.includes("deepseek")) return "DeepSeek";
+  if (host.includes("moonshot") || host.includes("kimi")) return "Kimi";
+  if (host.includes("openai")) return "OpenAI";
+  return "自定义";
+}
+
 export async function getPublicModelConfig() {
   const config = await getModelConfig();
   return {
-    provider: "DeepSeek",
+    provider: providerFromBaseUrl(config.baseUrl),
     baseUrl: config.baseUrl,
     model: config.model,
     configured: Boolean(config.apiKey),
