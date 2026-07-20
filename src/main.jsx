@@ -17,6 +17,7 @@ import {
   Lightbulb,
   Menu,
   MessageCircleQuestion,
+  Mic,
   MoreHorizontal,
   Plus,
   RotateCcw,
@@ -24,12 +25,15 @@ import {
   Send,
   Settings,
   Sparkles,
+  Square,
   Target,
+  Trash2,
   UploadCloud,
   X,
   Zap
 } from "./icons.jsx";
 import "./styles.css";
+import { recalculateMasteryAndProgress, scoreToMastery } from "./progress.mjs";
 
 const demoProject = {
   id: "demo-ai-pm",
@@ -308,7 +312,11 @@ function App() {
 
   const updateProject = (patch) => {
     setProjects((items) =>
-      items.map((item) => (item.id === activeProjectId ? { ...item, ...patch } : item))
+      items.map((item) => {
+        if (item.id !== activeProjectId) return item;
+        const merged = { ...item, ...patch };
+        return recalculateMasteryAndProgress(merged);
+      })
     );
   };
 
@@ -400,6 +408,7 @@ function App() {
           </div>
           <div className="topbar-actions">
             <button className="search-pill" onClick={() => changeView("rag")}><Search size={16} /><span>询问资料库</span><kbd>RAG</kbd></button>
+            <button className="model-settings-shortcut" onClick={() => changeView("settings")}><Settings size={16} /><span>模型配置</span></button>
             <button className="icon-btn"><CircleAlert size={18} /></button>
           </div>
         </header>
@@ -532,6 +541,9 @@ function Sources({ project, updateProject, navigate, showToast }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [openSource, setOpenSource] = useState(null);
+  const [deleteSourceId, setDeleteSourceId] = useState(null);
+  const [deletingSourceId, setDeletingSourceId] = useState(null);
+  const [reindexing, setReindexing] = useState(false);
   const fileInput = useRef();
   const sources = project.analysis?.sources || [];
 
@@ -559,7 +571,6 @@ function Sources({ project, updateProject, navigate, showToast }) {
       if (!response.ok) throw new Error(data.error || "分析失败");
       updateProject({
         analysis: data,
-        progress: 22,
         description: data.summary,
         blindspots: [],
         sessions: []
@@ -571,6 +582,41 @@ function Sources({ project, updateProject, navigate, showToast }) {
       showToast(error.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const deleteSource = async (source) => {
+    setDeletingSourceId(source.id);
+    try {
+      const response = await fetch(
+        `/api/projects/${encodeURIComponent(project.id)}/documents/${encodeURIComponent(source.id)}`,
+        { method: "DELETE" }
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "删除资料失败");
+      updateProject(data.project);
+      if (openSource === source.id) setOpenSource(null);
+      setDeleteSourceId(null);
+      showToast(`已删除“${source.name}”及其检索分块`);
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      setDeletingSourceId(null);
+    }
+  };
+
+  const reindexSources = async () => {
+    setReindexing(true);
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/reindex`, { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "重建索引失败");
+      updateProject(data.project);
+      showToast(`已用 BGE-M3 重建 ${data.documents} 份资料：${data.parents} 个父块、${data.chunks} 个子块`);
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      setReindexing(false);
     }
   };
 
@@ -613,7 +659,10 @@ function Sources({ project, updateProject, navigate, showToast }) {
       <section className="panel file-panel">
         <div className="panel-head">
           <div><span className="section-kicker">已入库</span><h3>{sources.length} 份资料</h3></div>
-          <button className="filter-btn">全部类型 <ChevronDown size={14} /></button>
+          <div className="source-panel-actions">
+            {!!sources.length && <button className="secondary-btn" onClick={reindexSources} disabled={reindexing}>{reindexing ? <Spinner /> : <RotateCcw size={14} />}{reindexing ? "正在重建索引…" : "用 BGE-M3 重建索引"}</button>}
+            <button className="filter-btn">全部类型 <ChevronDown size={14} /></button>
+          </div>
         </div>
         {sources.map((source) => {
           const expanded = openSource === source.id;
@@ -634,7 +683,28 @@ function Sources({ project, updateProject, navigate, showToast }) {
                 {source.downloadUrl ? (
                   <a className="icon-btn" href={source.downloadUrl} title="下载原始资料"><Download size={17} /></a>
                 ) : <button className="icon-btn"><MoreHorizontal size={18} /></button>}
+                <button
+                  className="icon-btn source-delete-btn"
+                  aria-label={`删除资料 ${source.name}`}
+                  title="删除资料"
+                  onClick={() => setDeleteSourceId(source.id)}
+                >
+                  <Trash2 size={16} />
+                </button>
               </div>
+              {deleteSourceId === source.id && (
+                <div className="source-delete-confirm" role="alert">
+                  <div>
+                    <strong>确认删除“{source.name}”？</strong>
+                    <span>原始文件、资料记录和对应的向量检索分块都会删除，此操作无法撤销。</span>
+                  </div>
+                  <button className="secondary-btn" onClick={() => setDeleteSourceId(null)} disabled={deletingSourceId === source.id}>取消</button>
+                  <button className="danger-btn" onClick={() => deleteSource(source)} disabled={deletingSourceId === source.id}>
+                    {deletingSourceId === source.id ? <Spinner /> : <Trash2 size={15} />}
+                    {deletingSourceId === source.id ? "正在删除…" : "确认删除"}
+                  </button>
+                </div>
+              )}
               {expanded && (
                 <div className="parse-detail">
                   <div className="parse-summary">
@@ -786,6 +856,18 @@ function RagAssistant({ project, navigate, showToast }) {
   const [history, setHistory] = useState([]);
   const hasSources = Boolean(project.analysis?.sources?.length);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/projects/${encodeURIComponent(project.id)}/rag-history?limit=50`)
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error);
+        if (!cancelled) setHistory((data.records || []).map((record) => ({ question: record.query, ...record })));
+      })
+      .catch((error) => showToast(`读取问答历史失败：${error.message}`));
+    return () => { cancelled = true; };
+  }, [project.id]);
+
   const ask = async () => {
     if (!query.trim() || loading) return;
     const question = query.trim();
@@ -799,7 +881,20 @@ function RagAssistant({ project, navigate, showToast }) {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "资料检索失败");
-      setHistory((items) => [{ question, ...data }, ...items]);
+      const record = { question, ...data };
+      setHistory((items) => [record, ...items]);
+      await fetch(`/api/projects/${encodeURIComponent(project.id)}/rag-history`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: question,
+          answer: data.answer,
+          sources: data.sources,
+          debug: data.debug,
+          insufficient: data.insufficient,
+          demo: data.demo
+        })
+      });
     } catch (error) {
       setQuery(question);
       showToast(error.message);
@@ -823,15 +918,23 @@ function RagAssistant({ project, navigate, showToast }) {
           <span><FileText size={16} /> 回答附原文引用</span>
         </div>
         <div className="rag-input-row">
-          <textarea
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") ask();
-            }}
-            placeholder={hasSources ? "针对已上传的资料提问，例如：讲师认为这个方法落地时最大的风险是什么？" : "请先上传资料并完成解析"}
-            disabled={!hasSources || loading}
-          />
+          <div className="rag-textarea-shell">
+            <textarea
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") ask();
+              }}
+              placeholder={hasSources ? "针对已上传的资料提问，例如：讲师认为这个方法落地时最大的风险是什么？" : "请先上传资料并完成解析"}
+              disabled={!hasSources || loading}
+            />
+            <VoiceInputButton
+              className="floating"
+              disabled={!hasSources || loading}
+              onTranscript={(text) => setQuery((current) => `${current}${current.trim() ? " " : ""}${text}`)}
+              showToast={showToast}
+            />
+          </div>
           <button className="primary-btn" onClick={ask} disabled={!hasSources || !query.trim() || loading}>
             {loading ? <Spinner /> : <Search size={17} />} 检索并回答
           </button>
@@ -848,12 +951,33 @@ function RagAssistant({ project, navigate, showToast }) {
                 <span className="section-kicker">检索依据 · {item.sources.length} 个片段</span>
                 {item.sources.map((source, sourceIndex) => (
                   <div className="rag-source" key={source.id}>
-                    <strong>[{sourceIndex + 1}] {source.filename} · 第 {source.page} 页</strong>
+                    <strong>[{sourceIndex + 1}] {source.filename} · 第 {source.page}{source.pageEnd > source.page ? `-${source.pageEnd}` : ""} 页 · 精排 {Number(source.score || 0).toFixed(3)}</strong>
+                    {source.headingPath && <span className="rag-heading-path">{source.headingPath}</span>}
                     <p>{source.quote}</p>
+                    {!!source.matchedKeywords?.length && <div className="rag-keywords">{source.matchedKeywords.map((word) => <span key={word}>{word}</span>)}</div>}
                     {source.documentId && <a href={`/api/documents/${source.documentId}/file`}>打开原始资料</a>}
                   </div>
                 ))}
               </div>
+            )}
+            {item.debug && (
+              <details className="rag-debug">
+                <summary>检索调试 · {item.debug.candidateCount} 个候选 · 阈值 {item.debug.threshold}</summary>
+                <div className="rag-debug-list">
+                  {item.debug.candidates.map((candidate) => (
+                    <article key={candidate.id}>
+                      <header>
+                        <strong>#{candidate.rank} {candidate.filename} · 第{candidate.page}{candidate.pageEnd > candidate.page ? `-${candidate.pageEnd}` : ""}页</strong>
+                        <span>向量 {candidate.vectorScore} · 关键词 {candidate.keywordScore} · 融合 {candidate.fusionScore} · 精排 {candidate.rerankScore ?? "未进前5"}</span>
+                      </header>
+                      {candidate.headingPath && <div className="rag-debug-heading">章节：{candidate.headingPath}</div>}
+                      {!!candidate.matchedKeywords?.length && <div className="rag-keywords">{candidate.matchedKeywords.map((word) => <span key={word}>{word}</span>)}</div>}
+                      <div className="rag-debug-copy"><strong>命中子块</strong><pre>{candidate.content}</pre></div>
+                      {candidate.parentContent && candidate.parentContent !== candidate.content && <div className="rag-debug-copy"><strong>章节父块</strong><pre>{candidate.parentContent}</pre></div>}
+                    </article>
+                  ))}
+                </div>
+              </details>
             )}
           </article>
         ))}
@@ -875,7 +999,9 @@ function Coach({ project, updateProject, showToast, navigate }) {
   const stored = (() => {
     try { return JSON.parse(sessionStorage.getItem("zhifan-selected-concept")); } catch { return null; }
   })();
+  const isVariant = stored?.isVariant;
   const initialQuestion =
+    stored?.question ||
     questions.find((item) => item.id === stored?.questionId) ||
     questions.find((item) => item.conceptId === stored?.id || item.concept === stored?.title) ||
     questions[0];
@@ -891,6 +1017,51 @@ function Coach({ project, updateProject, showToast, navigate }) {
   const [messages, setMessages] = useState(() => [
     { from: "ai", text: initialQuestion?.question || "请先上传资料，让AI根据资料生成问题。" }
   ]);
+  const [sessionId, setSessionId] = useState(null);
+  const [sessionsCache, setSessionsCache] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/sessions`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error);
+        if (cancelled) return;
+        setSessionsCache(data.sessions || []);
+        const existing = (data.sessions || []).find((item) =>
+          item.questionId === initialQuestion?.id &&
+          item.conceptId === concept?.id &&
+          !item.status
+        );
+        if (existing) {
+          setSessionId(existing.id);
+          setMessages(existing.messages.length ? existing.messages : [{ from: "ai", text: initialQuestion?.question }]);
+          setTurn((existing.messages.filter((m) => m.from === "user").length || 0) + 1);
+          setEvaluation(existing.evaluations.at(-1) || null);
+          setRole(existing.messages.length >= 4 ? "expert" : "child");
+        } else {
+          const created = await fetch(`/api/projects/${encodeURIComponent(project.id)}/sessions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              conceptId: concept?.id,
+              concept: concept?.title,
+              questionId: initialQuestion?.id,
+              question: initialQuestion?.question
+            })
+          });
+          const createdData = await created.json();
+          if (!created.ok) throw new Error(createdData.error);
+          if (!cancelled) setSessionId(createdData.session.id);
+        }
+      } catch (error) {
+        if (!cancelled) showToast(`会话加载失败：${error.message}`);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [project.id, initialQuestion?.id]);
 
   useEffect(() => {
     sessionStorage.removeItem("zhifan-selected-concept");
@@ -898,33 +1069,73 @@ function Coach({ project, updateProject, showToast, navigate }) {
 
   if (!question || !concept) return <NoAnalysis navigate={navigate} />;
 
-  const changeQuestion = (event) => {
+  const persistMessages = async (nextMessages, nextEvaluations, nextRole) => {
+    if (!sessionId) return;
+    await fetch(`/api/projects/${encodeURIComponent(project.id)}/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: nextMessages, evaluations: nextEvaluations })
+    });
+  };
+
+  const changeQuestion = async (event) => {
     const next = questions.find((item) => item.id === event.target.value);
     setQuestion(next);
     setTurn(1);
     setRole("child");
     setEvaluation(null);
     setMessages([{ from: "ai", text: next.question }]);
+    const targetConcept = concepts.find((item) => item.id === next?.conceptId || item.title === next?.concept);
+    const existing = (sessionsCache || []).find((item) =>
+      item.questionId === next?.id && item.conceptId === targetConcept?.id && !item.status
+    );
+    if (existing) {
+      setSessionId(existing.id);
+      setMessages(existing.messages.length ? existing.messages : [{ from: "ai", text: next.question }]);
+      setTurn((existing.messages.filter((m) => m.from === "user").length || 0) + 1);
+      setEvaluation(existing.evaluations.at(-1) || null);
+      setRole(existing.messages.length >= 4 ? "expert" : "child");
+    } else {
+      const created = await fetch(`/api/projects/${encodeURIComponent(project.id)}/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conceptId: targetConcept?.id,
+          concept: targetConcept?.title,
+          questionId: next?.id,
+          question: next?.question
+        })
+      });
+      const data = await created.json();
+      if (created.ok) {
+        setSessionId(data.session.id);
+        setSessionsCache((items) => [data.session, ...(items || [])]);
+      }
+    }
   };
 
   const submit = async () => {
     if (!answer.trim() || loading) return;
     const userText = answer.trim();
     setAnswer("");
-    setMessages((items) => [...items, { from: "user", text: userText }]);
+    const nextMessages = [...messages, { from: "user", text: userText }];
+    setMessages(nextMessages);
     setLoading(true);
     try {
       const response = await fetch("/api/coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: project.id, question, concept, answer: userText, role, turn })
+        body: JSON.stringify({ projectId: project.id, sessionId, question, concept, answer: userText, role, turn })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "教练无法回应");
-      setMessages((items) => [...items, { from: "ai", text: data.reply }]);
+      const finalMessages = [...nextMessages, { from: "ai", text: data.reply }];
+      const finalEvaluations = [...(sessionId ? (sessionsCache?.find((s) => s.id === sessionId)?.evaluations || []) : []), data.evaluation];
+      setMessages(finalMessages);
       setEvaluation(data.evaluation);
       setRole(data.phase || role);
       setTurn((value) => value + 1);
+      await persistMessages(finalMessages, finalEvaluations, data.phase || role);
       if (data.blindspot) {
         const exists = project.blindspots?.some((item) => item.title === data.blindspot.title);
         if (!exists) {
@@ -938,8 +1149,7 @@ function Coach({ project, updateProject, showToast, navigate }) {
                 source: (question.sourceRefs?.[0] || concept.sourceRefs?.[0])?.file || "相关学习资料",
                 status: "open"
               }
-            ],
-            progress: Math.max(project.progress || 0, 48)
+            ]
           });
           showToast("发现一个新的认知盲区，已加入补漏清单");
         }
@@ -951,13 +1161,20 @@ function Coach({ project, updateProject, showToast, navigate }) {
     }
   };
 
-  const finish = () => {
+  const finish = async () => {
     if (!evaluation) {
       showToast("请至少完成一轮解释和追问后再保存");
       return;
     }
     const avg = Math.round(Object.values(evaluation).reduce((a, b) => a + b, 0) / 4);
     const passed = avg >= 75;
+    if (sessionId) {
+      await fetch(`/api/projects/${encodeURIComponent(project.id)}/sessions/${encodeURIComponent(sessionId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ score: avg, status: passed ? "passed" : "needs_review" })
+      });
+    }
     updateProject({
       sessions: [
         { id: `ss-${Date.now()}`, concept: concept.title, question: question.question, score: avg, date: "刚刚", status: passed ? "通过" : "需补漏" },
@@ -967,8 +1184,7 @@ function Coach({ project, updateProject, showToast, navigate }) {
         passed && item.concept === concept.title && item.status === "review"
           ? { ...item, status: "done" }
           : item
-      ),
-      progress: Math.max(project.progress || 0, passed ? 76 : 60)
+      )
     });
     showToast(passed ? "对练已通过，相关待复测盲区已标记为掌握" : "对练已保存，相关盲区仍需继续练习");
   };
@@ -976,9 +1192,9 @@ function Coach({ project, updateProject, showToast, navigate }) {
   return (
     <div className="coach-page">
       <PageHeading
-        eyebrow="第三步 · 输出，暴露假懂"
-        title="费曼对练"
-        description="AI 不会替你完善答案，而会通过追问逼你把逻辑讲清楚。"
+        eyebrow={isVariant ? "变式复测 · 针对盲区" : "第三步 · 输出，暴露假懂"}
+        title={isVariant ? `变式复测 · ${stored?.blindspotTitle || "盲区"}` : "费曼对练"}
+        description={isVariant ? "这个问题专门设计来检验你刚才的盲区是否真正补上了。" : "AI 不会替你完善答案，而会通过追问逼你把逻辑讲清楚。"}
         action={<button className="secondary-btn" onClick={finish}><Check size={16} /> 结束并保存</button>}
       />
       <div className="coach-layout">
@@ -1014,7 +1230,17 @@ function Coach({ project, updateProject, showToast, navigate }) {
               }}
               placeholder="用你自己的话解释，不必追求完美……"
             />
-            <div className="answer-foot"><span>⌘ Enter 发送</span><button onClick={submit} disabled={!answer.trim() || loading}><Send size={16} /> 发送解释</button></div>
+            <div className="answer-foot">
+              <span>⌘ Enter 发送 · 可语音输入</span>
+              <div className="answer-foot-actions">
+                <VoiceInputButton
+                  disabled={loading}
+                  onTranscript={(text) => setAnswer((current) => `${current}${current.trim() ? " " : ""}${text}`)}
+                  showToast={showToast}
+                />
+                <button className="answer-send-btn" onClick={submit} disabled={!answer.trim() || loading}><Send size={16} /> 发送解释</button>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -1054,19 +1280,34 @@ function Blindspots({ project, updateProject, showToast, navigate }) {
 
   const setStatus = (id, status) => {
     updateProject({
-      blindspots: blindspots.map((item) => item.id === id ? { ...item, status } : item),
-      progress: status === "done" ? Math.max(project.progress || 0, 76) : project.progress
+      blindspots: blindspots.map((item) => item.id === id ? { ...item, status } : item)
     });
     showToast(status === "done" ? "盲区已通过复测" : "已加入复测队列");
   };
 
-  const startRetest = (blind) => {
+  const startRetest = async (blind) => {
     const concept = project.analysis?.modules
       ?.flatMap((module) => module.concepts)
       .find((item) => item.title === blind.concept);
-    if (concept) sessionStorage.setItem("zhifan-selected-concept", JSON.stringify(concept));
-    navigate("coach");
-    showToast(`开始复测「${blind.concept}」，通过后会自动消除盲区`);
+    try {
+      const response = await fetch(
+        `/api/projects/${encodeURIComponent(project.id)}/blindspots/${encodeURIComponent(blind.id)}/variant-question`,
+        { method: "POST", headers: { "Content-Type": "application/json" } }
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "生成变式题失败");
+      sessionStorage.setItem("zhifan-selected-concept", JSON.stringify({
+        isVariant: true,
+        blindspotId: blind.id,
+        blindspotTitle: blind.title,
+        question: data.question,
+        ...(concept || { title: blind.concept })
+      }));
+      navigate("coach");
+      showToast(`开始复测「${blind.concept}」，通过后会自动消除盲区`);
+    } catch (error) {
+      showToast(error.message);
+    }
   };
 
   return (
@@ -1117,8 +1358,12 @@ function StatusTag({ status }) {
 function OutputStudio({ project, updateProject, showToast }) {
   const [loading, setLoading] = useState(false);
   const [pager, setPager] = useState(project.onePager);
+  const [edited, setEdited] = useState(false);
 
   const generate = async () => {
+    if (pager && edited) {
+      if (!window.confirm("重新生成会覆盖你手动编辑的内容，是否继续？")) return;
+    }
     setLoading(true);
     try {
       const response = await fetch("/api/one-pager", {
@@ -1129,7 +1374,8 @@ function OutputStudio({ project, updateProject, showToast }) {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "生成失败");
       setPager(data);
-      updateProject({ onePager: data, progress: 100 });
+      setEdited(false);
+      updateProject({ onePager: data });
       showToast(data.demo ? "一页纸已生成（当前为演示模式）" : "学习成果已生成");
     } catch (error) {
       showToast(error.message);
@@ -1138,9 +1384,58 @@ function OutputStudio({ project, updateProject, showToast }) {
     }
   };
 
+  const saveEdits = () => {
+    if (!pager) return;
+    updateProject({ onePager: pager });
+    setEdited(false);
+    showToast("一页纸编辑已保存");
+  };
+
+  const updateTakeaway = (index, value) => {
+    setPager((current) => {
+      if (!current) return current;
+      const next = [...(current.takeaways || [])];
+      next[index] = value;
+      return { ...current, takeaways: next };
+    });
+    setEdited(true);
+  };
+
+  const updateAction = (value) => {
+    setPager((current) => current ? { ...current, action: value } : current);
+    setEdited(true);
+  };
+
+  const updateReflection = (value) => {
+    setPager((current) => current ? { ...current, reflection: value } : current);
+    setEdited(true);
+  };
+
   const exportMarkdown = () => {
     if (!pager) return;
-    const markdown = `# ${pager.title}\n\n> ${pager.thesis}\n\n## 三个关键收获\n\n${pager.takeaways.map((item) => `- ${item}`).join("\n")}\n\n## 立即行动\n\n${pager.action}\n\n## 我的复盘\n\n${pager.reflection}\n`;
+    const outlineMarkdown = pager.outline ? `
+
+---
+
+# 专业成果大纲：${pager.outline.title}
+
+- 作品形式：${pager.outline.format}
+- 目标读者：${pager.outline.audience}
+- 核心论点：${pager.outline.coreArgument}
+
+${(pager.outline.sections || []).map((section, index) => `## ${index + 1}. ${section.title}
+
+**本章目的：** ${section.purpose}
+
+**核心论点：**
+${(section.keyPoints || []).map((item) => `- ${item}`).join("\n")}
+
+**可核对依据：**
+${(section.evidence || []).length ? section.evidence.map((item) => `- ${item}`).join("\n") : "- 待从个人实践中补充"}
+
+**写作提示：** ${section.writingPrompt}`).join("\n\n")}
+` : "";
+    const markdown = `# ${pager.title}\n\n> ${pager.thesis}\n\n## 三个关键收获\n\n${(pager.takeaways || []).map((item) => `- ${item}`).join("\n")}\n\n## 立即行动\n\n${pager.action}\n\n## 我的复盘\n\n${pager.reflection}\n${outlineMarkdown}`;
     const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -1172,21 +1467,49 @@ function OutputStudio({ project, updateProject, showToast }) {
             <span><MessageCircleQuestion size={14} /> {project.sessions?.length || 0} 次对练</span>
             <span><Target size={14} /> {project.blindspots?.length || 0} 个盲区</span>
           </div>
-          <button className="primary-btn large" onClick={generate} disabled={loading}>{loading ? <Spinner /> : <Sparkles size={18} />}{loading ? "正在整理你的思考…" : "生成我的一页纸"}</button>
+          <button className="primary-btn large" onClick={generate} disabled={loading}>{loading ? <Spinner /> : <Sparkles size={18} />}{loading ? "正在整理你的思考…" : "生成一页纸与成果大纲"}</button>
         </div>
       ) : (
         <div className="one-pager-shell">
-          <article className="one-pager">
-            <header><span>LEARNING ONE-PAGER · {new Date().toLocaleDateString("zh-CN")}</span><h1>{pager.title}</h1><p>{pager.thesis}</p></header>
-            <section><div className="pager-section-number">01</div><div><span className="section-kicker">关键收获</span>{pager.takeaways.map((item, index) => <div className="takeaway" key={index}><b>0{index + 1}</b><p contentEditable suppressContentEditableWarning>{item}</p></div>)}</div></section>
-            <section><div className="pager-section-number">02</div><div><span className="section-kicker">立即行动</span><p className="pager-big-copy" contentEditable suppressContentEditableWarning>{pager.action}</p></div></section>
-            <section><div className="pager-section-number">03</div><div><span className="section-kicker">我的复盘</span><p className="pager-big-copy" contentEditable suppressContentEditableWarning>{pager.reflection}</p></div></section>
-            <footer><span>知返 · 费曼学习助手</span><span>资料 → 骨架 → 输出 → 能力</span></footer>
-          </article>
+          <div className="output-documents">
+            <article className="one-pager">
+              <header><span>LEARNING ONE-PAGER · {new Date().toLocaleDateString("zh-CN")}</span><h1>{pager.title}</h1><p>{pager.thesis}</p></header>
+              <section><div className="pager-section-number">01</div><div><span className="section-kicker">关键收获</span>{(pager.takeaways || []).map((item, index) => <div className="takeaway" key={index}><b>0{index + 1}</b><p contentEditable suppressContentEditableWarning onInput={(event) => updateTakeaway(index, event.currentTarget.textContent)}>{item}</p></div>)}</div></section>
+              <section><div className="pager-section-number">02</div><div><span className="section-kicker">立即行动</span><p className="pager-big-copy" contentEditable suppressContentEditableWarning onInput={(event) => updateAction(event.currentTarget.textContent)}>{pager.action}</p></div></section>
+              <section><div className="pager-section-number">03</div><div><span className="section-kicker">我的复盘</span><p className="pager-big-copy" contentEditable suppressContentEditableWarning onInput={(event) => updateReflection(event.currentTarget.textContent)}>{pager.reflection}</p></div></section>
+              <footer><span>知返 · 费曼学习助手</span><span>资料 → 骨架 → 输出 → 能力</span></footer>
+            </article>
+
+            <article className="panel output-outline">
+              <header>
+                <span className="section-kicker">专业作品大纲</span>
+                <h2>{pager.outline?.title || "当前成果尚未生成大纲"}</h2>
+                {pager.outline ? (
+                  <>
+                    <div className="outline-meta"><span>{pager.outline.format}</span><span>面向：{pager.outline.audience}</span></div>
+                    <p>{pager.outline.coreArgument}</p>
+                  </>
+                ) : <p>点击右侧“重新生成成果与大纲”，AI 会结合资料、对练和盲区补全。</p>}
+              </header>
+              {(pager.outline?.sections || []).map((section, index) => (
+                <section className="outline-section" key={`${section.title}-${index}`}>
+                  <div className="outline-number">{String(index + 1).padStart(2, "0")}</div>
+                  <div>
+                    <h3>{section.title}</h3>
+                    <p className="outline-purpose">{section.purpose}</p>
+                    {!!section.keyPoints?.length && <ul>{section.keyPoints.map((point, pointIndex) => <li key={pointIndex}>{point}</li>)}</ul>}
+                    {!!section.evidence?.length && <div className="outline-evidence"><strong>可核对依据</strong>{section.evidence.map((item, evidenceIndex) => <span key={evidenceIndex}>{item}</span>)}</div>}
+                    <div className="outline-prompt"><strong>写作提示</strong><p>{section.writingPrompt}</p></div>
+                  </div>
+                </section>
+              ))}
+            </article>
+          </div>
           <aside className="output-side">
             <div className="concept-note"><span className="section-kicker">完成度</span><h3>学习闭环已完成</h3><p>你已经走过知识提炼、主动输出、盲区诊断和成果沉淀。</p><div className="complete-ring">100<small>%</small></div></div>
+            {edited && <button className="primary-btn full" onClick={saveEdits}><Check size={16} /> 保存修改</button>}
             <button className="primary-btn full" onClick={exportMarkdown}><Download size={16} /> 导出 Markdown</button>
-            <button className="secondary-btn full" onClick={generate}><RotateCcw size={16} /> 重新生成</button>
+            <button className="secondary-btn full" onClick={generate} disabled={loading}>{loading ? <Spinner /> : <RotateCcw size={16} />}{loading ? "正在重新生成…" : "重新生成成果与大纲"}</button>
           </aside>
         </div>
       )}
@@ -1206,14 +1529,28 @@ function ModelSettingsPage({ showToast }) {
   const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [visionForm, setVisionForm] = useState({
-    baseUrl: "https://api.openai.com/v1",
-    model: "gpt-4.1-mini",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    model: "qwen3.5-ocr",
     apiKey: ""
   });
   const [visionSaved, setVisionSaved] = useState(null);
   const [visionLoading, setVisionLoading] = useState(true);
   const [visionBusy, setVisionBusy] = useState(false);
   const [visionTest, setVisionTest] = useState(null);
+  const [retrievalHealth, setRetrievalHealth] = useState(null);
+  const [retrievalLoading, setRetrievalLoading] = useState(true);
+
+  const loadRetrievalHealth = () => {
+    setRetrievalLoading(true);
+    fetch("/api/health")
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "读取检索模型状态失败");
+        setRetrievalHealth({ embedding: data.embedding, service: data.retrievalService });
+      })
+      .catch((error) => setRetrievalHealth({ error: error.message }))
+      .finally(() => setRetrievalLoading(false));
+  };
 
   useEffect(() => {
     fetch("/api/settings/model")
@@ -1233,10 +1570,20 @@ function ModelSettingsPage({ showToast }) {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "读取 OCR 配置失败");
         setVisionSaved(data);
-        setVisionForm((current) => ({ ...current, baseUrl: data.baseUrl, model: data.model }));
+        setVisionForm((current) => ({
+          ...current,
+          baseUrl: data.baseUrl === "https://api.openai.com/v1"
+            ? "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            : data.baseUrl,
+          model: "qwen3.5-ocr"
+        }));
       })
       .catch((error) => showToast(error.message))
       .finally(() => setVisionLoading(false));
+  }, []);
+
+  useEffect(() => {
+    loadRetrievalHealth();
   }, []);
 
   const testConnection = async () => {
@@ -1353,7 +1700,7 @@ function ModelSettingsPage({ showToast }) {
       <PageHeading
         eyebrow="应用设置 · 模型服务"
         title="模型设置"
-        description="DeepSeek 负责资料总结与学习；独立视觉模型负责 PDF 扫描页、文档截图和图片 OCR。"
+        description="DeepSeek 负责资料总结与学习；Qwen3.5-OCR 负责识别 PDF 扫描页、文档截图和图片文字。"
       />
       <div className="settings-layout">
         <div className="settings-main">
@@ -1414,7 +1761,7 @@ function ModelSettingsPage({ showToast }) {
 
           <section className="panel settings-form">
             <div className="settings-head">
-              <div className="settings-provider"><FileText size={20} /><div><strong>OCR 视觉模型</strong><span>支持图片输入的 OpenAI 兼容接口</span></div></div>
+              <div className="settings-provider"><FileText size={20} /><div><strong>Qwen3.5-OCR</strong><span>阿里云百炼 · 图片与扫描资料识别</span></div></div>
               <span className={`config-status ${visionSaved?.configured ? "ready" : ""}`}>
                 {visionSaved?.configured ? <><Check size={13} /> 已配置</> : <><CircleAlert size={13} /> 未配置</>}
               </span>
@@ -1424,13 +1771,13 @@ function ModelSettingsPage({ showToast }) {
               <div className="settings-fields">
                 <label>
                   <span>API 地址</span>
-                  <input value={visionForm.baseUrl} onChange={(event) => setVisionForm({ ...visionForm, baseUrl: event.target.value })} placeholder="https://api.openai.com/v1" />
-                  <small>可填写任何支持图片输入及 OpenAI Chat Completions 格式的服务。</small>
+                  <input value={visionForm.baseUrl} onChange={(event) => setVisionForm({ ...visionForm, baseUrl: event.target.value })} placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
+                  <small>默认使用阿里云百炼中国北京地址；使用专属工作空间时可以替换为对应地址。</small>
                 </label>
                 <label>
-                  <span>视觉模型名称</span>
-                  <input value={visionForm.model} onChange={(event) => setVisionForm({ ...visionForm, model: event.target.value })} placeholder="gpt-4.1-mini" />
-                  <small>必须选择支持 image_url 图片输入的模型；DeepSeek 文本模型不能直接 OCR。</small>
+                  <span>OCR 模型</span>
+                  <input value="qwen3.5-ocr" readOnly aria-readonly="true" />
+                  <small>当前版本固定使用 Qwen3.5-OCR，模型名称无需修改。</small>
                 </label>
                 <label>
                   <span>API Key</span>
@@ -1439,9 +1786,9 @@ function ModelSettingsPage({ showToast }) {
                     autoComplete="off"
                     value={visionForm.apiKey}
                     onChange={(event) => setVisionForm({ ...visionForm, apiKey: event.target.value })}
-                    placeholder={visionSaved?.configured ? `已保存：${visionSaved.apiKeyMasked}` : "输入视觉模型 API Key"}
+                    placeholder={visionSaved?.configured ? `已保存：${visionSaved.apiKeyMasked}` : "输入阿里云百炼 API Key"}
                   />
-                  <small>{visionSaved?.configured ? "留空会继续使用已保存的密钥。" : "未配置时仍会提取普通文本，但会明确标记截图尚未 OCR。"}</small>
+                  <small>{visionSaved?.configured ? "留空会继续使用已保存的密钥。" : "API Key 仅保存在本机后端，不会返回浏览器或写入上传资料。"}</small>
                 </label>
               </div>
             )}
@@ -1459,6 +1806,29 @@ function ModelSettingsPage({ showToast }) {
               </button>
               <button className="primary-btn" onClick={() => saveVision(false)} disabled={visionBusy || visionLoading || (!visionForm.apiKey && !visionSaved?.configured)}>
                 {visionBusy ? <Spinner /> : <Check size={16} />} 保存 OCR 配置
+              </button>
+            </div>
+          </section>
+
+          <section className="panel settings-form">
+            <div className="settings-head">
+              <div className="settings-provider"><BrainCircuit size={20} /><div><strong>BGE-M3 RAG</strong><span>本机 CPU · 向量召回与精排</span></div></div>
+              <span className={`config-status ${retrievalHealth?.service?.ok && retrievalHealth?.service?.dependencies_ready !== false ? "ready" : ""}`}>
+                {retrievalHealth?.service?.ok && retrievalHealth?.service?.dependencies_ready !== false
+                  ? <><Check size={13} /> 服务就绪</>
+                  : <><CircleAlert size={13} /> 服务未就绪</>}
+              </span>
+            </div>
+            {retrievalLoading ? <div className="settings-loading"><Spinner /> 正在检测本地检索模型…</div> : (
+              <div className="settings-fields">
+                <label><span>Embedding 模型</span><input value={retrievalHealth?.embedding?.model || "BAAI/bge-m3"} readOnly /></label>
+                <label><span>Reranker 模型</span><input value={retrievalHealth?.embedding?.rerankerModel || "BAAI/bge-reranker-v2-m3"} readOnly /></label>
+                <label><span>运行状态</span><input value={retrievalHealth?.error || retrievalHealth?.service?.error || (retrievalHealth?.service?.embedding_loaded && retrievalHealth?.service?.reranker_loaded ? "两个模型均已加载" : "服务已启动，模型会在首次使用时加载")} readOnly /></label>
+              </div>
+            )}
+            <div className="settings-actions">
+              <button className="secondary-btn" onClick={loadRetrievalHealth} disabled={retrievalLoading}>
+                {retrievalLoading ? <Spinner /> : <RotateCcw size={16} />} 刷新状态
               </button>
             </div>
           </section>
@@ -1543,6 +1913,82 @@ function EmptyMini({ text }) {
 
 function Spinner() {
   return <span className="spinner" />;
+}
+
+function VoiceInputButton({ onTranscript, showToast, disabled = false, className = "" }) {
+  const recognitionRef = useRef(null);
+  const [listening, setListening] = useState(false);
+  const supported = typeof window !== "undefined" &&
+    Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+
+  useEffect(() => () => {
+    recognitionRef.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    if (disabled && recognitionRef.current) recognitionRef.current.stop();
+  }, [disabled]);
+
+  const toggle = () => {
+    if (listening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+    if (!supported) {
+      showToast("当前浏览器不支持语音识别，请使用最新版 Chrome 或 Edge");
+      return;
+    }
+
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new Recognition();
+    recognition.lang = "zh-CN";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => setListening(true);
+    recognition.onresult = (event) => {
+      let finalText = "";
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        if (event.results[index].isFinal) finalText += event.results[index][0].transcript;
+      }
+      if (finalText.trim()) onTranscript(finalText.trim());
+    };
+    recognition.onerror = (event) => {
+      const messages = {
+        "not-allowed": "麦克风权限未开启，请允许浏览器访问麦克风",
+        "audio-capture": "没有检测到可用的麦克风",
+        "no-speech": "没有识别到语音，请靠近麦克风后重试",
+        network: "语音识别服务暂时不可用，请检查网络后重试"
+      };
+      if (event.error !== "aborted") showToast(messages[event.error] || `语音识别失败：${event.error}`);
+    };
+    recognition.onend = () => {
+      setListening(false);
+      recognitionRef.current = null;
+    };
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+    } catch (error) {
+      recognitionRef.current = null;
+      setListening(false);
+      showToast(error.message || "无法启动语音识别");
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      className={`voice-input-btn ${listening ? "listening" : ""} ${className}`.trim()}
+      onClick={toggle}
+      disabled={disabled}
+      aria-label={listening ? "停止语音输入" : "开始语音输入"}
+      title={listening ? "停止语音输入" : "语音输入"}
+    >
+      {listening ? <Square size={13} /> : <Mic size={16} />}
+      <span>{listening ? "停止" : "语音"}</span>
+    </button>
+  );
 }
 
 function formatSize(bytes) {

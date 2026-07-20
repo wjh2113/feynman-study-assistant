@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -103,6 +103,10 @@ async function createDatabase() {
       UNIQUE(document_id, chunk_index)
     )
   `);
+  await db.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS page_end INTEGER NOT NULL DEFAULT 1");
+  await db.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS parent_id TEXT");
+  await db.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS parent_content TEXT NOT NULL DEFAULT ''");
+  await db.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS heading_path TEXT NOT NULL DEFAULT ''");
   await db.query(`
     CREATE TABLE IF NOT EXISTS learning_events (
       id TEXT PRIMARY KEY,
@@ -119,9 +123,40 @@ async function createDatabase() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS coach_sessions (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      concept_id TEXT,
+      concept TEXT,
+      question_id TEXT,
+      question TEXT,
+      messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+      evaluations JSONB NOT NULL DEFAULT '[]'::jsonb,
+      score INTEGER,
+      status TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS rag_history (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      query TEXT NOT NULL,
+      answer TEXT,
+      sources JSONB NOT NULL DEFAULT '[]'::jsonb,
+      debug JSONB,
+      insufficient BOOLEAN NOT NULL DEFAULT false,
+      demo BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
   await db.query("CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id)");
   await db.query("CREATE INDEX IF NOT EXISTS idx_chunks_project ON document_chunks(project_id)");
   await db.query("CREATE INDEX IF NOT EXISTS idx_events_project ON learning_events(project_id)");
+  await db.query("CREATE INDEX IF NOT EXISTS idx_coach_sessions_project ON coach_sessions(project_id)");
+  await db.query("CREATE INDEX IF NOT EXISTS idx_rag_history_project ON rag_history(project_id)");
   return db;
 }
 
@@ -221,19 +256,23 @@ export async function saveDocument({ projectId, source, file, chunks, embeddings
     const chunk = chunks[index];
     await db.query(
       `INSERT INTO document_chunks(
-         id, document_id, project_id, page_number, chunk_index,
-         content, search_tokens, embedding, metadata
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::vector,$9::jsonb)`,
+         id, document_id, project_id, page_number, page_end, chunk_index,
+         parent_id, parent_content, heading_path, content, search_tokens, embedding, metadata
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::vector,$13::jsonb)`,
       [
         randomUUID(),
         documentId,
         projectId,
         chunk.page,
+        chunk.pageEnd || chunk.page,
         chunk.chunkIndex,
+        chunk.parentId,
+        chunk.parentContent,
+        chunk.headingPath,
         chunk.content,
         chunk.searchTokens,
         vectorLiteral(embeddings[index]),
-        JSON.stringify({ filename: source.filename, type: source.type })
+        JSON.stringify({ filename: source.filename, type: source.type, chunking: "semantic-parent-child-v1" })
       ]
     );
   }
@@ -270,12 +309,184 @@ export async function getDocument(documentId) {
   return result.rows[0] || null;
 }
 
+export async function listDocumentsForProject(projectId) {
+  const db = await getDatabase();
+  const result = await db.query(
+    "SELECT * FROM documents WHERE project_id = $1 ORDER BY created_at ASC",
+    [projectId]
+  );
+  return result.rows;
+}
+
+export async function replaceDocumentIndex({ projectId, document, source, chunks, embeddings }) {
+  const db = await getDatabase();
+  await db.query("DELETE FROM document_chunks WHERE document_id = $1 AND project_id = $2", [document.id, projectId]);
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index];
+    await db.query(
+      `INSERT INTO document_chunks(
+         id, document_id, project_id, page_number, page_end, chunk_index,
+         parent_id, parent_content, heading_path, content, search_tokens, embedding, metadata
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::vector,$13::jsonb)`,
+      [
+        randomUUID(), document.id, projectId, chunk.page, chunk.pageEnd || chunk.page,
+        chunk.chunkIndex, chunk.parentId, chunk.parentContent, chunk.headingPath,
+        chunk.content, chunk.searchTokens, vectorLiteral(embeddings[index]),
+        JSON.stringify({ filename: document.filename, type: source.type, chunking: "semantic-parent-child-v1" })
+      ]
+    );
+  }
+  await db.query(
+    `UPDATE documents SET page_count = $2, chunk_count = $3, parse_report = $4::jsonb WHERE id = $1 AND project_id = $5`,
+    [document.id, source.pages.length, chunks.length, JSON.stringify(source.parseReport || {}), projectId]
+  );
+  return { documentId: document.id, chunks: chunks.length };
+}
+
+export async function deleteDocument(projectId, documentId) {
+  const db = await getDatabase();
+  const result = await db.query(
+    "SELECT storage_path FROM documents WHERE id = $1 AND project_id = $2",
+    [documentId, projectId]
+  );
+  const document = result.rows[0];
+  if (!document) return false;
+
+  const resolvedUploadDir = path.resolve(uploadDir);
+  const resolvedStoragePath = path.resolve(document.storage_path);
+  const relativeStoragePath = path.relative(resolvedUploadDir, resolvedStoragePath);
+  if (relativeStoragePath.startsWith("..") || path.isAbsolute(relativeStoragePath)) {
+    throw new Error("资料文件路径不在允许的存储目录内");
+  }
+
+  try {
+    await unlink(resolvedStoragePath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+
+  await db.query(
+    "DELETE FROM documents WHERE id = $1 AND project_id = $2",
+    [documentId, projectId]
+  );
+  return true;
+}
+
 export async function recordEvent(projectId, eventType, payload) {
   const db = await getDatabase();
   await db.query(
     "INSERT INTO learning_events(id, project_id, event_type, payload) VALUES ($1,$2,$3,$4::jsonb)",
     [randomUUID(), projectId, eventType, JSON.stringify(payload || {})]
   );
+}
+
+export async function saveCoachSession(session) {
+  const db = await getDatabase();
+  if (!session?.id || !session.projectId) throw new Error("会话缺少 id 或 projectId");
+  await db.query(
+    `INSERT INTO coach_sessions(
+       id, project_id, concept_id, concept, question_id, question,
+       messages, evaluations, score, status, created_at, updated_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,TO_TIMESTAMP($11 / 1000.0),NOW())
+     ON CONFLICT(id) DO UPDATE SET
+       concept_id = EXCLUDED.concept_id,
+       concept = EXCLUDED.concept,
+       question_id = EXCLUDED.question_id,
+       question = EXCLUDED.question,
+       messages = EXCLUDED.messages,
+       evaluations = EXCLUDED.evaluations,
+       score = EXCLUDED.score,
+       status = EXCLUDED.status,
+       updated_at = NOW()`,
+    [
+      session.id,
+      session.projectId,
+      session.conceptId || null,
+      session.concept || null,
+      session.questionId || null,
+      session.question || null,
+      JSON.stringify(session.messages || []),
+      JSON.stringify(session.evaluations || []),
+      session.score ?? null,
+      session.status || null,
+      Number(session.createdAt || Date.now())
+    ]
+  );
+  return session;
+}
+
+export async function getCoachSession(sessionId) {
+  const db = await getDatabase();
+  const result = await db.query("SELECT * FROM coach_sessions WHERE id = $1", [sessionId]);
+  if (!result.rows[0]) return null;
+  return rowToCoachSession(result.rows[0]);
+}
+
+export async function listCoachSessions(projectId) {
+  const db = await getDatabase();
+  const result = await db.query(
+    "SELECT * FROM coach_sessions WHERE project_id = $1 ORDER BY updated_at DESC",
+    [projectId]
+  );
+  return result.rows.map(rowToCoachSession);
+}
+
+function rowToCoachSession(row) {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    conceptId: row.concept_id,
+    concept: row.concept,
+    questionId: row.question_id,
+    question: row.question,
+    messages: safeJson(row.messages, []),
+    evaluations: safeJson(row.evaluations, []),
+    score: row.score,
+    status: row.status,
+    createdAt: new Date(row.created_at).getTime(),
+    updatedAt: new Date(row.updated_at).getTime()
+  };
+}
+
+export async function saveRagHistory(record) {
+  const db = await getDatabase();
+  if (!record?.id || !record.projectId) throw new Error("RAG 记录缺少 id 或 projectId");
+  await db.query(
+    `INSERT INTO rag_history(
+       id, project_id, query, answer, sources, debug, insufficient, demo, created_at
+     ) VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8,TO_TIMESTAMP($9 / 1000.0))`,
+    [
+      record.id,
+      record.projectId,
+      record.query,
+      record.answer || null,
+      JSON.stringify(record.sources || []),
+      JSON.stringify(record.debug || null),
+      Boolean(record.insufficient),
+      Boolean(record.demo),
+      Number(record.createdAt || Date.now())
+    ]
+  );
+  return record;
+}
+
+export async function listRagHistory(projectId, limit = 50) {
+  const db = await getDatabase();
+  const result = await db.query(
+    "SELECT * FROM rag_history WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2",
+    [projectId, Math.max(1, Number(limit) || 50)]
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    projectId: row.project_id,
+    query: row.query,
+    answer: row.answer,
+    sources: safeJson(row.sources, []),
+    debug: safeJson(row.debug, null),
+    insufficient: row.insufficient,
+    demo: row.demo,
+    createdAt: new Date(row.created_at).getTime()
+  }));
 }
 
 export async function getAppSetting(key) {
@@ -297,10 +508,13 @@ export async function saveAppSetting(key, value) {
 
 export async function hybridSearch(projectId, query, queryEmbedding, limit = 6) {
   const db = await getDatabase();
-  const take = Math.max(1, Math.min(Number(limit) || 6, 12));
+  // RAG answers intentionally request 20 fused candidates before reranking.
+  // Keep a safety cap for callers, but do not silently truncate that pool to 12.
+  const take = Math.max(1, Math.min(Number(limit) || 6, 50));
   const candidates = new Map();
   const vectorResult = await db.query(
-    `SELECT id, document_id, page_number, content, metadata,
+    `SELECT id, document_id, page_number, page_end, content, search_tokens,
+            parent_id, parent_content, heading_path, metadata,
             1 - (embedding <=> $2::vector) AS vector_score
        FROM document_chunks
       WHERE project_id = $1 AND embedding IS NOT NULL
@@ -323,7 +537,8 @@ export async function hybridSearch(projectId, query, queryEmbedding, limit = 6) 
   if (tokens.length) {
     const tsQuery = tokens.map((token) => token.replace(/[':&|!()]/g, "")).filter(Boolean).join(" | ");
     const keywordResult = await db.query(
-      `SELECT id, document_id, page_number, content, metadata,
+      `SELECT id, document_id, page_number, page_end, content, search_tokens,
+              parent_id, parent_content, heading_path, metadata,
               ts_rank_cd(to_tsvector('simple', search_tokens), to_tsquery('simple', $2)) AS keyword_score
          FROM document_chunks
         WHERE project_id = $1
@@ -354,8 +569,15 @@ export async function hybridSearch(projectId, query, queryEmbedding, limit = 6) 
       documentId: item.document_id,
       filename: item.metadata?.filename || "学习资料",
       page: Number(item.page_number || 1),
+      pageEnd: Number(item.page_end || item.page_number || 1),
+      headingPath: item.heading_path || "",
+      parentId: item.parent_id || "",
+      parentContent: item.parent_content || "",
       content: item.content,
-      score: Number((item.rrf + Math.max(0, item.vectorScore) * 0.01).toFixed(6))
+      vectorScore: Number(item.vectorScore || 0),
+      keywordScore: Number(item.keywordScore || 0),
+      fusionScore: Number(item.rrf.toFixed(6)),
+      matchedKeywords: tokens.filter((token) => String(item.search_tokens || "").split(" ").includes(token)).slice(0, 12)
     }));
 }
 

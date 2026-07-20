@@ -7,7 +7,7 @@
 - PostgreSQL：保存项目完整状态、资料元数据和学习事件。
 - pgvector：保存每个资料分块的向量。
 - 本地文件存储：原始资料保存在 `.data/uploads`。
-- 混合检索：pgvector 语义召回与 PostgreSQL 全文关键词召回通过 RRF 合并。
+- 混合检索：BGE-M3 + pgvector 与 PostgreSQL 关键词召回通过 RRF 合并，召回20个候选后使用 BGE Reranker 精排到5个。
 - DeepSeek V4 Pro：负责知识提炼、费曼追问、RAG 最终回答和一页纸生成。
 - 视觉模型：负责 PNG/JPG/WebP、PDF 扫描页及 DOCX 内嵌截图的 OCR。
 
@@ -45,25 +45,29 @@ DeepSeek 文本模型不直接处理图片，因此 OCR 使用一个独立、支
 也可使用环境变量：
 
 ```env
-VISION_BASE_URL=https://api.openai.com/v1
-VISION_API_KEY=你的视觉模型密钥
-VISION_MODEL=gpt-4.1-mini
+VISION_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+VISION_API_KEY=你的阿里云百炼密钥
+VISION_MODEL=qwen3.5-ocr
 ```
 
 未配置视觉模型时，PDF/DOCX 的普通文本仍会解析；检测到的截图会明确标记为“OCR 待配置”，不会伪装成已经识别。
 
-## Embedding 配置
+## BGE-M3 与 Reranker
 
-默认使用离线轻量特征向量，确保应用开箱即用。如果有 OpenAI 兼容的 Embedding 服务，可配置：
+应用不再使用字符哈希冒充语义向量。默认连接本机模型服务：
 
 ```env
-EMBEDDING_BASE_URL=https://你的服务地址/v1
-EMBEDDING_API_KEY=你的密钥
+EMBEDDING_BASE_URL=http://127.0.0.1:8001/v1
 EMBEDDING_MODEL=BAAI/bge-m3
 EMBEDDING_DIMENSIONS=1024
+RERANKER_BASE_URL=http://127.0.0.1:8001/v1
+RERANKER_MODEL=BAAI/bge-reranker-v2-m3
+RAG_RELEVANCE_THRESHOLD=0.35
 ```
 
-首次建库后不要直接修改 `EMBEDDING_DIMENSIONS`。更换向量维度需要清空并重新建立资料索引。
+模型服务位于 `model_service/app.py`，提供 OpenAI 兼容的 `/v1/embeddings` 和 `/v1/rerank`。本机依赖安装完成后，Node 后端会自动启动它；模型首次使用时下载到 `.data/models`。模型设置页可直接检查两个模型的服务与加载状态。更换模型或分块规则后，在“学习资料”点击“用 BGE-M3 重建索引”。
+
+资料采用标题、段落和表格感知的语义切片：约500～800字的子块保留章节父块、标题路径和页码范围。问答相关度低于阈值时明确拒答，页面“检索调试”可查看20个候选的向量、关键词、融合、精排分数和完整父子片段。
 
 ## 切换到标准 PostgreSQL
 

@@ -4,10 +4,11 @@ import multer from "multer";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { chunkSources } from "./server/chunking.mjs";
-import { embedTexts, embeddingStatus } from "./server/embedding.mjs";
+import { embedTexts, embeddingStatus, relevanceThreshold, rerankCandidates, retrievalServiceHealth } from "./server/embedding.mjs";
+import { ensureLocalRetrievalService } from "./server/model-service.mjs";
 import {
   getModelConfig,
   getPublicModelConfig,
@@ -20,15 +21,23 @@ import {
 import { parseFile } from "./server/document-parser.mjs";
 import {
   databaseStatus,
+  deleteDocument,
   deleteProject,
+  getCoachSession,
   getDatabase,
   getDocument as getStoredDocument,
   getProject,
   hybridSearch,
+  listCoachSessions,
+  listDocumentsForProject,
   listProjects,
+  listRagHistory,
   recordEvent,
+  replaceDocumentIndex,
+  saveCoachSession,
   saveDocument,
   saveProject,
+  saveRagHistory,
   updateDocumentInsights
 } from "./server/storage.mjs";
 
@@ -298,7 +307,8 @@ app.get("/api/health", async (_req, res) => {
       model: modelConfig.model,
       configured: modelConfig.configured,
       database: await databaseStatus(),
-      embedding: embeddingStatus()
+      embedding: embeddingStatus(),
+      retrievalService: await retrievalServiceHealth()
     });
   } catch (error) {
     res.status(503).json({ ok: false, error: error.message });
@@ -361,6 +371,16 @@ app.get("/api/projects", async (_req, res) => {
   }
 });
 
+app.get("/api/projects/:projectId", async (req, res) => {
+  try {
+    const project = await getProject(req.params.projectId);
+    if (!project) return res.status(404).json({ error: "学习项目不存在" });
+    res.json({ project });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "读取项目失败" });
+  }
+});
+
 app.put("/api/projects/:projectId", async (req, res) => {
   try {
     const project = { ...(req.body || {}), id: req.params.projectId };
@@ -377,6 +397,129 @@ app.delete("/api/projects/:projectId", async (req, res) => {
     res.status(204).end();
   } catch (error) {
     res.status(400).json({ error: error.message || "删除项目失败" });
+  }
+});
+
+app.delete("/api/projects/:projectId/documents/:documentId", async (req, res) => {
+  try {
+    const project = await getProject(req.params.projectId);
+    if (!project) return res.status(404).json({ error: "学习项目不存在" });
+
+    const sources = project.analysis?.sources || [];
+    const source = sources.find((item) => item.id === req.params.documentId);
+    if (!source) return res.status(404).json({ error: "资料不存在或不属于当前项目" });
+
+    await deleteDocument(req.params.projectId, req.params.documentId);
+    const remainingSources = sources.filter((item) => item.id !== req.params.documentId);
+    const removeRefs = (refs) =>
+      (refs || []).filter((ref) => String(ref.file || "") !== String(source.name || ""));
+    const analysis = {
+      ...(project.analysis || {}),
+      sources: remainingSources,
+      modules: (project.analysis?.modules || []).map((module) => ({
+        ...module,
+        concepts: (module.concepts || []).map((concept) => ({
+          ...concept,
+          sourceRefs: removeRefs(concept.sourceRefs)
+        }))
+      })),
+      questions: (project.analysis?.questions || []).map((question) => ({
+        ...question,
+        sourceRefs: removeRefs(question.sourceRefs)
+      })),
+      tacitKnowledge: (project.analysis?.tacitKnowledge || []).map((item) => ({
+        ...item,
+        sourceRef: item.sourceRef?.file === source.name ? null : item.sourceRef
+      })),
+      documentSummaries: (project.analysis?.documentSummaries || []).filter(
+        (item) => String(item.filename || item.name || "") !== String(source.name || "")
+      ),
+      retrieval: {
+        ...(project.analysis?.retrieval || {}),
+        chunks: Math.max(
+          0,
+          Number(project.analysis?.retrieval?.chunks || 0) - Number(source.chunks || 0)
+        )
+      }
+    };
+    const nextProject = {
+      ...project,
+      analysis,
+      blindspots: (project.blindspots || []).filter(
+        (item) => !String(item.source || "").startsWith(String(source.name || ""))
+      )
+    };
+    await saveProject(nextProject);
+    await recordEvent(req.params.projectId, "document_deleted", {
+      documentId: req.params.documentId,
+      filename: source.name
+    });
+    res.json({ project: nextProject, deleted: { id: source.id, name: source.name } });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "删除资料失败" });
+  }
+});
+
+app.post("/api/projects/:projectId/reindex", async (req, res) => {
+  try {
+    const project = await getProject(req.params.projectId);
+    if (!project) return res.status(404).json({ error: "学习项目不存在" });
+    const documents = await listDocumentsForProject(req.params.projectId);
+    if (!documents.length) return res.status(400).json({ error: "当前项目没有可以重建索引的资料" });
+
+    let totalChunks = 0;
+    let totalParents = 0;
+    const updatedSources = new Map();
+    for (const document of documents) {
+      const buffer = await readFile(document.storage_path);
+      const source = await parseFile({
+        originalname: document.filename,
+        mimetype: document.mime_type,
+        size: Number(document.byte_size || buffer.length),
+        buffer
+      });
+      source.documentKey = document.id;
+      source.parsedPreview = source.pages.map((page) => `第 ${page.page} 页\n${page.text}`).join("\n\n").slice(0, 30000);
+      const hierarchy = chunkSources([source]);
+      const embeddings = await embedTexts(hierarchy.chunks.map((chunk) => chunk.content));
+      await replaceDocumentIndex({
+        projectId: req.params.projectId,
+        document,
+        source,
+        chunks: hierarchy.chunks,
+        embeddings
+      });
+      totalChunks += hierarchy.chunks.length;
+      totalParents += hierarchy.parents.length;
+      updatedSources.set(document.id, {
+        chunks: hierarchy.chunks.length,
+        pages: source.pages.length,
+        parseReport: source.parseReport,
+        parsedPreview: source.parsedPreview
+      });
+    }
+
+    const nextProject = {
+      ...project,
+      analysis: {
+        ...(project.analysis || {}),
+        sources: (project.analysis?.sources || []).map((source) => (
+          updatedSources.has(source.id) ? { ...source, ...updatedSources.get(source.id) } : source
+        )),
+        retrieval: {
+          chunks: totalChunks,
+          parents: totalParents,
+          embedding: embeddingStatus(),
+          strategy: "BGE-M3 + PostgreSQL关键词召回 + RRF + BGE Reranker",
+          indexedAt: new Date().toISOString()
+        }
+      }
+    };
+    await saveProject(nextProject);
+    await recordEvent(req.params.projectId, "documents_reindexed", { documents: documents.length, chunks: totalChunks, parents: totalParents });
+    res.json({ project: nextProject, documents: documents.length, chunks: totalChunks, parents: totalParents });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "重建资料索引失败" });
   }
 });
 
@@ -414,7 +557,8 @@ app.post("/api/analyze", upload.array("files", 12), async (req, res) => {
       }
     );
 
-    const allChunks = chunkSources(sources);
+    const hierarchy = chunkSources(sources);
+    const allChunks = hierarchy.chunks;
     const allEmbeddings = await embedTexts(allChunks.map((chunk) => chunk.content));
     const storedSources = [];
     for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
@@ -499,8 +643,9 @@ ${corpus}`
       projectId,
       retrieval: {
         chunks: allChunks.length,
+        parents: hierarchy.parents.length,
         embedding: embeddingStatus(),
-        strategy: "pgvector + PostgreSQL full-text RRF"
+        strategy: "BGE-M3 + PostgreSQL关键词召回 + RRF + BGE Reranker"
       },
       demo: !modelConfigured
     };
@@ -533,7 +678,7 @@ ${corpus}`
 
 app.post("/api/coach", async (req, res) => {
   try {
-    const { projectId, question, concept, answer, role = "child", turn = 1 } = req.body || {};
+    const { projectId, sessionId, question, concept, answer, role = "child", turn = 1 } = req.body || {};
     if (!answer?.trim()) return res.status(400).json({ error: "请先写下你的解释" });
     let evidence = [];
     if (projectId) {
@@ -572,7 +717,20 @@ app.post("/api/coach", async (req, res) => {
         })),
         demo: true
       };
-      if (projectId) await recordEvent(projectId, "coach_turn", { concept: concept?.title, turn, evaluation: payload.evaluation });
+      if (projectId) {
+        await recordEvent(projectId, "coach_turn", { concept: concept?.title, turn, evaluation: payload.evaluation });
+        if (sessionId) {
+          const session = await getCoachSession(sessionId);
+          if (session && session.projectId === projectId) {
+            session.messages = session.messages || [];
+            session.evaluations = session.evaluations || [];
+            session.messages.push({ from: "user", text: answer.trim() });
+            session.messages.push({ from: "ai", text: payload.reply });
+            session.evaluations.push(payload.evaluation || { clarity: 0, logic: 0, example: 0, boundary: 0 });
+            await saveCoachSession(session);
+          }
+        }
+      }
       return res.json(payload);
     }
     const result = await deepseek([
@@ -599,16 +757,216 @@ app.post("/api/coach", async (req, res) => {
       evidence: evidence.map(({ filename, page, content }) => ({ filename, page, quote: content.slice(0, 180) })),
       demo: false
     };
-    if (projectId) await recordEvent(projectId, "coach_turn", { concept: concept?.title, turn, evaluation: result.evaluation });
+    if (projectId) {
+      await recordEvent(projectId, "coach_turn", { concept: concept?.title, turn, evaluation: result.evaluation });
+      if (sessionId) {
+        const session = await getCoachSession(sessionId);
+        if (session && session.projectId === projectId) {
+          session.messages = session.messages || [];
+          session.evaluations = session.evaluations || [];
+          session.messages.push({ from: "user", text: answer.trim() });
+          session.messages.push({ from: "ai", text: payload.reply });
+          session.evaluations.push(payload.evaluation || { clarity: 0, logic: 0, example: 0, boundary: 0 });
+          await saveCoachSession(session);
+        }
+      }
+    }
     res.json(payload);
   } catch (error) {
     res.status(500).json({ error: error.message || "教练暂时无法回应" });
   }
 });
 
+app.get("/api/projects/:projectId/sessions", async (req, res) => {
+  try {
+    const sessions = await listCoachSessions(req.params.projectId);
+    res.json({ sessions });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "读取教练会话失败" });
+  }
+});
+
+app.post("/api/projects/:projectId/sessions", async (req, res) => {
+  try {
+    const { conceptId, concept, questionId, question } = req.body || {};
+    const session = await saveCoachSession({
+      id: randomUUID(),
+      projectId: req.params.projectId,
+      conceptId,
+      concept,
+      questionId,
+      question,
+      messages: [{ from: "ai", text: question || "请开始你的解释。" }],
+      evaluations: [],
+      createdAt: Date.now()
+    });
+    res.json({ session });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "创建会话失败" });
+  }
+});
+
+app.put("/api/projects/:projectId/sessions/:sessionId", async (req, res) => {
+  try {
+    const session = await getCoachSession(req.params.sessionId);
+    if (!session || session.projectId !== req.params.projectId) {
+      return res.status(404).json({ error: "会话不存在" });
+    }
+    const { messages, evaluations, score, status } = req.body || {};
+    if (messages) session.messages = messages;
+    if (evaluations) session.evaluations = evaluations;
+    if (score !== undefined) session.score = score;
+    if (status) session.status = status;
+    await saveCoachSession(session);
+    res.json({ session });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "保存会话失败" });
+  }
+});
+
+app.get("/api/projects/:projectId/rag-history", async (req, res) => {
+  try {
+    const records = await listRagHistory(req.params.projectId, Number(req.query.limit) || 50);
+    res.json({ records });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "读取 RAG 历史失败" });
+  }
+});
+
+app.post("/api/projects/:projectId/rag-history", async (req, res) => {
+  try {
+    const { query, answer, sources, debug, insufficient, demo } = req.body || {};
+    const record = await saveRagHistory({
+      id: randomUUID(),
+      projectId: req.params.projectId,
+      query,
+      answer,
+      sources,
+      debug,
+      insufficient,
+      demo,
+      createdAt: Date.now()
+    });
+    res.json({ record });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "保存 RAG 历史失败" });
+  }
+});
+
+async function generateVariantQuestion(project, blindspot, concept) {
+  const modelConfigured = Boolean((await getModelConfig()).apiKey);
+  const base = {
+    id: `q-variant-${Date.now()}`,
+    conceptId: concept?.id || "",
+    concept: concept?.title || blindspot?.concept || "",
+    sourceRefs: concept?.sourceRefs || [],
+    isVariant: true,
+    blindspotId: blindspot?.id,
+    why: `针对盲区：${blindspot?.title || ""}`
+  };
+  if (modelConfigured && blindspot?.title && blindspot?.problem) {
+    const result = await deepseek([
+      {
+        role: "system",
+        content: "你是费曼学习教练。根据概念和盲区，生成一个能检验该盲区的变式追问。只输出合法JSON。"
+      },
+      {
+        role: "user",
+        content: `概念：${concept?.title || ""}
+概念解释：${concept?.explanation || ""}
+盲区标题：${blindspot.title}
+盲区诊断：${blindspot.problem}
+最小补漏动作：${blindspot.action || ""}
+
+返回：{"question":"一个具体的变式追问"}`
+      }
+    ], 0.55);
+    if (result?.question) return { ...base, question: result.question };
+  }
+  return {
+    ...base,
+    question: `针对盲区「${blindspot?.title || "当前盲区"}」：${blindspot?.action || `请用自己的话解释「${concept?.title || "这个概念"}」，并说明它在什么情况下会失效。`}`
+  };
+}
+
+app.post("/api/projects/:projectId/blindspots/:blindspotId/variant-question", async (req, res) => {
+  try {
+    const project = await getProject(req.params.projectId);
+    if (!project) return res.status(404).json({ error: "学习项目不存在" });
+    const blindspot = (project.blindspots || []).find((item) => item.id === req.params.blindspotId);
+    if (!blindspot) return res.status(404).json({ error: "盲区不存在" });
+    const concept = (project.analysis?.modules || [])
+      .flatMap((module) => module.concepts || [])
+      .find((item) => item.title === blindspot.concept || item.id === blindspot.conceptId);
+    const question = await generateVariantQuestion(project, blindspot, concept);
+    res.json({ question });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "生成变式题失败" });
+  }
+});
+
 app.post("/api/one-pager", async (req, res) => {
   try {
     const { project } = req.body || {};
+    const fallbackSections = [
+      {
+        title: "问题与学习目标",
+        purpose: "交代为什么学习这个主题，以及希望解决的真实问题。",
+        keyPoints: [project?.analysis?.summary || "说明学习背景、目标与核心问题。"],
+        evidence: (project?.analysis?.sources || []).slice(0, 2).map((item) => item.name),
+        writingPrompt: "用一个真实困惑或工作场景开篇，不要从概念定义开始。"
+      },
+      ...((project?.analysis?.modules || []).length
+        ? (project.analysis.modules || []).slice(0, 4).map((module) => ({
+            title: module.title,
+            purpose: module.description || "呈现该模块的核心逻辑与判断方法。",
+            keyPoints: (module.concepts || []).slice(0, 3).map((item) => item.title),
+            evidence: (module.concepts || [])
+              .flatMap((item) => item.sourceRefs || [])
+              .slice(0, 3)
+              .map((item) => `${item.file} · 第${item.page || 1}页`),
+            writingPrompt: "先解释底层逻辑，再用一个例子说明它如何影响实际判断。"
+          }))
+        : [
+            {
+              title: "核心概念与知识骨架",
+              purpose: "建立读者理解主题所需的最小知识框架。",
+              keyPoints: (project?.analysis?.highValue || []).slice(0, 3),
+              evidence: (project?.analysis?.sources || []).slice(0, 3).map((item) => item.name),
+              writingPrompt: "用概念之间的关系组织内容，不要写成名词解释清单。"
+            },
+            {
+              title: "方法落地与适用边界",
+              purpose: "说明知识如何用于真实场景，以及在什么情况下会失效。",
+              keyPoints: ["给出一个应用场景", "说明资源限制与风险", "写清方法的适用边界"],
+              evidence: [],
+              writingPrompt: "至少写一个正例和一个反例，解释判断依据。"
+            }
+          ]),
+      {
+        title: "费曼对练暴露的盲区",
+        purpose: "展示理解如何经过追问、修正和边界测试。",
+        keyPoints: (project?.blindspots || []).length
+          ? (project.blindspots || []).slice(0, 3).map((item) => item.title)
+          : ["记录最容易产生“自以为懂了”的环节", "设计一个可以检验真实理解的追问"],
+        evidence: (project?.sessions || []).slice(0, 3).map((item) => `${item.concept} · 得分${item.score}`),
+        writingPrompt: "写清原先哪里想错了、证据如何推翻直觉、现在如何判断。"
+      },
+      {
+        title: "行动方案与下一步验证",
+        purpose: "把知识转化为可以执行和检验的行动。",
+        keyPoints: [project?.analysis?.highValue?.[0] || "选择一个真实场景进行最小验证。"],
+        evidence: [],
+        writingPrompt: "给出行动、成功指标、风险和复盘时间，不写空泛口号。"
+      }
+    ];
+    const fallbackOutline = {
+      title: `${project?.title || "学习主题"}：从知识骨架到实践判断`,
+      format: "深度复盘 / 项目拆解文章",
+      audience: "希望快速理解该主题并用于真实问题的读者",
+      coreArgument: project?.analysis?.summary || "通过知识骨架、主动输出和定向补漏，把资料转化为可迁移的能力。",
+      sections: fallbackSections.filter((item) => item.keyPoints?.length).slice(0, 7)
+    };
     const modelConfigured = Boolean((await getModelConfig()).apiKey);
     if (!modelConfigured) {
       const payload = {
@@ -617,6 +975,7 @@ app.post("/api/one-pager", async (req, res) => {
         takeaways: project?.analysis?.highValue || [],
         action: "明天选择一个真实问题，用“问题—假设—验证”的结构完成一次15分钟分析。",
         reflection: "我最大的变化，是从收集答案转向验证自己的理解。",
+        outline: fallbackOutline,
         demo: true
       };
       if (project?.id) await recordEvent(project.id, "one_pager_generated", payload);
@@ -626,17 +985,39 @@ app.post("/api/one-pager", async (req, res) => {
       {
         role: "system",
         content:
-          "你负责把学习过程沉淀为简洁、专业的一页纸。优先使用用户对练与盲区中形成的观点，不虚构用户经历。只输出JSON。"
+          "你负责把学习过程沉淀为简洁的一页纸和可直接写作的专业成果大纲。优先使用上传资料、知识地图、用户对练与盲区中形成的观点，不虚构资料、引文或用户经历。大纲必须体现底层逻辑、实战判断和认知修正，不要只罗列知识点。只输出JSON。"
       },
       {
         role: "user",
-        content: `根据以下项目数据生成一页纸：
+        content: `根据以下项目数据生成“一页纸学习卡 + 深度复盘/项目拆解文章大纲”：
 ${JSON.stringify(project).slice(0, 120000)}
-返回 {"title":"","thesis":"","takeaways":["","",""],"action":"","reflection":""}`
+返回：
+{"title":"","thesis":"","takeaways":["","",""],"action":"","reflection":"",
+"outline":{"title":"","format":"深度复盘 / 项目拆解文章","audience":"","coreArgument":"",
+"sections":[{"title":"","purpose":"","keyPoints":[""],"evidence":["仅填写项目数据中真实存在的文件、页码、对练或盲区"],"writingPrompt":""}]}}
+要求 outline.sections 为5至7章，每章都说明写作目的、2至4个核心论点、可核对依据和具体写作提示。`
       }
     ]);
-    if (project?.id) await recordEvent(project.id, "one_pager_generated", result);
-    res.json({ ...result, demo: false });
+    const normalized = {
+      ...result,
+      takeaways: Array.isArray(result.takeaways) ? result.takeaways : [],
+      outline: {
+        ...fallbackOutline,
+        ...(result.outline || {}),
+        sections: Array.isArray(result.outline?.sections) && result.outline.sections.length
+          ? result.outline.sections.map((section) => ({
+              title: section.title || "未命名章节",
+              purpose: section.purpose || "",
+              keyPoints: Array.isArray(section.keyPoints) ? section.keyPoints : [],
+              evidence: Array.isArray(section.evidence) ? section.evidence : [],
+              writingPrompt: section.writingPrompt || ""
+            }))
+          : fallbackOutline.sections
+      },
+      demo: false
+    };
+    if (project?.id) await recordEvent(project.id, "learning_artifact_generated", normalized);
+    res.json(normalized);
   } catch (error) {
     res.status(500).json({ error: error.message || "生成失败" });
   }
@@ -644,15 +1025,50 @@ ${JSON.stringify(project).slice(0, 120000)}
 
 app.post("/api/rag", async (req, res) => {
   try {
-    const { projectId, query, limit = 6 } = req.body || {};
+    const { projectId, query } = req.body || {};
     if (!projectId) return res.status(400).json({ error: "缺少学习项目" });
     if (!query?.trim()) return res.status(400).json({ error: "请输入问题" });
     const [queryEmbedding] = await embedTexts([query]);
-    const sources = await hybridSearch(projectId, query, queryEmbedding, limit);
-    if (!sources.length) {
+    const candidates = await hybridSearch(projectId, query, queryEmbedding, 20);
+    if (!candidates.length) {
       return res.json({
-        answer: "当前项目还没有可检索的资料。请先上传并解析资料。",
+        answer: "资料中没有找到相关内容。",
         sources: [],
+        debug: { candidateCount: 0, threshold: relevanceThreshold, candidates: [] },
+        demo: !(await getModelConfig()).apiKey
+      });
+    }
+    const sources = await rerankCandidates(query, candidates, 5);
+    const rerankById = new Map(sources.map((item) => [item.id, item.rerankScore]));
+    const debug = {
+      candidateCount: candidates.length,
+      threshold: relevanceThreshold,
+      embedding: embeddingStatus(),
+      candidates: candidates.map((item, index) => ({
+        rank: index + 1,
+        id: item.id,
+        documentId: item.documentId,
+        filename: item.filename,
+        page: item.page,
+        pageEnd: item.pageEnd,
+        headingPath: item.headingPath,
+        vectorScore: Number(item.vectorScore.toFixed(4)),
+        keywordScore: Number(item.keywordScore.toFixed(4)),
+        fusionScore: item.fusionScore,
+        rerankScore: rerankById.has(item.id) ? Number(rerankById.get(item.id).toFixed(4)) : null,
+        matchedKeywords: item.matchedKeywords,
+        content: item.content,
+        parentContent: item.parentContent
+      }))
+    };
+    if (!sources.length || sources[0].rerankScore < relevanceThreshold) {
+      await recordEvent(projectId, "rag_query_insufficient", { query, topScore: sources[0]?.rerankScore || 0 });
+      return res.json({
+        answer: "资料中没有找到足够相关的内容。你可以换一种问法，或检查资料是否已经重新建立索引。",
+        sources: [],
+        debug,
+        retrieval: "bge-m3-hybrid-rerank",
+        insufficient: true,
         demo: !(await getModelConfig()).apiKey
       });
     }
@@ -664,13 +1080,13 @@ app.post("/api/rag", async (req, res) => {
         {
           role: "system",
           content:
-            "你是基于个人资料库回答问题的学习助手。只能依据检索片段回答；资料不足时明确说明。引用结论时标注[1][2]序号。只输出合法JSON。"
+            "你是基于个人资料库回答问题的学习助手。只能依据通过BGE精排的证据回答，禁止使用资料外知识补全。引用结论时标注[1][2]序号；证据不能支持问题时回答资料中没有找到。只输出合法JSON。"
         },
         {
           role: "user",
           content: `问题：${query}
 检索片段：
-${sources.map((source, index) => `[${index + 1}] ${source.filename} 第${source.page}页\n${source.content}`).join("\n\n")}
+${sources.map((source, index) => `[${index + 1}] ${source.filename} 第${source.page}${source.pageEnd > source.page ? `-${source.pageEnd}` : ""}页 · ${source.headingPath || "未识别章节"}\n命中子块：${source.content}\n章节父块：${source.parentContent || source.content}`).join("\n\n")}
 返回 {"answer":"基于资料的回答，包含[1]式引用"}`
         }
       ], 0.25);
@@ -681,15 +1097,20 @@ ${sources.map((source, index) => `[${index + 1}] ${source.filename} 第${source.
     await recordEvent(projectId, "rag_query", { query, sourceIds: sources.map((source) => source.id) });
     res.json({
       answer,
-      sources: sources.map(({ id, documentId, filename, page, content, score }) => ({
+      sources: sources.map(({ id, documentId, filename, page, pageEnd, headingPath, content, rerankScore, matchedKeywords }) => ({
         id,
         documentId,
         filename,
         page,
+        pageEnd,
+        headingPath,
         quote: content.slice(0, 360),
-        score
+        score: rerankScore,
+        matchedKeywords
       })),
-      retrieval: "hybrid",
+      debug,
+      retrieval: "bge-m3-hybrid-rerank",
+      insufficient: false,
       demo: !modelConfigured
     });
   } catch (error) {
@@ -721,6 +1142,7 @@ app.use((req, res, next) => {
   res.sendFile(path.join(dist, "index.html"));
 });
 
+await ensureLocalRetrievalService();
 await getDatabase();
 app.listen(port, "0.0.0.0", () => {
   console.log(`Feynman Study API listening on http://127.0.0.1:${port}`);

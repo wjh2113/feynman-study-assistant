@@ -97,6 +97,7 @@ before(async () => {
       ...process.env,
       PORT: String(port),
       DEEPSEEK_API_KEY: "",
+      RAG_TEST_MODE: "true",
       PGLITE_MEMORY: "true",
       DATA_DIR: `.data-test-${port}`
     },
@@ -123,7 +124,9 @@ test("健康检查返回模型与演示模式状态", async () => {
   assert.equal(data.model, "deepseek-v4-pro");
   assert.equal(data.configured, false);
   assert.equal(data.database.mode, "pglite");
-  assert.equal(data.embedding.provider, "local-hash");
+  assert.equal(data.embedding.provider, "test");
+  assert.equal(data.embedding.model, "BAAI/bge-m3");
+  assert.equal(data.embedding.rerankerModel, "BAAI/bge-reranker-v2-m3");
 });
 
 test("模型配置接口不会向前端返回明文密钥", async () => {
@@ -134,6 +137,15 @@ test("模型配置接口不会向前端返回明文密钥", async () => {
   assert.equal(data.model, "deepseek-v4-pro");
   assert.equal(data.configured, false);
   assert.equal("apiKey" in data, false);
+
+  const visionResponse = await fetch(`${baseUrl}/api/settings/vision`);
+  assert.equal(visionResponse.status, 200);
+  const vision = await visionResponse.json();
+  assert.equal(vision.provider, "阿里云百炼 Qwen OCR");
+  assert.equal(vision.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
+  assert.equal(vision.model, "qwen3.5-ocr");
+  assert.equal(vision.configured, false);
+  assert.equal("apiKey" in vision, false);
 
   const testResponse = await fetch(`${baseUrl}/api/settings/model/test`, {
     method: "POST",
@@ -288,6 +300,44 @@ test("原始资料会落盘并可通过受控接口重新下载", async () => {
   assert.match(content, /反馈闭环需要把用户修改转化为可学习的信号/);
 });
 
+test("已有资料可以重建为 BGE-M3 层级索引", async () => {
+  const response = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/reindex`, {
+    method: "POST"
+  });
+  assert.equal(response.status, 200, await response.clone().text());
+  const data = await response.json();
+  assert.equal(data.documents, uploadedSources.length);
+  assert.ok(data.chunks >= uploadedSources.length);
+  assert.ok(data.parents >= uploadedSources.length);
+  assert.equal(data.project.analysis.retrieval.embedding.model, "BAAI/bge-m3");
+  assert.equal(data.project.analysis.retrieval.embedding.rerankerModel, "BAAI/bge-reranker-v2-m3");
+  assert.match(data.project.analysis.retrieval.strategy, /Reranker/);
+});
+
+test("RAG 会保留 20 个候选再精排到 5 个", async () => {
+  const projectId = `candidate-pool-${port}`;
+  const sections = Array.from({ length: 24 }, (_, index) => (
+    `# 候选章节 ${index + 1}\n召回池验证。${`这是第${index + 1}章用于验证二十路候选召回与精排流程的资料内容。`.repeat(28)}`
+  )).join("\n\n");
+  const body = new FormData();
+  body.append("files", new Blob([sections], { type: "text/markdown" }), "候选池测试.md");
+  body.append("title", "候选池测试");
+  body.append("projectId", projectId);
+  const uploaded = await fetch(`${baseUrl}/api/analyze`, { method: "POST", body });
+  assert.equal(uploaded.status, 200, await uploaded.clone().text());
+
+  const response = await fetch(`${baseUrl}/api/rag`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectId, query: "召回池验证的精排流程是什么？" })
+  });
+  assert.equal(response.status, 200, await response.clone().text());
+  const data = await response.json();
+  assert.equal(data.debug.candidateCount, 20);
+  assert.equal(data.debug.candidates.length, 20);
+  assert.equal(data.sources.length, 5);
+});
+
 test("混合检索会返回持久化资料的原文与页码", async () => {
   const response = await fetch(`${baseUrl}/api/rag`, {
     method: "POST",
@@ -299,11 +349,61 @@ test("混合检索会返回持久化资料的原文与页码", async () => {
   });
   assert.equal(response.status, 200);
   const data = await response.json();
-  assert.equal(data.retrieval, "hybrid");
+  assert.equal(data.retrieval, "bge-m3-hybrid-rerank");
   assert.ok(data.sources.length >= 1);
   assert.match(data.sources.map((item) => item.quote).join(" "), /反馈|用户修改/);
   assert.ok(data.sources[0].documentId);
   assert.ok(data.sources[0].page >= 1);
+  assert.ok(data.debug.candidateCount >= 1);
+  assert.ok(data.debug.candidates[0].content);
+});
+
+test("相关度低于阈值时明确拒绝回答并保留调试候选", async () => {
+  const response = await fetch(`${baseUrl}/api/rag`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      projectId: ragProjectId,
+      query: "量子色动力学中的渐近自由如何证明？"
+    })
+  });
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.insufficient, true);
+  assert.match(data.answer, /资料中没有找到/);
+  assert.equal(data.sources.length, 0);
+  assert.ok(data.debug.candidates.length >= 1);
+});
+
+test("删除资料会同步清理原始文件、项目记录和向量分块", async () => {
+  const target = uploadedSources[0];
+  const response = await fetch(
+    `${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/documents/${encodeURIComponent(target.id)}`,
+    { method: "DELETE" }
+  );
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.deleted.id, target.id);
+  assert.equal(data.project.analysis.sources.some((item) => item.id === target.id), false);
+  assert.equal(
+    data.project.analysis.retrieval.chunks,
+    uploadedSources.reduce((total, item) => total + item.chunks, 0) - target.chunks
+  );
+
+  const originalFile = await fetch(`${baseUrl}${target.downloadUrl}`);
+  assert.equal(originalFile.status, 404);
+
+  const ragResponse = await fetch(`${baseUrl}/api/rag`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      projectId: ragProjectId,
+      query: "反馈闭环和用户修改"
+    })
+  });
+  assert.equal(ragResponse.status, 200);
+  const rag = await ragResponse.json();
+  assert.equal(rag.sources.some((item) => item.documentId === target.id), false);
 });
 
 test("不支持的文件格式返回明确错误", async () => {
@@ -337,6 +437,103 @@ test("费曼教练会针对黑话追问", async () => {
   assert.equal(data.demo, true);
   assert.match(data.reply, /赋能|闭环/);
   assert.ok(data.evaluation.clarity < 70);
+});
+
+test("费曼教练会话可创建、追加并读取", async () => {
+  const create = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      conceptId: "c1",
+      concept: "数据飞轮",
+      questionId: "q-data-loop",
+      question: "请不用专业术语解释数据飞轮为什么会运转。"
+    })
+  });
+  assert.equal(create.status, 200);
+  const { session } = await create.json();
+  assert.ok(session.id);
+  assert.equal(session.messages.length, 1);
+
+  const coach = await fetch(`${baseUrl}/api/coach`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      projectId: ragProjectId,
+      sessionId: session.id,
+      question: { id: "q-data-loop", question: "请不用专业术语解释数据飞轮为什么会运转。", concept: "数据飞轮" },
+      concept: { title: "数据飞轮" },
+      answer: "它能赋能业务并形成闭环。",
+      role: "child",
+      turn: 1
+    })
+  });
+  assert.equal(coach.status, 200);
+
+  const list = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/sessions`);
+  assert.equal(list.status, 200);
+  const { sessions } = await list.json();
+  const found = sessions.find((item) => item.id === session.id);
+  assert.ok(found);
+  assert.equal(found.messages.length, 3);
+  assert.equal(found.messages[1].from, "user");
+  assert.equal(found.evaluations.length, 1);
+});
+
+test("盲区可生成变式复测题", async () => {
+  const project = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}`).then((r) => r.json());
+  const blindspot = {
+    id: `blind-${port}`,
+    title: "数据飞轮的失效条件",
+    concept: "数据飞轮",
+    problem: "只解释了生效情况，没说明什么时候会失效。",
+    action: "给出一个数据飞轮无法运转的反例。",
+    source: "测试",
+    status: "review"
+  };
+  const patched = {
+    ...project.project,
+    blindspots: [blindspot]
+  };
+  const save = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patched)
+  });
+  assert.equal(save.status, 200);
+
+  const response = await fetch(
+    `${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/blindspots/${encodeURIComponent(blindspot.id)}/variant-question`,
+    { method: "POST", headers: { "Content-Type": "application/json" } }
+  );
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.ok(data.question.question);
+  assert.equal(data.question.isVariant, true);
+  assert.match(data.question.question, /数据飞轮|失效|反例/);
+});
+
+test("RAG 问答历史可保存并读取", async () => {
+  const save = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/rag-history`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query: "用户修改如何变成反馈信号？",
+      answer: "根据资料，用户修改是高价值反馈。",
+      sources: [{ id: "src-1", filename: "课堂笔记.txt", page: 1, quote: "反馈闭环" }],
+      debug: { candidateCount: 1, threshold: 0.35 },
+      insufficient: false,
+      demo: true
+    })
+  });
+  assert.equal(save.status, 200);
+  const { record } = await save.json();
+  assert.equal(record.query, "用户修改如何变成反馈信号？");
+
+  const list = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/rag-history`);
+  assert.equal(list.status, 200);
+  const { records } = await list.json();
+  assert.ok(records.some((item) => item.id === record.id));
 });
 
 test("费曼教练能识别例子并追问边界", async () => {
@@ -380,6 +577,9 @@ test("可以从项目数据生成一页纸", async () => {
   const data = await response.json();
   assert.equal(data.title, "AI 产品方法");
   assert.equal(data.takeaways.length, 3);
+  assert.match(data.outline.title, /AI 产品方法/);
+  assert.ok(data.outline.sections.length >= 3);
+  assert.ok(data.outline.sections.every((section) => section.title && section.purpose));
   assert.equal(data.demo, true);
 });
 

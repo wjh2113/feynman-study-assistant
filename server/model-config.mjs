@@ -2,8 +2,8 @@ import { getAppSetting, saveAppSetting } from "./storage.mjs";
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_MODEL = "deepseek-v4-pro";
-const DEFAULT_VISION_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_VISION_MODEL = "gpt-4.1-mini";
+const DEFAULT_VISION_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+const DEFAULT_VISION_MODEL = "qwen3.5-ocr";
 
 function normalizeBaseUrl(value, fallback = DEFAULT_BASE_URL) {
   const baseUrl = String(value || fallback).trim().replace(/\/+$/, "");
@@ -98,7 +98,7 @@ export async function getVisionConfig() {
 export async function getPublicVisionConfig() {
   const config = await getVisionConfig();
   return {
-    provider: "OpenAI-compatible vision",
+    provider: "阿里云百炼 Qwen OCR",
     baseUrl: config.baseUrl,
     model: config.model,
     configured: Boolean(config.apiKey),
