@@ -281,6 +281,8 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 .typing { display: flex; gap: 4px; align-items: center; height: 39px; }
 .typing i { width: 5px; height: 5px; border-radius: 50%; background: #9eaaa1; animation: pulse 1s infinite alternate; }
 .typing i:nth-child(2) { animation-delay: .2s; }.typing i:nth-child(3) { animation-delay: .4s; }
+.message.ai.thinking > div:last-child { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; }
+.thinking-label { font-size: 9px; color: #9eaaa1; }
 @keyframes pulse { to { opacity: .25; transform: translateY(-2px); } }
 
 .blind-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }

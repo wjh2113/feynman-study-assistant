@@ -684,7 +684,7 @@ app.post("/api/coach", async (req, res) => {
     if (projectId) {
       const retrievalQuery = `${question?.question || ""} ${concept?.title || question?.concept || ""} ${answer}`;
       const [queryEmbedding] = await embedTexts([retrievalQuery]);
-      evidence = await hybridSearch(projectId, retrievalQuery, queryEmbedding, 4);
+      evidence = await hybridSearch(projectId, retrievalQuery, queryEmbedding, 2);
     }
     const modelConfigured = Boolean((await getModelConfig()).apiKey);
     if (!modelConfigured) {

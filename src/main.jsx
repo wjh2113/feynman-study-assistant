@@ -1218,7 +1218,15 @@ function Coach({ project, updateProject, showToast, navigate }) {
                 <div>{message.text}</div>
               </div>
             ))}
-            {loading && <div className="message ai"><div className="mini-avatar"><Sparkles size={14} /></div><div className="typing"><i /><i /><i /></div></div>}
+            {loading && (
+              <div className="message ai thinking">
+                <div className="mini-avatar"><Sparkles size={14} /></div>
+                <div>
+                  <div className="typing"><i /><i /><i /></div>
+                  <span className="thinking-label">正在结合资料思考追问…</span>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="answer-box">
