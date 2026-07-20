@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowRight,
@@ -1936,17 +1936,27 @@ function VoiceInputButton({ onTranscript, showToast, disabled = false, className
   const supported = typeof window !== "undefined" &&
     Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
 
-  useEffect(() => () => {
-    recognitionRef.current?.abort();
+  const stopRecognition = useCallback(() => {
+    const recognition = recognitionRef.current;
+    if (!recognition) return;
+    try {
+      recognition.stop();
+    } catch {
+      try { recognition.abort(); } catch {}
+    }
   }, []);
 
-  useEffect(() => {
-    if (disabled && recognitionRef.current) recognitionRef.current.stop();
-  }, [disabled]);
+  useEffect(() => () => {
+    stopRecognition();
+  }, [stopRecognition]);
 
-  const toggle = () => {
+  useEffect(() => {
+    if (disabled && recognitionRef.current) stopRecognition();
+  }, [disabled, stopRecognition]);
+
+  const toggle = useCallback(() => {
     if (listening) {
-      recognitionRef.current?.stop();
+      stopRecognition();
       return;
     }
     if (!supported) {
@@ -1960,22 +1970,45 @@ function VoiceInputButton({ onTranscript, showToast, disabled = false, className
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
+
+    let finalBuffer = "";
     recognition.onstart = () => setListening(true);
     recognition.onresult = (event) => {
-      let finalText = "";
-      for (let index = event.resultIndex; index < event.results.length; index += 1) {
-        if (event.results[index].isFinal) finalText += event.results[index][0].transcript;
+      let interimText = "";
+      let newFinalText = "";
+      for (let index = 0; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        if (result.isFinal) {
+          newFinalText += result[0].transcript;
+        } else {
+          interimText += result[0].transcript;
+        }
       }
-      if (finalText.trim()) onTranscript(finalText.trim());
+      if (newFinalText) {
+        finalBuffer += newFinalText;
+        onTranscript(finalBuffer.trim());
+        finalBuffer = "";
+      } else if (interimText) {
+        onTranscript((finalBuffer + interimText).trim());
+      }
     };
     recognition.onerror = (event) => {
       const messages = {
         "not-allowed": "麦克风权限未开启，请允许浏览器访问麦克风",
         "audio-capture": "没有检测到可用的麦克风",
         "no-speech": "没有识别到语音，请靠近麦克风后重试",
-        network: "语音识别服务暂时不可用，请检查网络后重试"
+        network: "语音识别服务暂时不可用，请检查网络后重试",
+        "service-not-allowed": "语音识别服务不可用，请检查浏览器设置",
+        "bad-grammar": "语音识别语法错误",
+        "language-not-supported": "当前浏览器不支持中文语音识别"
       };
-      if (event.error !== "aborted") showToast(messages[event.error] || `语音识别失败：${event.error}`);
+      if (event.error !== "aborted" && event.error !== "no-speech") {
+        showToast(messages[event.error] || `语音识别失败：${event.error}`);
+      }
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        setListening(false);
+        recognitionRef.current = null;
+      }
     };
     recognition.onend = () => {
       setListening(false);
@@ -1989,7 +2022,7 @@ function VoiceInputButton({ onTranscript, showToast, disabled = false, className
       setListening(false);
       showToast(error.message || "无法启动语音识别");
     }
-  };
+  }, [listening, supported, onTranscript, showToast, stopRecognition]);
 
   return (
     <button
