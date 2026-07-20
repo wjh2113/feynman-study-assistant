@@ -121,7 +121,7 @@ test("健康检查返回模型与演示模式状态", async () => {
   assert.equal(response.status, 200);
   const data = await response.json();
   assert.equal(data.ok, true);
-  assert.equal(data.model, "deepseek-v4-pro");
+  assert.equal(data.model, "deepseek-v4-flash");
   assert.equal(data.configured, false);
   assert.equal(data.database.mode, "pglite");
   assert.equal(data.embedding.provider, "test");
@@ -134,7 +134,7 @@ test("模型配置接口不会向前端返回明文密钥", async () => {
   assert.equal(response.status, 200);
   const data = await response.json();
   assert.equal(data.provider, "DeepSeek");
-  assert.equal(data.model, "deepseek-v4-pro");
+  assert.equal(data.model, "deepseek-v4-flash");
   assert.equal(data.configured, false);
   assert.equal("apiKey" in data, false);
 

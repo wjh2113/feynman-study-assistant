@@ -1,7 +1,7 @@
 import { getAppSetting, saveAppSetting } from "./storage.mjs";
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
-const DEFAULT_MODEL = "deepseek-v4-pro";
+const DEFAULT_MODEL = "deepseek-v4-flash";
 const DEFAULT_VISION_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 const DEFAULT_VISION_MODEL = "qwen3.5-ocr";
 

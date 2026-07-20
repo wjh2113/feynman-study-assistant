@@ -1723,8 +1723,8 @@ function ModelSettingsPage({ showToast }) {
                 <span>模型名称</span>
                 <select value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })}>
                   <optgroup label="DeepSeek">
-                    <option value="deepseek-v4-pro">deepseek-v4-pro</option>
-                    <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+                    <option value="deepseek-v4-flash">deepseek-v4-flash（更快）</option>
+                    <option value="deepseek-v4-pro">deepseek-v4-pro（更强）</option>
                   </optgroup>
                   <optgroup label="Kimi">
                     <option value="moonshot-v1-8k">moonshot-v1-8k</option>
@@ -1732,7 +1732,7 @@ function ModelSettingsPage({ showToast }) {
                     <option value="moonshot-v1-128k">moonshot-v1-128k</option>
                   </optgroup>
                 </select>
-                <small>资料分析和出题推荐用 DeepSeek Pro；Kimi 8k 响应更快。</small>
+                <small>默认使用 deepseek-v4-flash，响应更快；需要更强分析能力时切到 Pro。</small>
               </label>
               <label>
                 <span>API Key</span>
