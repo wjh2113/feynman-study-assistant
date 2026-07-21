@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import multer from "multer";
+import cookieParser from "cookie-parser";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -10,28 +11,45 @@ import { chunkSources } from "./server/chunking.mjs";
 import { embedTexts, embeddingStatus, relevanceThreshold, rerankCandidates, retrievalServiceHealth } from "./server/embedding.mjs";
 import { ensureLocalRetrievalService } from "./server/model-service.mjs";
 import {
+  getEmbeddingConfig,
   getModelConfig,
+  getPublicEmbeddingConfig,
   getPublicModelConfig,
   getPublicVisionConfig,
+  testEmbeddingConfig,
   testModelConfig,
+  testRerankerConfig,
   testVisionConfig,
+  updateEmbeddingConfig,
   updateModelConfig,
   updateVisionConfig
 } from "./server/model-config.mjs";
 import { parseFile } from "./server/document-parser.mjs";
 import {
+  getUserById
+} from "./server/storage.mjs";
+import {
+  getSessionUser,
+  loginUser,
+  logoutUser,
+  registerUser
+} from "./server/auth.mjs";
+import {
   databaseStatus,
+  deleteExpiredUserSessions,
   deleteDocument,
   deleteProject,
+  deleteUser,
   getCoachSession,
   getDatabase,
-  getDocument as getStoredDocument,
+  getDocument,
   getProject,
   hybridSearch,
   listCoachSessions,
   listDocumentsForProject,
   listProjects,
   listRagHistory,
+  projectBelongsToUser,
   recordEvent,
   replaceDocumentIndex,
   saveCoachSession,
@@ -42,21 +60,85 @@ import {
 } from "./server/storage.mjs";
 
 const app = express();
+if (process.env.TRUST_PROXY) app.set("trust proxy", process.env.TRUST_PROXY);
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 30 * 1024 * 1024, files: 12 }
 });
 const port = Number(process.env.PORT || 8787);
+const cookieName = "zhifan_session";
+const cookieOptions = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax",
+  maxAge: 30 * 24 * 60 * 60 * 1000
+};
+
+const allowedOrigins = new Set(
+  String(process.env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((value) => value.trim().replace(/\/$/, ""))
+    .filter(Boolean)
+);
+const rateBuckets = new Map();
+const rateBucketCleanupTimer = setInterval(() => {
+  const now = Date.now();
+  for (const [key, bucket] of rateBuckets) {
+    if (bucket.resetAt <= now) rateBuckets.delete(key);
+  }
+}, 15 * 60_000);
+rateBucketCleanupTimer.unref();
+
+function rateLimit({ windowMs, max, keyPrefix }) {
+  return (req, res, next) => {
+    const now = Date.now();
+    const key = `${keyPrefix}:${req.ip || req.socket.remoteAddress || "unknown"}`;
+    const bucket = rateBuckets.get(key);
+    if (!bucket || bucket.resetAt <= now) {
+      rateBuckets.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    bucket.count += 1;
+    if (bucket.count > max) {
+      res.set("Retry-After", String(Math.ceil((bucket.resetAt - now) / 1000)));
+      return res.status(429).json({ error: "请求过于频繁，请稍后再试" });
+    }
+    next();
+  };
+}
+
+function verifyRequestOrigin(req, res, next) {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  const origin = req.get("Origin");
+  if (!origin) {
+    if (process.env.NODE_ENV === "production") return res.status(403).json({ error: "缺少 Origin 请求头" });
+    return next();
+  }
+  const normalized = origin.replace(/\/$/, "");
+  const ownOrigin = `${req.protocol}://${req.get("host")}`;
+  if (normalized === ownOrigin || allowedOrigins.has(normalized)) return next();
+  return res.status(403).json({ error: "请求来源不被允许" });
+}
 
 app.use(express.json({ limit: "2mb" }));
+app.use(cookieParser());
+app.use("/api", verifyRequestOrigin);
+
+async function requireAuth(req, res, next) {
+  const token = req.cookies?.[cookieName];
+  const user = token ? await getSessionUser(token) : null;
+  if (!user) return res.status(401).json({ error: "请先登录" });
+  req.userId = user.id;
+  next();
+}
 
 const cleanJson = (value) => {
   const text = value.trim().replace(/^```json\s*/i, "").replace(/```$/i, "");
   return JSON.parse(text);
 };
 
-async function deepseek(messages, temperature = 0.35) {
-  const config = await getModelConfig();
+async function deepseek(messages, temperature = 0.35, userId) {
+  const config = await getModelConfig(userId);
   if (!config.apiKey) return null;
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
     method: "POST",
@@ -299,6 +381,42 @@ function normalizeQuestions(questions, analysis) {
   });
 }
 
+app.post("/api/auth/register", rateLimit({ windowMs: 15 * 60_000, max: 10, keyPrefix: "register" }), async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    const result = await registerUser(username, password);
+    res.cookie(cookieName, result.token, cookieOptions);
+    res.json({ id: result.id, username: result.username });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "注册失败" });
+  }
+});
+
+app.post("/api/auth/login", rateLimit({ windowMs: 15 * 60_000, max: 20, keyPrefix: "login" }), async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    const result = await loginUser(username, password);
+    res.cookie(cookieName, result.token, cookieOptions);
+    res.json({ id: result.id, username: result.username });
+  } catch (error) {
+    res.status(401).json({ error: error.message || "登录失败" });
+  }
+});
+
+app.post("/api/auth/logout", async (req, res) => {
+  await logoutUser(req.cookies?.[cookieName]);
+  res.clearCookie(cookieName, cookieOptions);
+  res.json({ ok: true });
+});
+
+app.get("/api/auth/me", async (req, res) => {
+  const token = req.cookies?.[cookieName];
+  const user = token ? await getSessionUser(token) : null;
+  if (!user) return res.json({ user: null });
+  const detail = await getUserById(user.id);
+  res.json({ user: detail ? { id: detail.id, username: detail.username } : null });
+});
+
 app.get("/api/health", async (_req, res) => {
   try {
     const modelConfig = await getPublicModelConfig();
@@ -315,9 +433,11 @@ app.get("/api/health", async (_req, res) => {
   }
 });
 
-app.get("/api/settings/model", async (_req, res) => {
+app.use("/api", requireAuth);
+
+app.get("/api/settings/model", async (req, res) => {
   try {
-    res.json(await getPublicModelConfig());
+    res.json(await getPublicModelConfig(req.userId));
   } catch (error) {
     res.status(500).json({ error: error.message || "读取模型配置失败" });
   }
@@ -325,7 +445,7 @@ app.get("/api/settings/model", async (_req, res) => {
 
 app.put("/api/settings/model", async (req, res) => {
   try {
-    res.json(await updateModelConfig(req.body || {}));
+    res.json(await updateModelConfig(req.userId, req.body || {}));
   } catch (error) {
     res.status(400).json({ error: error.message || "保存模型配置失败" });
   }
@@ -333,15 +453,15 @@ app.put("/api/settings/model", async (req, res) => {
 
 app.post("/api/settings/model/test", async (req, res) => {
   try {
-    res.json(await testModelConfig(req.body || {}));
+    res.json(await testModelConfig(req.userId, req.body || {}));
   } catch (error) {
     res.status(400).json({ error: error.message || "模型连接测试失败" });
   }
 });
 
-app.get("/api/settings/vision", async (_req, res) => {
+app.get("/api/settings/vision", async (req, res) => {
   try {
-    res.json(await getPublicVisionConfig());
+    res.json(await getPublicVisionConfig(req.userId));
   } catch (error) {
     res.status(500).json({ error: error.message || "读取 OCR 视觉模型配置失败" });
   }
@@ -349,7 +469,7 @@ app.get("/api/settings/vision", async (_req, res) => {
 
 app.put("/api/settings/vision", async (req, res) => {
   try {
-    res.json(await updateVisionConfig(req.body || {}));
+    res.json(await updateVisionConfig(req.userId, req.body || {}));
   } catch (error) {
     res.status(400).json({ error: error.message || "保存 OCR 视觉模型配置失败" });
   }
@@ -357,15 +477,47 @@ app.put("/api/settings/vision", async (req, res) => {
 
 app.post("/api/settings/vision/test", async (req, res) => {
   try {
-    res.json(await testVisionConfig(req.body || {}));
+    res.json(await testVisionConfig(req.userId, req.body || {}));
   } catch (error) {
     res.status(400).json({ error: error.message || "OCR 视觉模型连接测试失败" });
   }
 });
 
-app.get("/api/projects", async (_req, res) => {
+app.get("/api/settings/embedding", async (req, res) => {
   try {
-    res.json({ projects: await listProjects() });
+    res.json(await getPublicEmbeddingConfig(req.userId));
+  } catch (error) {
+    res.status(500).json({ error: error.message || "读取 Embedding 配置失败" });
+  }
+});
+
+app.put("/api/settings/embedding", async (req, res) => {
+  try {
+    res.json(await updateEmbeddingConfig(req.userId, req.body || {}));
+  } catch (error) {
+    res.status(400).json({ error: error.message || "保存 Embedding 配置失败" });
+  }
+});
+
+app.post("/api/settings/embedding/test", async (req, res) => {
+  try {
+    res.json(await testEmbeddingConfig(req.userId, req.body || {}));
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Embedding 连接测试失败" });
+  }
+});
+
+app.post("/api/settings/reranker/test", async (req, res) => {
+  try {
+    res.json(await testRerankerConfig(req.userId, req.body || {}));
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Reranker 连接测试失败" });
+  }
+});
+
+app.get("/api/projects", async (req, res) => {
+  try {
+    res.json({ projects: await listProjects(req.userId) });
   } catch (error) {
     res.status(500).json({ error: error.message || "读取项目失败" });
   }
@@ -373,7 +525,7 @@ app.get("/api/projects", async (_req, res) => {
 
 app.get("/api/projects/:projectId", async (req, res) => {
   try {
-    const project = await getProject(req.params.projectId);
+    const project = await getProject(req.params.projectId, req.userId);
     if (!project) return res.status(404).json({ error: "学习项目不存在" });
     res.json({ project });
   } catch (error) {
@@ -383,7 +535,7 @@ app.get("/api/projects/:projectId", async (req, res) => {
 
 app.put("/api/projects/:projectId", async (req, res) => {
   try {
-    const project = { ...(req.body || {}), id: req.params.projectId };
+    const project = { ...(req.body || {}), id: req.params.projectId, userId: req.userId };
     await saveProject(project);
     res.json({ project });
   } catch (error) {
@@ -393,7 +545,7 @@ app.put("/api/projects/:projectId", async (req, res) => {
 
 app.delete("/api/projects/:projectId", async (req, res) => {
   try {
-    await deleteProject(req.params.projectId);
+    await deleteProject(req.params.projectId, req.userId);
     res.status(204).end();
   } catch (error) {
     res.status(400).json({ error: error.message || "删除项目失败" });
@@ -402,7 +554,7 @@ app.delete("/api/projects/:projectId", async (req, res) => {
 
 app.delete("/api/projects/:projectId/documents/:documentId", async (req, res) => {
   try {
-    const project = await getProject(req.params.projectId);
+    const project = await getProject(req.params.projectId, req.userId);
     if (!project) return res.status(404).json({ error: "学习项目不存在" });
 
     const sources = project.analysis?.sources || [];
@@ -444,13 +596,14 @@ app.delete("/api/projects/:projectId/documents/:documentId", async (req, res) =>
     };
     const nextProject = {
       ...project,
+      userId: req.userId,
       analysis,
       blindspots: (project.blindspots || []).filter(
         (item) => !String(item.source || "").startsWith(String(source.name || ""))
       )
     };
     await saveProject(nextProject);
-    await recordEvent(req.params.projectId, "document_deleted", {
+    await recordEvent(req.userId, req.params.projectId, "document_deleted", {
       documentId: req.params.documentId,
       filename: source.name
     });
@@ -462,14 +615,15 @@ app.delete("/api/projects/:projectId/documents/:documentId", async (req, res) =>
 
 app.post("/api/projects/:projectId/reindex", async (req, res) => {
   try {
-    const project = await getProject(req.params.projectId);
+    const project = await getProject(req.params.projectId, req.userId);
     if (!project) return res.status(404).json({ error: "学习项目不存在" });
-    const documents = await listDocumentsForProject(req.params.projectId);
+    const documents = await listDocumentsForProject(req.params.projectId, req.userId);
     if (!documents.length) return res.status(400).json({ error: "当前项目没有可以重建索引的资料" });
 
     let totalChunks = 0;
     let totalParents = 0;
     const updatedSources = new Map();
+    const embeddingConfig = await getEmbeddingConfig(req.userId);
     for (const document of documents) {
       const buffer = await readFile(document.storage_path);
       const source = await parseFile({
@@ -481,9 +635,10 @@ app.post("/api/projects/:projectId/reindex", async (req, res) => {
       source.documentKey = document.id;
       source.parsedPreview = source.pages.map((page) => `第 ${page.page} 页\n${page.text}`).join("\n\n").slice(0, 30000);
       const hierarchy = chunkSources([source]);
-      const embeddings = await embedTexts(hierarchy.chunks.map((chunk) => chunk.content));
+      const embeddings = await embedTexts(hierarchy.chunks.map((chunk) => chunk.content), embeddingConfig.embedding);
       await replaceDocumentIndex({
         projectId: req.params.projectId,
+        userId: req.userId,
         document,
         source,
         chunks: hierarchy.chunks,
@@ -501,6 +656,7 @@ app.post("/api/projects/:projectId/reindex", async (req, res) => {
 
     const nextProject = {
       ...project,
+      userId: req.userId,
       analysis: {
         ...(project.analysis || {}),
         sources: (project.analysis?.sources || []).map((source) => (
@@ -509,21 +665,21 @@ app.post("/api/projects/:projectId/reindex", async (req, res) => {
         retrieval: {
           chunks: totalChunks,
           parents: totalParents,
-          embedding: embeddingStatus(),
+          embedding: embeddingStatus(embeddingConfig.embedding),
           strategy: "BGE-M3 + PostgreSQL关键词召回 + RRF + BGE Reranker",
           indexedAt: new Date().toISOString()
         }
       }
     };
     await saveProject(nextProject);
-    await recordEvent(req.params.projectId, "documents_reindexed", { documents: documents.length, chunks: totalChunks, parents: totalParents });
+    await recordEvent(req.userId, req.params.projectId, "documents_reindexed", { documents: documents.length, chunks: totalChunks, parents: totalParents });
     res.json({ project: nextProject, documents: documents.length, chunks: totalChunks, parents: totalParents });
   } catch (error) {
     res.status(400).json({ error: error.message || "重建资料索引失败" });
   }
 });
 
-app.post("/api/analyze", upload.array("files", 12), async (req, res) => {
+app.post("/api/analyze", rateLimit({ windowMs: 60_000, max: 12, keyPrefix: "analyze" }), upload.array("files", 12), async (req, res) => {
   try {
     const sources = [];
     const files = req.files || [];
@@ -541,25 +697,29 @@ app.post("/api/analyze", upload.array("files", 12), async (req, res) => {
     const title = req.body.title || "新的学习项目";
     const mode = req.body.mode || "course";
     const projectId = req.body.projectId || `project-${Date.now()}`;
-    const existingProject = await getProject(projectId);
+    const existingProject = await getProject(projectId, req.userId);
     await saveProject(
-      existingProject || {
-        id: projectId,
-        title,
-        mode,
-        description: "资料正在持久化并建立检索索引。",
-        createdAt: Date.now(),
-        progress: 8,
-        analysis: { summary: "", highValue: [], modules: [], tacitKnowledge: [], scenarios: [], sources: [] },
-        blindspots: [],
-        sessions: [],
-        onePager: null
-      }
+      existingProject
+        ? { ...existingProject, userId: req.userId }
+        : {
+            id: projectId,
+            userId: req.userId,
+            title,
+            mode,
+            description: "资料正在持久化并建立检索索引。",
+            createdAt: Date.now(),
+            progress: 8,
+            analysis: { summary: "", highValue: [], modules: [], tacitKnowledge: [], scenarios: [], sources: [] },
+            blindspots: [],
+            sessions: [],
+            onePager: null
+          }
     );
 
     const hierarchy = chunkSources(sources);
     const allChunks = hierarchy.chunks;
-    const allEmbeddings = await embedTexts(allChunks.map((chunk) => chunk.content));
+    const embeddingConfig = await getEmbeddingConfig(req.userId);
+    const allEmbeddings = await embedTexts(allChunks.map((chunk) => chunk.content), embeddingConfig.embedding);
     const storedSources = [];
     for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
       const source = sources[sourceIndex];
@@ -574,6 +734,7 @@ app.post("/api/analyze", upload.array("files", 12), async (req, res) => {
       storedSources.push(
         await saveDocument({
           projectId,
+          userId: req.userId,
           source,
           file: files[sourceIndex],
           chunks: sourceChunks,
@@ -583,7 +744,7 @@ app.post("/api/analyze", upload.array("files", 12), async (req, res) => {
     }
 
     const demo = demoAnalysis(title, mode, sources);
-    const modelConfig = await getModelConfig();
+    const modelConfig = await getModelConfig(req.userId);
     const modelConfigured = Boolean(modelConfig.apiKey);
     let result = {};
     if (modelConfigured) {
@@ -644,7 +805,7 @@ ${corpus}`
       retrieval: {
         chunks: allChunks.length,
         parents: hierarchy.parents.length,
-        embedding: embeddingStatus(),
+        embedding: embeddingStatus(embeddingConfig.embedding),
         strategy: "BGE-M3 + PostgreSQL关键词召回 + RRF + BGE Reranker"
       },
       demo: !modelConfigured
@@ -655,6 +816,7 @@ ${corpus}`
     };
     await saveProject({
       ...(existingProject || {}),
+      userId: req.userId,
       id: projectId,
       title,
       mode,
@@ -666,7 +828,7 @@ ${corpus}`
       sessions: existingProject?.sessions || [],
       onePager: existingProject?.onePager || null
     });
-    await recordEvent(projectId, "documents_indexed", {
+    await recordEvent(req.userId, projectId, "documents_indexed", {
       documents: enrichedSources.map(({ id, name, chunks }) => ({ id, name, chunks })),
       chunks: allChunks.length
     });
@@ -676,17 +838,18 @@ ${corpus}`
   }
 });
 
-app.post("/api/coach", async (req, res) => {
+app.post("/api/coach", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "coach" }), async (req, res) => {
   try {
     const { projectId, sessionId, question, concept, answer, role = "child", turn = 1 } = req.body || {};
     if (!answer?.trim()) return res.status(400).json({ error: "请先写下你的解释" });
     let evidence = [];
     if (projectId) {
+      const retrievalConfig = await getEmbeddingConfig(req.userId);
       const retrievalQuery = `${question?.question || ""} ${concept?.title || question?.concept || ""} ${answer}`;
-      const [queryEmbedding] = await embedTexts([retrievalQuery]);
-      evidence = await hybridSearch(projectId, retrievalQuery, queryEmbedding, 2);
+      const [queryEmbedding] = await embedTexts([retrievalQuery], retrievalConfig.embedding);
+      evidence = await hybridSearch(projectId, req.userId, retrievalQuery, queryEmbedding, 2);
     }
-    const modelConfigured = Boolean((await getModelConfig()).apiKey);
+    const modelConfigured = Boolean((await getModelConfig(req.userId)).apiKey);
     if (!modelConfigured) {
       const hasExample = /比如|例如|就像|好比/.test(answer);
       const usesJargon = /(赋能|抓手|闭环|范式|飞轮|方法论)/.test(answer) && answer.length < 90;
@@ -718,10 +881,10 @@ app.post("/api/coach", async (req, res) => {
         demo: true
       };
       if (projectId) {
-        await recordEvent(projectId, "coach_turn", { concept: concept?.title, turn, evaluation: payload.evaluation });
+        await recordEvent(req.userId, projectId, "coach_turn", { concept: concept?.title, turn, evaluation: payload.evaluation });
         if (sessionId) {
           const session = await getCoachSession(sessionId);
-          if (session && session.projectId === projectId) {
+          if (session && session.projectId === projectId && session.userId === req.userId) {
             session.messages = session.messages || [];
             session.evaluations = session.evaluations || [];
             session.messages.push({ from: "user", text: answer.trim() });
@@ -758,10 +921,10 @@ app.post("/api/coach", async (req, res) => {
       demo: false
     };
     if (projectId) {
-      await recordEvent(projectId, "coach_turn", { concept: concept?.title, turn, evaluation: result.evaluation });
+      await recordEvent(req.userId, projectId, "coach_turn", { concept: concept?.title, turn, evaluation: result.evaluation });
       if (sessionId) {
         const session = await getCoachSession(sessionId);
-        if (session && session.projectId === projectId) {
+        if (session && session.projectId === projectId && session.userId === req.userId) {
           session.messages = session.messages || [];
           session.evaluations = session.evaluations || [];
           session.messages.push({ from: "user", text: answer.trim() });
@@ -779,7 +942,7 @@ app.post("/api/coach", async (req, res) => {
 
 app.get("/api/projects/:projectId/sessions", async (req, res) => {
   try {
-    const sessions = await listCoachSessions(req.params.projectId);
+    const sessions = await listCoachSessions(req.params.projectId, req.userId);
     res.json({ sessions });
   } catch (error) {
     res.status(500).json({ error: error.message || "读取教练会话失败" });
@@ -788,9 +951,13 @@ app.get("/api/projects/:projectId/sessions", async (req, res) => {
 
 app.post("/api/projects/:projectId/sessions", async (req, res) => {
   try {
+    if (!(await projectBelongsToUser(req.params.projectId, req.userId))) {
+      return res.status(404).json({ error: "学习项目不存在" });
+    }
     const { conceptId, concept, questionId, question } = req.body || {};
     const session = await saveCoachSession({
       id: randomUUID(),
+      userId: req.userId,
       projectId: req.params.projectId,
       conceptId,
       concept,
@@ -809,7 +976,7 @@ app.post("/api/projects/:projectId/sessions", async (req, res) => {
 app.put("/api/projects/:projectId/sessions/:sessionId", async (req, res) => {
   try {
     const session = await getCoachSession(req.params.sessionId);
-    if (!session || session.projectId !== req.params.projectId) {
+    if (!session || session.projectId !== req.params.projectId || session.userId !== req.userId) {
       return res.status(404).json({ error: "会话不存在" });
     }
     const { messages, evaluations, score, status } = req.body || {};
@@ -826,7 +993,7 @@ app.put("/api/projects/:projectId/sessions/:sessionId", async (req, res) => {
 
 app.get("/api/projects/:projectId/rag-history", async (req, res) => {
   try {
-    const records = await listRagHistory(req.params.projectId, Number(req.query.limit) || 50);
+    const records = await listRagHistory(req.params.projectId, req.userId, Number(req.query.limit) || 50);
     res.json({ records });
   } catch (error) {
     res.status(500).json({ error: error.message || "读取 RAG 历史失败" });
@@ -838,6 +1005,7 @@ app.post("/api/projects/:projectId/rag-history", async (req, res) => {
     const { query, answer, sources, debug, insufficient, demo } = req.body || {};
     const record = await saveRagHistory({
       id: randomUUID(),
+      userId: req.userId,
       projectId: req.params.projectId,
       query,
       answer,
@@ -853,8 +1021,8 @@ app.post("/api/projects/:projectId/rag-history", async (req, res) => {
   }
 });
 
-async function generateVariantQuestion(project, blindspot, concept) {
-  const modelConfigured = Boolean((await getModelConfig()).apiKey);
+async function generateVariantQuestion(project, blindspot, concept, userId) {
+  const modelConfigured = Boolean((await getModelConfig(userId)).apiKey);
   const base = {
     id: `q-variant-${Date.now()}`,
     conceptId: concept?.id || "",
@@ -891,14 +1059,14 @@ async function generateVariantQuestion(project, blindspot, concept) {
 
 app.post("/api/projects/:projectId/blindspots/:blindspotId/variant-question", async (req, res) => {
   try {
-    const project = await getProject(req.params.projectId);
+    const project = await getProject(req.params.projectId, req.userId);
     if (!project) return res.status(404).json({ error: "学习项目不存在" });
     const blindspot = (project.blindspots || []).find((item) => item.id === req.params.blindspotId);
     if (!blindspot) return res.status(404).json({ error: "盲区不存在" });
     const concept = (project.analysis?.modules || [])
       .flatMap((module) => module.concepts || [])
       .find((item) => item.title === blindspot.concept || item.id === blindspot.conceptId);
-    const question = await generateVariantQuestion(project, blindspot, concept);
+    const question = await generateVariantQuestion(project, blindspot, concept, req.userId);
     res.json({ question });
   } catch (error) {
     res.status(500).json({ error: error.message || "生成变式题失败" });
@@ -967,7 +1135,7 @@ app.post("/api/one-pager", async (req, res) => {
       coreArgument: project?.analysis?.summary || "通过知识骨架、主动输出和定向补漏，把资料转化为可迁移的能力。",
       sections: fallbackSections.filter((item) => item.keyPoints?.length).slice(0, 7)
     };
-    const modelConfigured = Boolean((await getModelConfig()).apiKey);
+    const modelConfigured = Boolean((await getModelConfig(req.userId)).apiKey);
     if (!modelConfigured) {
       const payload = {
         title: project?.title || "学习一页纸",
@@ -978,7 +1146,7 @@ app.post("/api/one-pager", async (req, res) => {
         outline: fallbackOutline,
         demo: true
       };
-      if (project?.id) await recordEvent(project.id, "one_pager_generated", payload);
+      if (project?.id) await recordEvent(req.userId, project.id, "one_pager_generated", payload);
       return res.json(payload);
     }
     const result = await deepseek([
@@ -1016,34 +1184,35 @@ ${JSON.stringify(project).slice(0, 120000)}
       },
       demo: false
     };
-    if (project?.id) await recordEvent(project.id, "learning_artifact_generated", normalized);
+    if (project?.id) await recordEvent(req.userId, project.id, "learning_artifact_generated", normalized);
     res.json(normalized);
   } catch (error) {
     res.status(500).json({ error: error.message || "生成失败" });
   }
 });
 
-app.post("/api/rag", async (req, res) => {
+app.post("/api/rag", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "rag" }), async (req, res) => {
   try {
     const { projectId, query } = req.body || {};
     if (!projectId) return res.status(400).json({ error: "缺少学习项目" });
     if (!query?.trim()) return res.status(400).json({ error: "请输入问题" });
-    const [queryEmbedding] = await embedTexts([query]);
-    const candidates = await hybridSearch(projectId, query, queryEmbedding, 20);
+    const retrievalConfig = await getEmbeddingConfig(req.userId);
+    const [queryEmbedding] = await embedTexts([query], retrievalConfig.embedding);
+    const candidates = await hybridSearch(projectId, req.userId, query, queryEmbedding, 20);
     if (!candidates.length) {
       return res.json({
         answer: "资料中没有找到相关内容。",
         sources: [],
         debug: { candidateCount: 0, threshold: relevanceThreshold, candidates: [] },
-        demo: !(await getModelConfig()).apiKey
+        demo: !(await getModelConfig(req.userId)).apiKey
       });
     }
-    const sources = await rerankCandidates(query, candidates, 5);
+    const sources = await rerankCandidates(query, candidates, 5, retrievalConfig.reranker);
     const rerankById = new Map(sources.map((item) => [item.id, item.rerankScore]));
     const debug = {
       candidateCount: candidates.length,
       threshold: relevanceThreshold,
-      embedding: embeddingStatus(),
+      embedding: embeddingStatus(retrievalConfig.embedding),
       candidates: candidates.map((item, index) => ({
         rank: index + 1,
         id: item.id,
@@ -1062,19 +1231,19 @@ app.post("/api/rag", async (req, res) => {
       }))
     };
     if (!sources.length || sources[0].rerankScore < relevanceThreshold) {
-      await recordEvent(projectId, "rag_query_insufficient", { query, topScore: sources[0]?.rerankScore || 0 });
+      await recordEvent(req.userId, projectId, "rag_query_insufficient", { query, topScore: sources[0]?.rerankScore || 0 });
       return res.json({
         answer: "资料中没有找到足够相关的内容。你可以换一种问法，或检查资料是否已经重新建立索引。",
         sources: [],
         debug,
         retrieval: "bge-m3-hybrid-rerank",
         insufficient: true,
-        demo: !(await getModelConfig()).apiKey
+        demo: !(await getModelConfig(req.userId)).apiKey
       });
     }
 
     let answer;
-    const modelConfigured = Boolean((await getModelConfig()).apiKey);
+    const modelConfigured = Boolean((await getModelConfig(req.userId)).apiKey);
     if (modelConfigured) {
       const result = await deepseek([
         {
@@ -1092,9 +1261,9 @@ ${sources.map((source, index) => `[${index + 1}] ${source.filename} 第${source.
       ], 0.25);
       answer = result.answer;
     } else {
-      answer = `根据当前资料，最相关的信息来自“${sources[0].filename}”第 ${sources[0].page} 页：${sources[0].content.slice(0, 260)}${sources[0].content.length > 260 ? "……" : ""} [1]`;
+      answer = `（演示模式）这是资料中最相关的片段，来自《${sources[0].filename}》第 ${sources[0].page} 页：\n\n“${sources[0].content.slice(0, 240)}${sources[0].content.length > 240 ? "……" : ""}”\n\n配置 DeepSeek API Key 后，我会基于这些证据给出完整回答。`;
     }
-    await recordEvent(projectId, "rag_query", { query, sourceIds: sources.map((source) => source.id) });
+    await recordEvent(req.userId, projectId, "rag_query", { query, sourceIds: sources.map((source) => source.id) });
     res.json({
       answer,
       sources: sources.map(({ id, documentId, filename, page, pageEnd, headingPath, content, rerankScore, matchedKeywords }) => ({
@@ -1120,7 +1289,7 @@ ${sources.map((source, index) => `[${index + 1}] ${source.filename} 第${source.
 
 app.get("/api/documents/:documentId/file", async (req, res) => {
   try {
-    const document = await getStoredDocument(req.params.documentId);
+    const document = await getDocument(req.params.documentId, req.userId);
     if (!document) return res.status(404).json({ error: "资料不存在" });
     await access(document.storage_path);
     res.attachment(document.filename);
@@ -1144,6 +1313,11 @@ app.use((req, res, next) => {
 
 await ensureLocalRetrievalService();
 await getDatabase();
+await deleteExpiredUserSessions();
+const sessionCleanupTimer = setInterval(() => {
+  deleteExpiredUserSessions().catch((error) => console.error("[auth] 清理过期会话失败", error));
+}, 6 * 60 * 60 * 1000);
+sessionCleanupTimer.unref();
 app.listen(port, "0.0.0.0", () => {
   console.log(`Feynman Study API listening on http://127.0.0.1:${port}`);
   getPublicModelConfig().then((config) =>

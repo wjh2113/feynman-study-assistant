@@ -235,18 +235,9 @@ function withCurrentDemoContent(project) {
 }
 
 function App() {
-  const [projects, setProjects] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem("zhifan-projects"));
-      return saved?.length ? saved.map(withCurrentDemoContent) : [demoProject];
-    } catch {
-      return [demoProject];
-    }
-  });
-  const [activeProjectId, setActiveProjectId] = useState(() => {
-    const saved = localStorage.getItem("zhifan-active-project");
-    return projects.some((item) => item.id === saved) ? saved : projects[0].id;
-  });
+  const { user, loading: authLoading, login, register, logout } = useAuth();
+  const [projects, setProjects] = useState([]);
+  const [activeProjectId, setActiveProjectId] = useState(null);
   const [activeView, setActiveView] = useState("overview");
   const [createOpen, setCreateOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -256,14 +247,16 @@ function App() {
   const project = projects.find((item) => item.id === activeProjectId) || projects[0];
 
   useEffect(() => {
-    localStorage.setItem("zhifan-projects", JSON.stringify(projects));
-  }, [projects]);
-
-  useEffect(() => {
+    if (!user) {
+      setProjects([]);
+      setActiveProjectId(null);
+      setPersistenceReady(false);
+      return undefined;
+    }
     let cancelled = false;
     const hydrate = async () => {
       try {
-        const response = await fetch("/api/projects");
+        const response = await fetch("/api/projects", { credentials: "same-origin" });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "无法读取持久化项目");
         if (cancelled) return;
@@ -273,15 +266,17 @@ function App() {
             data.projects.some((item) => item.id === current) ? current : data.projects[0].id
           );
         } else {
-          await Promise.all(
-            projects.map((item) =>
-              fetch(`/api/projects/${encodeURIComponent(item.id)}`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(item)
-              })
-            )
-          );
+          const demo = { ...demoProject, id: `demo-${user.id}` };
+          await fetch(`/api/projects/${encodeURIComponent(demo.id)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify(demo)
+          });
+          if (!cancelled) {
+            setProjects([demo]);
+            setActiveProjectId(demo.id);
+          }
         }
         if (!cancelled) setPersistenceReady(true);
       } catch (error) {
@@ -290,25 +285,22 @@ function App() {
     };
     hydrate();
     return () => { cancelled = true; };
-  }, []);
+  }, [user]);
 
   useEffect(() => {
-    if (!persistenceReady) return undefined;
+    if (!persistenceReady || !user) return undefined;
     const timer = window.setTimeout(() => {
       projects.forEach((item) => {
         fetch(`/api/projects/${encodeURIComponent(item.id)}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
           body: JSON.stringify(item)
         }).catch(() => showToast("项目暂时只保存在本机浏览器，数据库同步失败"));
       });
     }, 450);
     return () => window.clearTimeout(timer);
-  }, [projects, persistenceReady]);
-
-  useEffect(() => {
-    localStorage.setItem("zhifan-active-project", activeProjectId);
-  }, [activeProjectId]);
+  }, [projects, persistenceReady, user]);
 
   const updateProject = (patch) => {
     setProjects((items) =>
@@ -339,6 +331,29 @@ function App() {
     showToast("学习项目已创建，上传资料开始第一步");
   };
 
+  const handleLogout = async () => {
+    await logout();
+    showToast("已退出登录");
+  };
+
+  if (authLoading) {
+    return (
+      <div className="auth-page">
+        <div className="auth-card">
+          <div className="auth-brand">
+            <div className="brand-mark"><span>知</span></div>
+            <div><strong>知返</strong><small>费曼学习助手</small></div>
+          </div>
+          <div className="settings-loading"><Spinner /> 正在检查登录状态…</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthPage onLogin={{ login, register }} />;
+  }
+
   return (
     <div className="app-shell">
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
@@ -357,16 +372,16 @@ function App() {
 
         <div className="sidebar-label">当前项目</div>
         <div className="project-switcher">
-          <div className="project-glyph">{project.title.slice(0, 1)}</div>
+          <div className="project-glyph">{project?.title?.slice(0, 1) || "?"}</div>
           <div className="project-switcher-copy">
-            <strong>{project.title}</strong>
-            <span>{project.mode === "course" ? "课程精学" : "主题速学"} · {project.progress || 8}%</span>
+            <strong>{project?.title || "加载中…"}</strong>
+            <span>{project?.mode === "course" ? "课程精学" : "主题速学"} · {project?.progress || 8}%</span>
           </div>
           <ChevronDown size={15} />
           <select
             className="project-native-select"
             aria-label="切换学习项目"
-            value={activeProjectId}
+            value={activeProjectId || ""}
             onChange={(event) => {
               setActiveProjectId(event.target.value);
               setActiveView("overview");
@@ -381,7 +396,7 @@ function App() {
             <button key={id} className={activeView === id ? "active" : ""} onClick={() => changeView(id)}>
               <Icon size={18} strokeWidth={1.9} />
               <span>{label}</span>
-              {id === "blindspots" && project.blindspots?.filter((x) => x.status !== "done").length > 0 && (
+              {id === "blindspots" && project?.blindspots?.filter((x) => x.status !== "done").length > 0 && (
                 <em>{project.blindspots.filter((x) => x.status !== "done").length}</em>
               )}
             </button>
@@ -392,9 +407,9 @@ function App() {
           <div className="model-chip"><Sparkles size={14} /> DeepSeek V4 Pro</div>
           <button className={activeView === "settings" ? "active" : ""} onClick={() => changeView("settings")}><Settings size={17} /> 模型设置</button>
           <div className="profile">
-            <div className="avatar">W</div>
-            <div><strong>我的学习空间</strong><span>仅自己可见</span></div>
-            <MoreHorizontal size={17} />
+            <div className="avatar">{user.username.slice(0, 1).toUpperCase()}</div>
+            <div><strong>{user.username}</strong><span>{user.id.slice(0, 8)}</span></div>
+            <button className="icon-btn" onClick={handleLogout} title="退出登录"><X size={17} /></button>
           </div>
         </div>
       </aside>
@@ -404,7 +419,7 @@ function App() {
         <header className="topbar">
           <button className="icon-btn mobile-menu" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
           <div className="breadcrumbs">
-            <span>学习项目</span><ChevronRight size={14} /><strong>{project.title}</strong>
+            <span>学习项目</span><ChevronRight size={14} /><strong>{project?.title || ""}</strong>
           </div>
           <div className="topbar-actions">
             <button className="search-pill" onClick={() => changeView("rag")}><Search size={16} /><span>询问资料库</span><kbd>RAG</kbd></button>
@@ -414,14 +429,24 @@ function App() {
         </header>
 
         <div className="page-wrap">
-          {activeView === "overview" && <Overview project={project} navigate={changeView} />}
-          {activeView === "sources" && <Sources project={project} updateProject={updateProject} navigate={changeView} showToast={showToast} />}
-          {activeView === "map" && <KnowledgeMap project={project} navigate={changeView} />}
-          {activeView === "rag" && <RagAssistant project={project} navigate={changeView} showToast={showToast} />}
-          {activeView === "coach" && <Coach project={project} updateProject={updateProject} showToast={showToast} navigate={changeView} />}
-          {activeView === "blindspots" && <Blindspots project={project} updateProject={updateProject} showToast={showToast} navigate={changeView} />}
-          {activeView === "output" && <OutputStudio project={project} updateProject={updateProject} showToast={showToast} />}
-          {activeView === "settings" && <ModelSettingsPage showToast={showToast} />}
+          {project ? (
+            <>
+              {activeView === "overview" && <Overview project={project} navigate={changeView} />}
+              {activeView === "sources" && <Sources project={project} updateProject={updateProject} navigate={changeView} showToast={showToast} />}
+              {activeView === "map" && <KnowledgeMap project={project} navigate={changeView} />}
+              {activeView === "rag" && <RagAssistant project={project} navigate={changeView} showToast={showToast} />}
+              {activeView === "coach" && <Coach project={project} updateProject={updateProject} showToast={showToast} navigate={changeView} />}
+              {activeView === "blindspots" && <Blindspots project={project} updateProject={updateProject} showToast={showToast} navigate={changeView} />}
+              {activeView === "output" && <OutputStudio project={project} updateProject={updateProject} showToast={showToast} />}
+              {activeView === "settings" && <ModelSettingsPage showToast={showToast} />}
+            </>
+          ) : (
+            <div className="empty-state large">
+              <div><BrainCircuit size={32} /></div>
+              <h2>还没有学习项目</h2>
+              <p>点击左侧“新建学习项目”开始。</p>
+            </div>
+          )}
         </div>
       </main>
 
@@ -431,13 +456,14 @@ function App() {
   );
 }
 
-function PageHeading({ eyebrow, title, description, action }) {
+function PageHeading({ eyebrow, title, description, action, demo }) {
   return (
     <div className="page-heading">
       <div>
         {eyebrow && <div className="eyebrow">{eyebrow}</div>}
         <h1>{title}</h1>
         {description && <p>{description}</p>}
+        {demo && <div className="demo-banner-inline"><Sparkles size={14} /> 当前为演示模式，AI 生成由规则/模板代替。请在「模型设置」中配置 DeepSeek API Key。</div>}
       </div>
       {action}
     </div>
@@ -454,7 +480,7 @@ function Overview({ project, navigate }) {
 
   return (
     <>
-      <PageHeading eyebrow="下午好，继续保持思考" title={project.title} description={project.description} />
+      <PageHeading eyebrow="下午好，继续保持思考" title={project.title} description={project.description} demo={project.analysis?.demo} />
 
       <section className="journey-card">
         <div className="journey-top">
@@ -766,6 +792,7 @@ function KnowledgeMap({ project, navigate }) {
         title="知识地图"
         description="先获得全局视角，再进入最值得掌握的 20% 高价值区。"
         action={<button className="primary-btn" onClick={() => navigate("coach")}><MessageCircleQuestion size={17} /> 开始费曼对练</button>}
+        demo={project.analysis?.demo}
       />
 
       <section className="insight-banner">
@@ -910,6 +937,7 @@ function RagAssistant({ project, navigate, showToast }) {
         title="资料问答"
         description="先用 pgvector 与全文关键词检索找到原文，再让 DeepSeek 严格依据证据回答。"
         action={<button className="secondary-btn" onClick={() => navigate("sources")}><UploadCloud size={16} /> 管理资料</button>}
+        demo={project.analysis?.demo}
       />
       <section className="panel rag-ask-panel">
         <div className="rag-status">
@@ -1196,6 +1224,7 @@ function Coach({ project, updateProject, showToast, navigate }) {
         title={isVariant ? `变式复测 · ${stored?.blindspotTitle || "盲区"}` : "费曼对练"}
         description={isVariant ? "这个问题专门设计来检验你刚才的盲区是否真正补上了。" : "AI 不会替你完善答案，而会通过追问逼你把逻辑讲清楚。"}
         action={<button className="secondary-btn" onClick={finish}><Check size={16} /> 结束并保存</button>}
+        demo={project.analysis?.demo}
       />
       <div className="coach-layout">
         <section className="coach-main">
@@ -1461,6 +1490,7 @@ ${(section.evidence || []).length ? section.evidence.map((item) => `- ${item}`).
         title="学习成果"
         description="把资料、你的解释和修正后的思考，沉淀为一份真正属于你的成果。"
         action={pager ? <button className="secondary-btn" onClick={exportMarkdown}><Download size={16} /> 导出 Markdown</button> : null}
+        demo={project.analysis?.demo}
       />
       {!pager ? (
         <div className="output-empty">
@@ -1525,6 +1555,151 @@ ${(section.evidence || []).length ? section.evidence.map((item) => `- ${item}`).
   );
 }
 
+const EMBEDDING_PRESETS = {
+  dashscope: { name: "阿里云百炼", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", embeddingModel: "text-embedding-v3", rerankerModel: "gte-rerank" },
+  siliconflow: { name: "SiliconFlow", baseUrl: "https://api.siliconflow.cn/v1", embeddingModel: "BAAI/bge-m3", rerankerModel: "BAAI/bge-reranker-v2-m3" },
+  openai: { name: "OpenAI", baseUrl: "https://api.openai.com/v1", embeddingModel: "text-embedding-3-large", rerankerModel: "" },
+  custom: { name: "自定义", baseUrl: "", embeddingModel: "", rerankerModel: "" }
+};
+
+function useAuth() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const check = async () => {
+    try {
+      const response = await fetch("/api/auth/me", { credentials: "same-origin" });
+      const data = await response.json();
+      setUser(data.user);
+    } catch {
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    check();
+  }, []);
+
+  const login = async (username, password) => {
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ username, password })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "登录失败");
+    setUser(data);
+    return data;
+  };
+
+  const register = async (username, password) => {
+    const response = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ username, password })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "注册失败");
+    setUser(data);
+    return data;
+  };
+
+  const logout = async () => {
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "same-origin"
+    });
+    setUser(null);
+  };
+
+  return { user, loading, login, register, logout, refresh: check };
+}
+
+function AuthPage({ onLogin }) {
+  const [mode, setMode] = useState("login");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setError("");
+    setBusy(true);
+    try {
+      if (mode === "login") {
+        await onLogin.login(username, password);
+      } else {
+        await onLogin.register(username, password);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="auth-page">
+      <div className="auth-card">
+        <div className="auth-brand">
+          <div className="brand-mark"><span>知</span></div>
+          <div>
+            <strong>知返</strong>
+            <small>费曼学习助手</small>
+          </div>
+        </div>
+        <h1>{mode === "login" ? "登录" : "注册账号"}</h1>
+        <p>{mode === "login" ? "使用你的账号继续学习" : "创建一个新账号开始使用"}</p>
+        <form onSubmit={submit}>
+          <label>
+            <span>用户名</span>
+            <input
+              autoFocus
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              placeholder="2-32 个字符"
+              disabled={busy}
+            />
+          </label>
+          <label>
+            <span>密码</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder={mode === "login" ? "你的密码" : "至少 6 位"}
+              disabled={busy}
+            />
+          </label>
+          {error && <div className="auth-error"><CircleAlert size={15} />{error}</div>}
+          <button className="primary-btn full" type="submit" disabled={busy || !username.trim() || !password}>
+            {busy ? <Spinner /> : <Check size={16} />}
+            {mode === "login" ? "登录" : "注册"}
+          </button>
+        </form>
+        <div className="auth-toggle">
+          {mode === "login" ? (
+            <>
+              还没有账号？
+              <button className="text-btn" onClick={() => { setMode("register"); setError(""); }}>立即注册</button>
+            </>
+          ) : (
+            <>
+              已有账号？
+              <button className="text-btn" onClick={() => { setMode("login"); setError(""); }}>直接登录</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ModelSettingsPage({ showToast }) {
   const [form, setForm] = useState({
     baseUrl: "https://api.deepseek.com",
@@ -1545,8 +1720,26 @@ function ModelSettingsPage({ showToast }) {
   const [visionLoading, setVisionLoading] = useState(true);
   const [visionBusy, setVisionBusy] = useState(false);
   const [visionTest, setVisionTest] = useState(null);
-  const [retrievalHealth, setRetrievalHealth] = useState(null);
+
+  const [retrievalSaved, setRetrievalSaved] = useState(null);
   const [retrievalLoading, setRetrievalLoading] = useState(true);
+  const [retrievalSaving, setRetrievalSaving] = useState(false);
+  const [embeddingTest, setEmbeddingTest] = useState(null);
+  const [rerankerTest, setRerankerTest] = useState(null);
+  const [embeddingTesting, setEmbeddingTesting] = useState(false);
+  const [rerankerTesting, setRerankerTesting] = useState(false);
+  const [retrievalForm, setRetrievalForm] = useState({
+    provider: "local",
+    embeddingPreset: "local",
+    embeddingBaseUrl: "http://127.0.0.1:8001/v1",
+    embeddingModel: "BAAI/bge-m3",
+    embeddingApiKey: "",
+    embeddingDimensions: 1024,
+    rerankerPreset: "local",
+    rerankerBaseUrl: "http://127.0.0.1:8001/v1",
+    rerankerModel: "BAAI/bge-reranker-v2-m3",
+    rerankerApiKey: ""
+  });
 
   const loadRetrievalHealth = () => {
     setRetrievalLoading(true);
@@ -1554,9 +1747,9 @@ function ModelSettingsPage({ showToast }) {
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "读取检索模型状态失败");
-        setRetrievalHealth({ embedding: data.embedding, service: data.retrievalService });
+        setRetrievalSaved({ embedding: data.embedding, service: data.retrievalService });
       })
-      .catch((error) => setRetrievalHealth({ error: error.message }))
+      .catch((error) => setRetrievalSaved({ error: error.message }))
       .finally(() => setRetrievalLoading(false));
   };
 
@@ -1591,8 +1784,45 @@ function ModelSettingsPage({ showToast }) {
   }, []);
 
   useEffect(() => {
+    fetch("/api/settings/embedding")
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "读取检索配置失败");
+        const embedding = data.embedding || {};
+        const reranker = data.reranker || {};
+        const pickPreset = (provider, baseUrl) => {
+          if (provider === "local") return "local";
+          const key = Object.keys(EMBEDDING_PRESETS).find((k) =>
+            k !== "local" && k !== "custom" && baseUrl?.includes(EMBEDDING_PRESETS[k].baseUrl.replace(/^https?:\/\//, "").split("/")[0])
+          );
+          return key || "custom";
+        };
+        setRetrievalForm((current) => ({
+          ...current,
+          provider: embedding.provider || "local",
+          embeddingPreset: pickPreset(embedding.provider, embedding.baseUrl),
+          embeddingBaseUrl: embedding.baseUrl || current.embeddingBaseUrl,
+          embeddingModel: embedding.model || current.embeddingModel,
+          embeddingDimensions: embedding.dimensions || current.embeddingDimensions,
+          rerankerPreset: pickPreset(reranker.provider, reranker.baseUrl),
+          rerankerBaseUrl: reranker.baseUrl || current.rerankerBaseUrl,
+          rerankerModel: reranker.model || current.rerankerModel
+        }));
+      })
+      .catch((error) => showToast(error.message))
+      .finally(() => setRetrievalLoading(false));
     loadRetrievalHealth();
   }, []);
+
+  const applyPreset = (key, kind) => {
+    const preset = EMBEDDING_PRESETS[key] || EMBEDDING_PRESETS.custom;
+    setRetrievalForm((current) => ({
+      ...current,
+      [`${kind}Preset`]: key,
+      [`${kind}BaseUrl`]: preset.baseUrl || current[`${kind}BaseUrl`],
+      [`${kind}Model`]: preset[`${kind === "embedding" ? "embeddingModel" : "rerankerModel"}`] || current[`${kind}Model`]
+    }));
+  };
 
   const testConnection = async () => {
     setTesting(true);
@@ -1702,6 +1932,91 @@ function ModelSettingsPage({ showToast }) {
       setVisionBusy(false);
     }
   };
+
+  const buildRetrievalPayload = (clearKeys = {}) => ({
+    embedding: {
+      provider: retrievalForm.provider,
+      baseUrl: retrievalForm.embeddingBaseUrl,
+      model: retrievalForm.embeddingModel,
+      apiKey: retrievalForm.embeddingApiKey,
+      dimensions: Number(retrievalForm.embeddingDimensions),
+      clearApiKey: clearKeys.embedding
+    },
+    reranker: {
+      provider: retrievalForm.provider,
+      baseUrl: retrievalForm.rerankerBaseUrl,
+      model: retrievalForm.rerankerModel,
+      apiKey: retrievalForm.rerankerApiKey,
+      clearApiKey: clearKeys.reranker
+    }
+  });
+
+  const saveRetrieval = async (clearKeys = {}) => {
+    setRetrievalSaving(true);
+    try {
+      const response = await fetch("/api/settings/embedding", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildRetrievalPayload(clearKeys))
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "保存检索配置失败");
+      setRetrievalSaved({ embedding: data.embedding, reranker: data.reranker });
+      setRetrievalForm((current) => ({ ...current, embeddingApiKey: "", rerankerApiKey: "" }));
+      showToast("检索模型配置已保存");
+      loadRetrievalHealth();
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      setRetrievalSaving(false);
+    }
+  };
+
+  const testEmbeddingConnection = async () => {
+    setEmbeddingTesting(true);
+    setEmbeddingTest(null);
+    try {
+      const response = await fetch("/api/settings/embedding/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildRetrievalPayload())
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Embedding 测试失败");
+      setEmbeddingTest({
+        ok: true,
+        message: data.local ? data.message : `连接成功${data.provider ? `（${data.provider}）` : ""}`
+      });
+    } catch (error) {
+      setEmbeddingTest({ ok: false, message: error.message });
+    } finally {
+      setEmbeddingTesting(false);
+    }
+  };
+
+  const testRerankerConnection = async () => {
+    setRerankerTesting(true);
+    setRerankerTest(null);
+    try {
+      const response = await fetch("/api/settings/reranker/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildRetrievalPayload())
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Reranker 测试失败");
+      setRerankerTest({
+        ok: true,
+        message: data.local ? data.message : `连接成功${data.provider ? `（${data.provider}）` : ""}`
+      });
+    } catch (error) {
+      setRerankerTest({ ok: false, message: error.message });
+    } finally {
+      setRerankerTesting(false);
+    }
+  };
+
+  const retrievalConfigured = retrievalSaved?.embedding?.configured || retrievalForm.provider === "local";
 
   return (
     <>
@@ -1827,23 +2142,165 @@ function ModelSettingsPage({ showToast }) {
 
           <section className="panel settings-form">
             <div className="settings-head">
-              <div className="settings-provider"><BrainCircuit size={20} /><div><strong>BGE-M3 RAG</strong><span>本机 CPU · 向量召回与精排</span></div></div>
-              <span className={`config-status ${retrievalHealth?.service?.ok && retrievalHealth?.service?.dependencies_ready !== false ? "ready" : ""}`}>
-                {retrievalHealth?.service?.ok && retrievalHealth?.service?.dependencies_ready !== false
-                  ? <><Check size={13} /> 服务就绪</>
-                  : <><CircleAlert size={13} /> 服务未就绪</>}
+              <div className="settings-provider"><BrainCircuit size={20} /><div><strong>检索模型</strong><span>Embedding 召回 + Reranker 精排</span></div></div>
+              <span className={`config-status ${retrievalConfigured ? "ready" : ""}`}>
+                {retrievalConfigured ? <><Check size={13} /> 已配置</> : <><CircleAlert size={13} /> 未配置</>}
               </span>
             </div>
-            {retrievalLoading ? <div className="settings-loading"><Spinner /> 正在检测本地检索模型…</div> : (
+
+            {retrievalLoading ? <div className="settings-loading"><Spinner /> 正在读取检索配置…</div> : (
               <div className="settings-fields">
-                <label><span>Embedding 模型</span><input value={retrievalHealth?.embedding?.model || "BAAI/bge-m3"} readOnly /></label>
-                <label><span>Reranker 模型</span><input value={retrievalHealth?.embedding?.rerankerModel || "BAAI/bge-reranker-v2-m3"} readOnly /></label>
-                <label><span>运行状态</span><input value={retrievalHealth?.error || retrievalHealth?.service?.error || (retrievalHealth?.service?.embedding_loaded && retrievalHealth?.service?.reranker_loaded ? "两个模型均已加载" : "服务已启动，模型会在首次使用时加载")} readOnly /></label>
+                <label>
+                  <span>运行方式</span>
+                  <select
+                    value={retrievalForm.provider}
+                    onChange={(event) => {
+                      const provider = event.target.value;
+                      setRetrievalForm((current) => ({
+                        ...current,
+                        provider,
+                        embeddingPreset: provider === "local" ? "local" : "dashscope",
+                        embeddingBaseUrl: provider === "local" ? "http://127.0.0.1:8001/v1" : EMBEDDING_PRESETS.dashscope.baseUrl,
+                        embeddingModel: provider === "local" ? "BAAI/bge-m3" : EMBEDDING_PRESETS.dashscope.embeddingModel,
+                        rerankerPreset: provider === "local" ? "local" : "dashscope",
+                        rerankerBaseUrl: provider === "local" ? "http://127.0.0.1:8001/v1" : EMBEDDING_PRESETS.dashscope.baseUrl,
+                        rerankerModel: provider === "local" ? "BAAI/bge-reranker-v2-m3" : EMBEDDING_PRESETS.dashscope.rerankerModel
+                      }));
+                    }}
+                  >
+                    <option value="local">本地 BGE-M3（离线运行，需要 .tools/python311 和 .data/models）</option>
+                    <option value="remote">云端 API（默认阿里云百炼，可选其他）</option>
+                  </select>
+                  <small>默认使用阿里云百炼云端 Embedding/Reranker；选择本地会启动内置 Python 模型服务。</small>
+                </label>
+
+                <div className="settings-section-divider"><span>Embedding</span></div>
+                {retrievalForm.provider === "remote" && (
+                  <label>
+                    <span>服务提供商</span>
+                    <select value={retrievalForm.embeddingPreset} onChange={(event) => applyPreset(event.target.value, "embedding")}>
+                      {Object.entries(EMBEDDING_PRESETS).filter(([k]) => k !== "local").map(([key, preset]) => (
+                        <option value={key} key={key}>{preset.name}</option>
+                      ))}
+                    </select>
+                    <small>选择后会自动填入推荐地址和模型名，仍可手动修改。</small>
+                  </label>
+                )}
+                <label>
+                  <span>API 地址</span>
+                  <input
+                    value={retrievalForm.embeddingBaseUrl}
+                    onChange={(event) => setRetrievalForm((current) => ({ ...current, embeddingBaseUrl: event.target.value }))}
+                    placeholder="https://api.siliconflow.cn/v1"
+                    readOnly={retrievalForm.provider === "local"}
+                  />
+                </label>
+                <label>
+                  <span>模型名称</span>
+                  <input
+                    value={retrievalForm.embeddingModel}
+                    onChange={(event) => setRetrievalForm((current) => ({ ...current, embeddingModel: event.target.value }))}
+                    placeholder="BAAI/bge-m3"
+                    readOnly={retrievalForm.provider === "local"}
+                  />
+                </label>
+                <label>
+                  <span>向量维度</span>
+                  <input
+                    type="number"
+                    value={retrievalForm.embeddingDimensions}
+                    onChange={(event) => setRetrievalForm((current) => ({ ...current, embeddingDimensions: event.target.value }))}
+                    placeholder="1024"
+                    readOnly={retrievalForm.provider === "local"}
+                  />
+                  <small>本地 BGE-M3 固定为 1024 维；云端模型请按服务商文档填写。</small>
+                </label>
+                {retrievalForm.provider === "remote" && (
+                  <label>
+                    <span>API Key</span>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={retrievalForm.embeddingApiKey}
+                      onChange={(event) => setRetrievalForm((current) => ({ ...current, embeddingApiKey: event.target.value }))}
+                      placeholder={retrievalSaved?.embedding?.configured ? "已保存密钥，留空保持不变" : "输入 Embedding API Key"}
+                    />
+                  </label>
+                )}
+
+                <div className="settings-section-divider"><span>Reranker</span></div>
+                {retrievalForm.provider === "remote" && (
+                  <label>
+                    <span>服务提供商</span>
+                    <select value={retrievalForm.rerankerPreset} onChange={(event) => applyPreset(event.target.value, "reranker")}>
+                      {Object.entries(EMBEDDING_PRESETS).filter(([k]) => k !== "local").map(([key, preset]) => (
+                        <option value={key} key={key}>{preset.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <label>
+                  <span>API 地址</span>
+                  <input
+                    value={retrievalForm.rerankerBaseUrl}
+                    onChange={(event) => setRetrievalForm((current) => ({ ...current, rerankerBaseUrl: event.target.value }))}
+                    placeholder="https://api.siliconflow.cn/v1"
+                    readOnly={retrievalForm.provider === "local"}
+                  />
+                </label>
+                <label>
+                  <span>模型名称</span>
+                  <input
+                    value={retrievalForm.rerankerModel}
+                    onChange={(event) => setRetrievalForm((current) => ({ ...current, rerankerModel: event.target.value }))}
+                    placeholder="BAAI/bge-reranker-v2-m3"
+                    readOnly={retrievalForm.provider === "local"}
+                  />
+                </label>
+                {retrievalForm.provider === "remote" && (
+                  <label>
+                    <span>API Key</span>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={retrievalForm.rerankerApiKey}
+                      onChange={(event) => setRetrievalForm((current) => ({ ...current, rerankerApiKey: event.target.value }))}
+                      placeholder={retrievalSaved?.reranker?.configured ? "已保存密钥，留空保持不变" : "输入 Reranker API Key"}
+                    />
+                  </label>
+                )}
+
+                {retrievalSaved?.service?.error && (
+                  <div className="connection-result error"><CircleAlert size={16} /><span>本地服务：{retrievalSaved.service.error}</span></div>
+                )}
               </div>
             )}
+
+            {embeddingTest && (
+              <div className={`connection-result ${embeddingTest.ok ? "success" : "error"}`}>
+                {embeddingTest.ok ? <Check size={16} /> : <CircleAlert size={16} />}
+                <span>{embeddingTest.message}</span>
+              </div>
+            )}
+            {rerankerTest && (
+              <div className={`connection-result ${rerankerTest.ok ? "success" : "error"}`}>
+                {rerankerTest.ok ? <Check size={16} /> : <CircleAlert size={16} />}
+                <span>{rerankerTest.message}</span>
+              </div>
+            )}
+
             <div className="settings-actions">
-              <button className="secondary-btn" onClick={loadRetrievalHealth} disabled={retrievalLoading}>
-                {retrievalLoading ? <Spinner /> : <RotateCcw size={16} />} 刷新状态
+              {retrievalForm.provider === "remote" && retrievalSaved?.embedding?.configured && (
+                <button className="text-btn danger-text" onClick={() => saveRetrieval({ embedding: true, reranker: true })} disabled={retrievalSaving}>清除密钥</button>
+              )}
+              <button className="secondary-btn" onClick={testEmbeddingConnection} disabled={embeddingTesting || retrievalLoading || retrievalForm.provider === "local"}>
+                {embeddingTesting ? <Spinner /> : <Zap size={16} />} 测试 Embedding
+              </button>
+              <button className="secondary-btn" onClick={testRerankerConnection} disabled={rerankerTesting || retrievalLoading || retrievalForm.provider === "local"}>
+                {rerankerTesting ? <Spinner /> : <Zap size={16} />} 测试 Reranker
+              </button>
+              <button className="primary-btn" onClick={() => saveRetrieval()} disabled={retrievalSaving || retrievalLoading}>
+                {retrievalSaving ? <Spinner /> : <Check size={16} />} 保存检索配置
               </button>
             </div>
           </section>
@@ -1859,6 +2316,11 @@ function ModelSettingsPage({ showToast }) {
             <span className="section-kicker">隐私说明</span>
             <h3>密钥不会返回前端</h3>
             <p>页面只读取脱敏状态。API Key保存在本机数据库中，仅在本地后端调用模型时使用。</p>
+          </div>
+          <div className="concept-note">
+            <span className="section-kicker">体积提示</span>
+            <h3>云端模式可大幅瘦身</h3>
+            <p>切换为云端 Embedding/Reranker 后，可删除 .data/models/bge-m3 和 .tools/python311，释放约 4GB 空间。</p>
           </div>
         </aside>
       </div>

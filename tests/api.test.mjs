@@ -13,6 +13,38 @@ let visionMock;
 let visionMockUrl;
 let serverError = "";
 let uploadedSources = [];
+let sessionCookie = "";
+let secondSessionCookie = "";
+
+function cookieHeader() {
+  return sessionCookie ? { Cookie: sessionCookie } : {};
+}
+
+async function authFetch(url, options = {}) {
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...cookieHeader(),
+      ...(options.headers || {})
+    }
+  });
+}
+
+function extractCookie(response) {
+  const setCookie = response.headers.get("set-cookie") || "";
+  const match = setCookie.match(/zhifan_session=[^;]+/);
+  return match ? match[0] : "";
+}
+
+async function registerTestUser(username) {
+  const response = await fetch(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password: "testpass" })
+  });
+  assert.equal(response.status, 200, await response.clone().text());
+  return extractCookie(response);
+}
 
 function createBlankPdf() {
   const objects = [
@@ -99,7 +131,9 @@ before(async () => {
       DEEPSEEK_API_KEY: "",
       RAG_TEST_MODE: "true",
       PGLITE_MEMORY: "true",
-      DATA_DIR: `.data-test-${port}`
+      DATA_DIR: `.data-test-${port}`,
+      VISION_BASE_URL: visionMockUrl,
+      VISION_API_KEY: "mock"
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true
@@ -108,6 +142,24 @@ before(async () => {
     serverError += chunk.toString();
   });
   await waitForServer();
+
+  const registerResponse = await fetch(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: `tester-${port}`, password: "testpass" })
+  });
+  if (registerResponse.ok) {
+    sessionCookie = extractCookie(registerResponse);
+  } else {
+    const loginResponse = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: `tester-${port}`, password: "testpass" })
+    });
+    assert.equal(loginResponse.status, 200, "测试用户登录失败");
+    sessionCookie = extractCookie(loginResponse);
+  }
+  assert.ok(sessionCookie, "未能获取测试会话 cookie");
 });
 
 after(async () => {
@@ -129,8 +181,94 @@ test("健康检查返回模型与演示模式状态", async () => {
   assert.equal(data.embedding.rerankerModel, "BAAI/bge-reranker-v2-m3");
 });
 
+test("未登录请求、跨站写请求和已移除的用户列表接口会被拒绝", async () => {
+  const anonymous = await fetch(`${baseUrl}/api/projects`);
+  assert.equal(anonymous.status, 401);
+
+  const crossSite = await fetch(`${baseUrl}/api/projects/origin-check`, {
+    method: "PUT",
+    headers: {
+      ...cookieHeader(),
+      Origin: "https://attacker.example",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ title: "不应保存" })
+  });
+  assert.equal(crossSite.status, 403);
+
+  const users = await authFetch(`${baseUrl}/api/users`);
+  assert.equal(users.status, 404);
+});
+
+test("两个用户的项目、会话、文件和模型配置相互隔离", async () => {
+  const projectId = `private-${port}`;
+  const primaryProject = {
+    id: projectId,
+    title: "用户一的私有项目",
+    mode: "course",
+    createdAt: Date.now(),
+    progress: 0,
+    analysis: { sources: [], modules: [], questions: [] },
+    blindspots: [],
+    sessions: [],
+    onePager: null
+  };
+  const saved = await authFetch(`${baseUrl}/api/projects/${projectId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(primaryProject)
+  });
+  assert.equal(saved.status, 200);
+
+  const session = await authFetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ concept: "私有概念", question: "请解释" })
+  });
+  assert.equal(session.status, 200, await session.clone().text());
+  const sessionId = (await session.json()).session.id;
+
+  secondSessionCookie = await registerTestUser(`other-${port}`);
+  const asSecond = (url, options = {}) => fetch(url, {
+    ...options,
+    headers: { Cookie: secondSessionCookie, ...(options.headers || {}) }
+  });
+
+  assert.equal((await asSecond(`${baseUrl}/api/projects/${projectId}`)).status, 404);
+  assert.equal((await asSecond(`${baseUrl}/api/projects/${projectId}/sessions`)).status, 200);
+  const hiddenSessions = await asSecond(`${baseUrl}/api/projects/${projectId}/sessions`).then((response) => response.json());
+  assert.deepEqual(hiddenSessions.sessions, []);
+
+  const createForeignSession = await asSecond(`${baseUrl}/api/projects/${projectId}/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ concept: "越权", question: "越权" })
+  });
+  assert.equal(createForeignSession.status, 404);
+
+  const overwrite = await asSecond(`${baseUrl}/api/projects/${projectId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...primaryProject, title: "被篡改" })
+  });
+  assert.equal(overwrite.status, 400);
+
+  const updateSession = await asSecond(`${baseUrl}/api/projects/${projectId}/sessions/${sessionId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ score: 100 })
+  });
+  assert.equal(updateSession.status, 404);
+
+  const stillOwned = await authFetch(`${baseUrl}/api/projects/${projectId}`).then((response) => response.json());
+  assert.equal(stillOwned.project.title, "用户一的私有项目");
+
+  const secondConfig = await asSecond(`${baseUrl}/api/settings/model`).then((response) => response.json());
+  assert.equal(secondConfig.configured, false);
+});
+
 test("模型配置接口不会向前端返回明文密钥", async () => {
-  const response = await fetch(`${baseUrl}/api/settings/model`);
+  const response = await authFetch(`${baseUrl}/api/settings/model`);
   assert.equal(response.status, 200);
   const data = await response.json();
   assert.equal(data.provider, "DeepSeek");
@@ -138,16 +276,19 @@ test("模型配置接口不会向前端返回明文密钥", async () => {
   assert.equal(data.configured, false);
   assert.equal("apiKey" in data, false);
 
-  const visionResponse = await fetch(`${baseUrl}/api/settings/vision`);
+  const visionResponse = await authFetch(`${baseUrl}/api/settings/vision`);
   assert.equal(visionResponse.status, 200);
   const vision = await visionResponse.json();
   assert.equal(vision.provider, "阿里云百炼 Qwen OCR");
-  assert.equal(vision.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
+  assert.ok(
+    vision.baseUrl === "https://dashscope.aliyuncs.com/compatible-mode/v1" || vision.baseUrl === visionMockUrl,
+    `vision.baseUrl 应该是默认值或 mock 地址，实际为 ${vision.baseUrl}`
+  );
   assert.equal(vision.model, "qwen3.5-ocr");
-  assert.equal(vision.configured, false);
+  assert.equal(vision.configured, true);
   assert.equal("apiKey" in vision, false);
 
-  const testResponse = await fetch(`${baseUrl}/api/settings/model/test`, {
+  const testResponse = await authFetch(`${baseUrl}/api/settings/model/test`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({})
@@ -167,14 +308,14 @@ test("项目数据会写入 PostgreSQL 并可重新读取", async () => {
     sessions: [],
     onePager: null
   };
-  const saved = await fetch(`${baseUrl}/api/projects/${ragProjectId}`, {
+  const saved = await authFetch(`${baseUrl}/api/projects/${ragProjectId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(project)
   });
   assert.equal(saved.status, 200);
 
-  const response = await fetch(`${baseUrl}/api/projects`);
+  const response = await authFetch(`${baseUrl}/api/projects`);
   const data = await response.json();
   assert.ok(data.projects.some((item) => item.id === ragProjectId && item.title === "持久化测试项目"));
 });
@@ -195,7 +336,7 @@ test("TXT 与 Markdown 资料可上传并生成知识骨架", async () => {
   body.append("mode", "course");
   body.append("projectId", ragProjectId);
 
-  const response = await fetch(`${baseUrl}/api/analyze`, { method: "POST", body });
+  const response = await authFetch(`${baseUrl}/api/analyze`, { method: "POST", body });
   assert.equal(response.status, 200);
   const data = await response.json();
   assert.equal(data.demo, true);
@@ -216,7 +357,7 @@ test("TXT 与 Markdown 资料可上传并生成知识骨架", async () => {
 });
 
 test("图片资料会调用视觉模型 OCR，并把识别结果写入总结和检索分块", async () => {
-  const savedVision = await fetch(`${baseUrl}/api/settings/vision`, {
+  const savedVision = await authFetch(`${baseUrl}/api/settings/vision`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -230,7 +371,7 @@ test("图片资料会调用视觉模型 OCR，并把识别结果写入总结和�
   assert.equal(publicConfig.configured, true);
   assert.equal(JSON.stringify(publicConfig).includes("vision-test-secret"), false);
 
-  const connection = await fetch(`${baseUrl}/api/settings/vision/test`, {
+  const connection = await authFetch(`${baseUrl}/api/settings/vision/test`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({})
@@ -246,7 +387,7 @@ test("图片资料会调用视觉模型 OCR，并把识别结果写入总结和�
   body.append("files", new Blob([png], { type: "image/png" }), "课堂截图.png");
   body.append("title", "截图 OCR 测试");
   body.append("projectId", `ocr-test-${port}`);
-  const response = await fetch(`${baseUrl}/api/analyze`, { method: "POST", body });
+  const response = await authFetch(`${baseUrl}/api/analyze`, { method: "POST", body });
   assert.equal(response.status, 200, await response.clone().text());
   const data = await response.json();
   assert.equal(data.sources.length, 1);
@@ -260,7 +401,7 @@ test("图片资料会调用视觉模型 OCR，并把识别结果写入总结和�
   pdfBody.append("files", new Blob([createBlankPdf()], { type: "application/pdf" }), "扫描讲义.pdf");
   pdfBody.append("title", "PDF OCR 测试");
   pdfBody.append("projectId", `pdf-ocr-test-${port}`);
-  const pdfResponse = await fetch(`${baseUrl}/api/analyze`, { method: "POST", body: pdfBody });
+  const pdfResponse = await authFetch(`${baseUrl}/api/analyze`, { method: "POST", body: pdfBody });
   assert.equal(pdfResponse.status, 200, await pdfResponse.clone().text());
   const pdfData = await pdfResponse.json();
   assert.equal(pdfData.sources[0].parseReport.ocrStatus, "ready");
@@ -277,7 +418,7 @@ test("图片资料会调用视觉模型 OCR，并把识别结果写入总结和�
   );
   docxBody.append("title", "DOCX 截图 OCR 测试");
   docxBody.append("projectId", `docx-ocr-test-${port}`);
-  const docxResponse = await fetch(`${baseUrl}/api/analyze`, { method: "POST", body: docxBody });
+  const docxResponse = await authFetch(`${baseUrl}/api/analyze`, { method: "POST", body: docxBody });
   assert.equal(docxResponse.status, 200, await docxResponse.clone().text());
   const docxData = await docxResponse.json();
   assert.equal(docxData.sources[0].parseReport.imagesFound, 1);
@@ -285,7 +426,7 @@ test("图片资料会调用视觉模型 OCR，并把识别结果写入总结和�
   assert.match(docxData.sources[0].parsedPreview, /课堂正文/);
   assert.match(docxData.sources[0].parsedPreview, /用户访谈结论/);
 
-  const cleared = await fetch(`${baseUrl}/api/settings/vision`, {
+  const cleared = await authFetch(`${baseUrl}/api/settings/vision`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ clearApiKey: true })
@@ -294,14 +435,14 @@ test("图片资料会调用视觉模型 OCR，并把识别结果写入总结和�
 });
 
 test("原始资料会落盘并可通过受控接口重新下载", async () => {
-  const response = await fetch(`${baseUrl}${uploadedSources[0].downloadUrl}`);
+  const response = await authFetch(`${baseUrl}${uploadedSources[0].downloadUrl}`);
   const content = await response.text();
   assert.equal(response.status, 200, content);
   assert.match(content, /反馈闭环需要把用户修改转化为可学习的信号/);
 });
 
 test("已有资料可以重建为 BGE-M3 层级索引", async () => {
-  const response = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/reindex`, {
+  const response = await authFetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/reindex`, {
     method: "POST"
   });
   assert.equal(response.status, 200, await response.clone().text());
@@ -323,10 +464,10 @@ test("RAG 会保留 20 个候选再精排到 5 个", async () => {
   body.append("files", new Blob([sections], { type: "text/markdown" }), "候选池测试.md");
   body.append("title", "候选池测试");
   body.append("projectId", projectId);
-  const uploaded = await fetch(`${baseUrl}/api/analyze`, { method: "POST", body });
+  const uploaded = await authFetch(`${baseUrl}/api/analyze`, { method: "POST", body });
   assert.equal(uploaded.status, 200, await uploaded.clone().text());
 
-  const response = await fetch(`${baseUrl}/api/rag`, {
+  const response = await authFetch(`${baseUrl}/api/rag`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ projectId, query: "召回池验证的精排流程是什么？" })
@@ -339,7 +480,7 @@ test("RAG 会保留 20 个候选再精排到 5 个", async () => {
 });
 
 test("混合检索会返回持久化资料的原文与页码", async () => {
-  const response = await fetch(`${baseUrl}/api/rag`, {
+  const response = await authFetch(`${baseUrl}/api/rag`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -359,7 +500,7 @@ test("混合检索会返回持久化资料的原文与页码", async () => {
 });
 
 test("相关度低于阈值时明确拒绝回答并保留调试候选", async () => {
-  const response = await fetch(`${baseUrl}/api/rag`, {
+  const response = await authFetch(`${baseUrl}/api/rag`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -377,7 +518,7 @@ test("相关度低于阈值时明确拒绝回答并保留调试候选", async ()
 
 test("删除资料会同步清理原始文件、项目记录和向量分块", async () => {
   const target = uploadedSources[0];
-  const response = await fetch(
+  const response = await authFetch(
     `${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/documents/${encodeURIComponent(target.id)}`,
     { method: "DELETE" }
   );
@@ -390,10 +531,10 @@ test("删除资料会同步清理原始文件、项目记录和向量分块", as
     uploadedSources.reduce((total, item) => total + item.chunks, 0) - target.chunks
   );
 
-  const originalFile = await fetch(`${baseUrl}${target.downloadUrl}`);
+  const originalFile = await authFetch(`${baseUrl}${target.downloadUrl}`);
   assert.equal(originalFile.status, 404);
 
-  const ragResponse = await fetch(`${baseUrl}/api/rag`, {
+  const ragResponse = await authFetch(`${baseUrl}/api/rag`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -410,14 +551,14 @@ test("不支持的文件格式返回明确错误", async () => {
   const body = new FormData();
   body.append("files", new Blob(["fake"], { type: "application/octet-stream" }), "资料.exe");
   body.append("title", "错误格式");
-  const response = await fetch(`${baseUrl}/api/analyze`, { method: "POST", body });
+  const response = await authFetch(`${baseUrl}/api/analyze`, { method: "POST", body });
   assert.equal(response.status, 400);
   const data = await response.json();
   assert.match(data.error, /暂不支持/);
 });
 
 test("费曼教练会针对黑话追问", async () => {
-  const response = await fetch(`${baseUrl}/api/coach`, {
+  const response = await authFetch(`${baseUrl}/api/coach`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -440,7 +581,7 @@ test("费曼教练会针对黑话追问", async () => {
 });
 
 test("费曼教练会话可创建、追加并读取", async () => {
-  const create = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/sessions`, {
+  const create = await authFetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -450,12 +591,12 @@ test("费曼教练会话可创建、追加并读取", async () => {
       question: "请不用专业术语解释数据飞轮为什么会运转。"
     })
   });
-  assert.equal(create.status, 200);
+  assert.equal(create.status, 200, await create.clone().text());
   const { session } = await create.json();
   assert.ok(session.id);
   assert.equal(session.messages.length, 1);
 
-  const coach = await fetch(`${baseUrl}/api/coach`, {
+  const coach = await authFetch(`${baseUrl}/api/coach`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -470,7 +611,7 @@ test("费曼教练会话可创建、追加并读取", async () => {
   });
   assert.equal(coach.status, 200);
 
-  const list = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/sessions`);
+  const list = await authFetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/sessions`);
   assert.equal(list.status, 200);
   const { sessions } = await list.json();
   const found = sessions.find((item) => item.id === session.id);
@@ -481,7 +622,7 @@ test("费曼教练会话可创建、追加并读取", async () => {
 });
 
 test("盲区可生成变式复测题", async () => {
-  const project = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}`).then((r) => r.json());
+  const project = await authFetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}`).then((r) => r.json());
   const blindspot = {
     id: `blind-${port}`,
     title: "数据飞轮的失效条件",
@@ -495,14 +636,14 @@ test("盲区可生成变式复测题", async () => {
     ...project.project,
     blindspots: [blindspot]
   };
-  const save = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}`, {
+  const save = await authFetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patched)
   });
   assert.equal(save.status, 200);
 
-  const response = await fetch(
+  const response = await authFetch(
     `${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/blindspots/${encodeURIComponent(blindspot.id)}/variant-question`,
     { method: "POST", headers: { "Content-Type": "application/json" } }
   );
@@ -514,7 +655,7 @@ test("盲区可生成变式复测题", async () => {
 });
 
 test("RAG 问答历史可保存并读取", async () => {
-  const save = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/rag-history`, {
+  const save = await authFetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/rag-history`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -530,14 +671,14 @@ test("RAG 问答历史可保存并读取", async () => {
   const { record } = await save.json();
   assert.equal(record.query, "用户修改如何变成反馈信号？");
 
-  const list = await fetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/rag-history`);
+  const list = await authFetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/rag-history`);
   assert.equal(list.status, 200);
   const { records } = await list.json();
   assert.ok(records.some((item) => item.id === record.id));
 });
 
 test("费曼教练能识别例子并追问边界", async () => {
-  const response = await fetch(`${baseUrl}/api/coach`, {
+  const response = await authFetch(`${baseUrl}/api/coach`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -554,7 +695,7 @@ test("费曼教练能识别例子并追问边界", async () => {
 });
 
 test("空回答会被拒绝", async () => {
-  const response = await fetch(`${baseUrl}/api/coach`, {
+  const response = await authFetch(`${baseUrl}/api/coach`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ answer: "   " })
@@ -563,7 +704,7 @@ test("空回答会被拒绝", async () => {
 });
 
 test("可以从项目数据生成一页纸", async () => {
-  const response = await fetch(`${baseUrl}/api/one-pager`, {
+  const response = await authFetch(`${baseUrl}/api/one-pager`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -584,7 +725,7 @@ test("可以从项目数据生成一页纸", async () => {
 });
 
 test("API Key 可持久化、脱敏显示并清除", async () => {
-  const saveResponse = await fetch(`${baseUrl}/api/settings/model`, {
+  const saveResponse = await authFetch(`${baseUrl}/api/settings/model`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -599,7 +740,7 @@ test("API Key 可持久化、脱敏显示并清除", async () => {
   assert.match(saved.apiKeyMasked, /^sk-t.*5678$/);
   assert.equal(JSON.stringify(saved).includes("sk-test-secret-12345678"), false);
 
-  const clearResponse = await fetch(`${baseUrl}/api/settings/model`, {
+  const clearResponse = await authFetch(`${baseUrl}/api/settings/model`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ clearApiKey: true })
