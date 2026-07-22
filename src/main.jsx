@@ -35,6 +35,24 @@ import {
 import "./styles.css";
 import { recalculateMasteryAndProgress, scoreToMastery } from "./progress.mjs";
 
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 60_000, label = "请求") {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const text = await response.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text || `${label}返回了无法识别的内容` }; }
+    if (!response.ok) throw new Error(data.error || `${label}失败（HTTP ${response.status}）`);
+    return data;
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error(`${label}超过 ${Math.round(timeoutMs / 1000)} 秒，已停止等待。请检查模型服务后重试。`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const demoProject = {
   id: "demo-ai-pm",
   title: "AI 产品经理快速入门",
@@ -881,6 +899,7 @@ function RagAssistant({ project, navigate, showToast }) {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState([]);
+  const [requestError, setRequestError] = useState("");
   const hasSources = Boolean(project.analysis?.sources?.length);
 
   useEffect(() => {
@@ -899,15 +918,14 @@ function RagAssistant({ project, navigate, showToast }) {
     if (!query.trim() || loading) return;
     const question = query.trim();
     setQuery("");
+    setRequestError("");
     setLoading(true);
     try {
-      const response = await fetch("/api/rag", {
+      const data = await fetchJsonWithTimeout("/api/rag", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId: project.id, query: question })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "资料检索失败");
+      }, 60_000, "资料问答");
       const record = { question, ...data };
       setHistory((items) => [record, ...items]);
       await fetch(`/api/projects/${encodeURIComponent(project.id)}/rag-history`, {
@@ -924,7 +942,8 @@ function RagAssistant({ project, navigate, showToast }) {
       });
     } catch (error) {
       setQuery(question);
-      showToast(error.message);
+      setRequestError(error.message || "资料问答失败，请稍后重试");
+      showToast("资料问答失败，详情已显示在输入框下方");
     } finally {
       setLoading(false);
     }
@@ -967,6 +986,14 @@ function RagAssistant({ project, navigate, showToast }) {
             {loading ? <Spinner /> : <Search size={17} />} 检索并回答
           </button>
         </div>
+        {loading && <div className="request-progress"><Spinner /> 正在生成问题向量、召回资料并生成回答，最多等待 60 秒…</div>}
+        {requestError && (
+          <div className="request-error" role="alert">
+            <CircleAlert size={17} />
+            <div><strong>资料问答未完成</strong><p>{requestError}</p></div>
+            <button className="secondary-btn" onClick={ask} disabled={!query.trim() || loading}><RotateCcw size={15} /> 重试</button>
+          </div>
+        )}
       </section>
 
       <div className="rag-history">
@@ -974,6 +1001,7 @@ function RagAssistant({ project, navigate, showToast }) {
           <article className="panel rag-answer-card" key={`${item.question}-${index}`}>
             <div className="rag-question"><span>问</span><h3>{item.question}</h3></div>
             <div className="rag-answer"><Sparkles size={18} /><p>{item.answer}</p></div>
+            {item.warning && <div className="request-warning"><CircleAlert size={15} /><span>{item.warning}</span></div>}
             {item.sources?.length > 0 && (
               <div className="rag-sources">
                 <span className="section-kicker">检索依据 · {item.sources.length} 个片段</span>
@@ -1041,6 +1069,7 @@ function Coach({ project, updateProject, showToast, navigate }) {
   const [answer, setAnswer] = useState("");
   const [turn, setTurn] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [requestError, setRequestError] = useState("");
   const [evaluation, setEvaluation] = useState(null);
   const [messages, setMessages] = useState(() => [
     { from: "ai", text: initialQuestion?.question || "请先上传资料，让AI根据资料生成问题。" }
@@ -1146,17 +1175,16 @@ function Coach({ project, updateProject, showToast, navigate }) {
     if (!answer.trim() || loading) return;
     const userText = answer.trim();
     setAnswer("");
+    setRequestError("");
     const nextMessages = [...messages, { from: "user", text: userText }];
     setMessages(nextMessages);
     setLoading(true);
     try {
-      const response = await fetch("/api/coach", {
+      const data = await fetchJsonWithTimeout("/api/coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId: project.id, sessionId, question, concept, answer: userText, role, turn })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "教练无法回应");
+      }, 55_000, "费曼教练");
       const finalMessages = [...nextMessages, { from: "ai", text: data.reply }];
       const finalEvaluations = [...(sessionId ? (sessionsCache?.find((s) => s.id === sessionId)?.evaluations || []) : []), data.evaluation];
       setMessages(finalMessages);
@@ -1183,7 +1211,9 @@ function Coach({ project, updateProject, showToast, navigate }) {
         }
       }
     } catch (error) {
-      showToast(error.message);
+      setAnswer(userText);
+      setRequestError(error.message || "教练暂时无法回应，请重试");
+      showToast("教练响应失败，你的解释已恢复，可以直接重试");
     } finally {
       setLoading(false);
     }
@@ -1252,11 +1282,19 @@ function Coach({ project, updateProject, showToast, navigate }) {
                 <div className="mini-avatar"><Sparkles size={14} /></div>
                 <div>
                   <div className="typing"><i /><i /><i /></div>
-                  <span className="thinking-label">正在结合资料思考追问…</span>
+                  <span className="thinking-label">正在结合资料思考追问，最多等待 55 秒…</span>
                 </div>
               </div>
             )}
           </div>
+
+          {requestError && (
+            <div className="request-error coach-request-error" role="alert">
+              <CircleAlert size={17} />
+              <div><strong>教练没有完成追问</strong><p>{requestError}</p><span>你的解释已经恢复在输入框中，可以修改后重试。</span></div>
+              <button className="secondary-btn" onClick={submit} disabled={!answer.trim() || loading}><RotateCcw size={15} /> 重试</button>
+            </div>
+          )}
 
           <div className="answer-box">
             <textarea
@@ -1489,7 +1527,7 @@ ${(section.evidence || []).length ? section.evidence.map((item) => `- ${item}`).
         eyebrow="第五步 · 把理解变成作品"
         title="学习成果"
         description="把资料、你的解释和修正后的思考，沉淀为一份真正属于你的成果。"
-        action={pager ? <button className="secondary-btn" onClick={exportMarkdown}><Download size={16} /> 导出 Markdown</button> : null}
+        action={pager ? <div className="topbar-actions"><button className="secondary-btn" onClick={exportMarkdown}><Download size={16} /> 导出 Markdown</button><a className="secondary-btn" href={`/api/projects/${encodeURIComponent(project.id)}/export?format=zip`}><Download size={16} /> 导出完整档案</a></div> : null}
         demo={project.analysis?.demo}
       />
       {!pager ? (

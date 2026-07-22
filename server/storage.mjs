@@ -1,4 +1,4 @@
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,7 @@ import { vector } from "@electric-sql/pglite-pgvector";
 import pg from "pg";
 import { embeddingDimensions } from "./embedding.mjs";
 import { keywordTokens } from "./chunking.mjs";
+import { deleteObject, putObject } from "./object-storage.mjs";
 
 const { Pool } = pg;
 const rootDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -63,12 +64,14 @@ async function createDatabase() {
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       username TEXT UNIQUE NOT NULL,
+      email TEXT UNIQUE,
       password_hash TEXT NOT NULL,
       salt TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT UNIQUE");
   await db.query(`
     CREATE TABLE IF NOT EXISTS user_sessions (
       token TEXT PRIMARY KEY,
@@ -182,6 +185,36 @@ async function createDatabase() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await db.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await db.query(`CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await db.query(`CREATE TABLE IF NOT EXISTS review_reminders (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, concept_id TEXT,
+    due_at TIMESTAMPTZ NOT NULL, status TEXT NOT NULL DEFAULT 'pending', channel TEXT NOT NULL DEFAULT 'in_app',
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await db.query(`CREATE TABLE IF NOT EXISTS orders (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    plan_id TEXT NOT NULL, provider TEXT NOT NULL, external_id TEXT, amount_fen INTEGER NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'CNY', status TEXT NOT NULL DEFAULT 'pending',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), paid_at TIMESTAMPTZ
+  )`);
+  await db.query(`CREATE TABLE IF NOT EXISTS subscriptions (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    order_id TEXT REFERENCES orders(id), plan_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
+    starts_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), ends_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await db.query(`CREATE TABLE IF NOT EXISTS usage_records (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    category TEXT NOT NULL, quantity NUMERIC NOT NULL DEFAULT 0, cost_fen INTEGER NOT NULL DEFAULT 0,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await db.query("INSERT INTO schema_migrations(version) VALUES ('001_commercial_foundation') ON CONFLICT(version) DO NOTHING");
   await db.query("ALTER TABLE rag_history ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE CASCADE");
   await db.query("CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id)");
   await db.query("CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id)");
@@ -221,11 +254,11 @@ async function migrateLegacyDataIfNeeded(db) {
   await db.query("UPDATE rag_history SET user_id = $1 WHERE user_id IS NULL", [userId]);
 }
 
-export async function createUser({ id, username, passwordHash, salt }) {
+export async function createUser({ id, username, email = null, passwordHash, salt }) {
   const db = await getDatabase();
   await db.query(
-    "INSERT INTO users(id, username, password_hash, salt) VALUES ($1, $2, $3, $4)",
-    [id, username, passwordHash, salt]
+    "INSERT INTO users(id, username, email, password_hash, salt) VALUES ($1, $2, $3, $4, $5)",
+    [id, username, email, passwordHash, salt]
   );
   return { id, username };
 }
@@ -240,6 +273,70 @@ export async function getUserById(userId) {
   const db = await getDatabase();
   const result = await db.query("SELECT id, username, created_at FROM users WHERE id = $1", [userId]);
   return result.rows[0] || null;
+}
+
+export async function getUserByEmail(email) {
+  const db = await getDatabase();
+  const result = await db.query("SELECT * FROM users WHERE LOWER(email) = LOWER($1)", [email]);
+  return result.rows[0] || null;
+}
+
+export async function updateUserPassword(userId, passwordHash, salt) {
+  const db = await getDatabase();
+  await db.query("UPDATE users SET password_hash=$2, salt=$3, updated_at=NOW() WHERE id=$1", [userId, passwordHash, salt]);
+  await db.query("DELETE FROM user_sessions WHERE user_id=$1", [userId]);
+}
+
+export async function savePasswordResetToken(tokenHash, userId, expiresAt) {
+  const db = await getDatabase();
+  await db.query("INSERT INTO password_reset_tokens(token_hash,user_id,expires_at) VALUES($1,$2,$3)", [tokenHash, userId, expiresAt]);
+}
+
+export async function consumePasswordResetToken(tokenHash) {
+  const db = await getDatabase();
+  const result = await db.query("UPDATE password_reset_tokens SET used_at=NOW() WHERE token_hash=$1 AND used_at IS NULL AND expires_at>NOW() RETURNING user_id", [tokenHash]);
+  return result.rows[0]?.user_id || null;
+}
+
+export async function createReminder(reminder) {
+  const db = await getDatabase();
+  await db.query("INSERT INTO review_reminders(id,user_id,project_id,concept_id,due_at,channel,payload) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)", [reminder.id, reminder.userId, reminder.projectId, reminder.conceptId || null, reminder.dueAt, reminder.channel || "in_app", JSON.stringify(reminder.payload || {})]);
+  return reminder;
+}
+
+export async function listReminders(userId, status = "pending") {
+  const db = await getDatabase();
+  const result = await db.query("SELECT * FROM review_reminders WHERE user_id=$1 AND status=$2 ORDER BY due_at", [userId, status]);
+  return result.rows.map((row) => ({ ...row, payload: safeJson(row.payload) }));
+}
+
+export async function saveOrder(order) {
+  const db = await getDatabase();
+  await db.query("INSERT INTO orders(id,user_id,plan_id,provider,external_id,amount_fen,currency,status,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)", [order.id, order.userId, order.planId, order.provider, order.externalId || null, order.amountFen, order.currency, order.status, JSON.stringify(order.metadata || {})]);
+  return order;
+}
+
+export async function getOrder(id, userId) {
+  const db = await getDatabase();
+  const result = await db.query("SELECT * FROM orders WHERE id=$1 AND user_id=$2", [id, userId]);
+  return result.rows[0] || null;
+}
+
+export async function markOrderPaid(id) {
+  const db = await getDatabase();
+  const result = await db.query("UPDATE orders SET status='paid',paid_at=NOW() WHERE id=$1 AND status='pending' RETURNING *", [id]);
+  return result.rows[0] || null;
+}
+
+export async function createSubscription({ id, userId, orderId, planId, endsAt }) {
+  const db = await getDatabase();
+  await db.query("INSERT INTO subscriptions(id,user_id,order_id,plan_id,ends_at) VALUES($1,$2,$3,$4,$5)", [id, userId, orderId, planId, endsAt]);
+}
+
+export async function listSubscriptions(userId) {
+  const db = await getDatabase();
+  const result = await db.query("SELECT * FROM subscriptions WHERE user_id=$1 ORDER BY created_at DESC", [userId]);
+  return result.rows;
 }
 
 export async function listUsers() {
@@ -350,8 +447,9 @@ export async function persistOriginalFile(projectId, file) {
   const extension = path.extname(sanitizeFilename(file.originalname)).toLowerCase().replace(/[^a-z0-9.]/g, "");
   const storedName = `${randomUUID()}${extension}`;
   const storagePath = path.join(projectFolder, storedName);
-  await writeFile(storagePath, file.buffer);
-  return { storedName, storagePath };
+  const key = `${sanitizeFilename(projectId)}/${storedName}`;
+  const stored = await putObject({ key, buffer: file.buffer, localPath: storagePath });
+  return { storedName: key, storagePath: stored.storagePath };
 }
 
 function vectorLiteral(vectorValue) {
@@ -483,24 +581,19 @@ export async function replaceDocumentIndex({ projectId, userId, document, source
 export async function deleteDocument(projectId, documentId) {
   const db = await getDatabase();
   const result = await db.query(
-    "SELECT storage_path FROM documents WHERE id = $1 AND project_id = $2",
+    "SELECT stored_name, storage_path FROM documents WHERE id = $1 AND project_id = $2",
     [documentId, projectId]
   );
   const document = result.rows[0];
   if (!document) return false;
 
-  const resolvedUploadDir = path.resolve(uploadDir);
-  const resolvedStoragePath = path.resolve(document.storage_path);
-  const relativeStoragePath = path.relative(resolvedUploadDir, resolvedStoragePath);
-  if (relativeStoragePath.startsWith("..") || path.isAbsolute(relativeStoragePath)) {
-    throw new Error("资料文件路径不在允许的存储目录内");
+  if (!String(document.storage_path).startsWith("oss://")) {
+    const resolvedUploadDir = path.resolve(uploadDir);
+    const resolvedStoragePath = path.resolve(document.storage_path);
+    const relativeStoragePath = path.relative(resolvedUploadDir, resolvedStoragePath);
+    if (relativeStoragePath.startsWith("..") || path.isAbsolute(relativeStoragePath)) throw new Error("资料文件路径不在允许的存储目录内");
   }
-
-  try {
-    await unlink(resolvedStoragePath);
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
-  }
+  await deleteObject({ key: document.stored_name, storagePath: document.storage_path });
 
   await db.query(
     "DELETE FROM documents WHERE id = $1 AND project_id = $2",

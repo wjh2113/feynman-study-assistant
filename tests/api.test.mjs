@@ -748,3 +748,75 @@ test("API Key 可持久化、脱敏显示并清除", async () => {
   assert.equal(clearResponse.status, 200);
   assert.equal((await clearResponse.json()).configured, false);
 });
+
+test("商业化基础接口支持提醒、导出、沙箱支付和运行指标", async () => {
+  const reminderResponse = await authFetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/reminders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conceptId: "c1", mastery: 2, lastReviewedAt: Date.now() })
+  });
+  assert.equal(reminderResponse.status, 201, await reminderResponse.clone().text());
+  const reminders = await authFetch(`${baseUrl}/api/reminders`).then((response) => response.json());
+  assert.ok(reminders.reminders.some((item) => item.project_id === ragProjectId));
+
+  const exported = await authFetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/export?format=zip`);
+  assert.equal(exported.status, 200);
+  assert.match(exported.headers.get("content-type"), /application\/zip/);
+  assert.ok((await exported.arrayBuffer()).byteLength > 100);
+
+  const plansResponse = await authFetch(`${baseUrl}/api/billing/plans`).then((response) => response.json());
+  assert.ok(plansResponse.plans.some((plan) => plan.id === "pro_monthly" && plan.amountFen === 3900));
+  const orderResponse = await authFetch(`${baseUrl}/api/billing/orders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ planId: "pro_monthly", provider: "sandbox" })
+  });
+  assert.equal(orderResponse.status, 201, await orderResponse.clone().text());
+  const { order } = await orderResponse.json();
+  const complete = await authFetch(`${baseUrl}/api/payments/sandbox/${order.id}/complete`, { method: "POST" });
+  assert.equal(complete.status, 200, await complete.clone().text());
+  const subscriptions = await authFetch(`${baseUrl}/api/billing/subscriptions`).then((response) => response.json());
+  assert.ok(subscriptions.subscriptions.some((item) => item.order_id === order.id && item.status === "active"));
+
+  const metrics = await authFetch(`${baseUrl}/api/diagnostics/metrics`).then((response) => response.json());
+  assert.ok(Array.isArray(metrics.metrics));
+});
+
+test("邮箱密码重置令牌一次有效并使旧密码失效", async () => {
+  const username = `reset-${port}`;
+  const email = `reset-${port}@example.test`;
+  const register = await fetch(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, email, password: "old-password" })
+  });
+  assert.equal(register.status, 200, await register.clone().text());
+  const forgot = await fetch(`${baseUrl}/api/auth/forgot-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email })
+  });
+  const forgotData = await forgot.json();
+  assert.equal(forgot.status, 200);
+  assert.ok(forgotData.developmentToken);
+  const reset = await fetch(`${baseUrl}/api/auth/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: forgotData.developmentToken, password: "new-password" })
+  });
+  assert.equal(reset.status, 200, await reset.clone().text());
+  const reuse = await fetch(`${baseUrl}/api/auth/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: forgotData.developmentToken, password: "another-password" })
+  });
+  assert.equal(reuse.status, 400);
+  const oldLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password: "old-password" })
+  });
+  assert.equal(oldLogin.status, 401);
+  const newLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password: "new-password" })
+  });
+  assert.equal(newLogin.status, 200);
+});

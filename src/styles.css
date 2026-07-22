@@ -421,6 +421,15 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 .rag-input-row textarea:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(46,103,82,.08); }
 .rag-input-row textarea:disabled { background: #f3f4f0; color: #a1a49c; }
 .rag-input-row .primary-btn { min-width: 132px; }
+.request-progress { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: #69736c; font-size: 9px; }
+.request-error { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; margin-top: 14px; border: 1px solid #e8b9b1; border-radius: 10px; padding: 12px; color: #8d3f36; background: #fff3f0; }
+.request-error > svg { align-self: start; margin-top: 2px; }
+.request-error strong { display: block; font-size: 10px; }
+.request-error p { margin: 3px 0 0; color: #9c5147; font-size: 9px; line-height: 1.6; }
+.request-error span { display: block; margin-top: 3px; color: #a36860; font-size: 8px; }
+.request-error .secondary-btn { white-space: nowrap; }
+.request-warning { display: flex; align-items: flex-start; gap: 7px; margin: 0 0 15px 33px; border-radius: 8px; padding: 9px 10px; color: #7b643f; background: #fbf3e5; font-size: 8px; line-height: 1.6; }
+.coach-request-error { margin: 0 18px 12px; }
 .voice-input-btn { min-height: 31px; border: 1px solid #d8e2d9; border-radius: 8px; padding: 0 9px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; color: var(--green); background: #f3f8f3; cursor: pointer; font-size: 9px; font-weight: 600; }
 .voice-input-btn:hover { border-color: #9ab4a1; background: #eaf3ec; }
 .voice-input-btn:disabled { opacity: .5; cursor: not-allowed; }

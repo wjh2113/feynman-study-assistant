@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chunkSources } from "../server/chunking.mjs";
+import { fallbackRankCandidates } from "../server/embedding.mjs";
 
 test("语义切片保留章节父块、表格和500至800字左右的子块", () => {
   const paragraph = "用户研究不是收集意见，而是围绕关键决策寻找证据。需要区分用户表达的偏好、真实行为和业务约束，并通过连续追问验证因果关系。";
@@ -28,4 +29,14 @@ test("语义切片保留章节父块、表格和500至800字左右的子块", ()
   assert.ok(result.chunks.some((chunk) => /验证与边界/.test(chunk.headingPath)));
   assert.ok(result.chunks.filter((chunk) => /问题定义/.test(chunk.headingPath)).every((chunk) => chunk.page === 1 && chunk.pageEnd === 1));
   assert.ok(result.chunks.filter((chunk) => /验证与边界/.test(chunk.headingPath)).every((chunk) => chunk.page === 2 && chunk.pageEnd === 2));
+});
+
+test("Reranker 不可用时可按向量与融合分数降级排序", () => {
+  const ranked = fallbackRankCandidates([
+    { id: "low", vectorScore: 0.21, fusionScore: 0.01 },
+    { id: "high", vectorScore: 0.78, fusionScore: 0.02 },
+    { id: "mid", vectorScore: 0.46, fusionScore: 0.015 }
+  ], 2);
+  assert.deepEqual(ranked.map((item) => item.id), ["high", "mid"]);
+  assert.equal(ranked[0].rerankScore, 0.78);
 });

@@ -2,13 +2,13 @@ import "dotenv/config";
 import express from "express";
 import multer from "multer";
 import cookieParser from "cookie-parser";
+import JSZip from "jszip";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { access, readFile } from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { chunkSources } from "./server/chunking.mjs";
-import { embedTexts, embeddingStatus, relevanceThreshold, rerankCandidates, retrievalServiceHealth } from "./server/embedding.mjs";
+import { embedTexts, embeddingStatus, fallbackRankCandidates, relevanceThreshold, rerankCandidates, retrievalServiceHealth } from "./server/embedding.mjs";
 import { ensureLocalRetrievalService } from "./server/model-service.mjs";
 import {
   getEmbeddingConfig,
@@ -29,13 +29,24 @@ import {
   getUserById
 } from "./server/storage.mjs";
 import {
+  createPasswordReset,
   getSessionUser,
   loginUser,
   logoutUser,
-  registerUser
+  registerUser,
+  resetPassword
 } from "./server/auth.mjs";
+import { sendMail, mailStatus } from "./server/mailer.mjs";
+import { requestContext, metricsSnapshot, logError } from "./server/observability.mjs";
+import { createPaymentAdapter, newOrder, plans } from "./server/payments.mjs";
+import { getObject, objectStorageStatus } from "./server/object-storage.mjs";
+import { enqueueTask, getTask, queueStatus } from "./server/task-queue.mjs";
+import { nextReviewAt } from "./server/learning-schedule.mjs";
+import { secretsEncryptionStatus } from "./server/secret-crypto.mjs";
 import {
   databaseStatus,
+  createReminder,
+  createSubscription,
   deleteExpiredUserSessions,
   deleteDocument,
   deleteProject,
@@ -44,16 +55,21 @@ import {
   getDatabase,
   getDocument,
   getProject,
+  getOrder,
   hybridSearch,
   listCoachSessions,
   listDocumentsForProject,
   listProjects,
   listRagHistory,
+  listReminders,
+  listSubscriptions,
+  markOrderPaid,
   projectBelongsToUser,
   recordEvent,
   replaceDocumentIndex,
   saveCoachSession,
   saveDocument,
+  saveOrder,
   saveProject,
   saveRagHistory,
   updateDocumentInsights
@@ -122,6 +138,7 @@ function verifyRequestOrigin(req, res, next) {
 
 app.use(express.json({ limit: "2mb" }));
 app.use(cookieParser());
+app.use(requestContext);
 app.use("/api", verifyRequestOrigin);
 
 async function requireAuth(req, res, next) {
@@ -137,28 +154,38 @@ const cleanJson = (value) => {
   return JSON.parse(text);
 };
 
-async function deepseek(messages, temperature = 0.35, userId) {
+async function deepseek(messages, temperature = 0.35, userId, timeoutMs = Number(process.env.GENERATION_TIMEOUT_MS || 45_000)) {
   const config = await getModelConfig(userId);
   if (!config.apiKey) return null;
-  const response = await fetch(`${config.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: config.model,
-      messages,
-      temperature,
-      response_format: { type: "json_object" }
-    })
-  });
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`DeepSeek API ${response.status}: ${detail.slice(0, 300)}`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages,
+        temperature,
+        response_format: { type: "json_object" }
+      }),
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`文本模型返回 ${response.status}：${detail.slice(0, 300)}`);
+    }
+    const data = await response.json();
+    return cleanJson(data.choices?.[0]?.message?.content || "{}");
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error(`文本模型生成超过 ${Math.round(timeoutMs / 1000)} 秒，已停止等待`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  const data = await response.json();
-  return cleanJson(data.choices?.[0]?.message?.content || "{}");
 }
 
 function corpusFrom(sources) {
@@ -383,13 +410,29 @@ function normalizeQuestions(questions, analysis) {
 
 app.post("/api/auth/register", rateLimit({ windowMs: 15 * 60_000, max: 10, keyPrefix: "register" }), async (req, res) => {
   try {
-    const { username, password } = req.body || {};
-    const result = await registerUser(username, password);
+    const { username, password, email } = req.body || {};
+    const result = await registerUser(username, password, email);
     res.cookie(cookieName, result.token, cookieOptions);
     res.json({ id: result.id, username: result.username });
   } catch (error) {
     res.status(400).json({ error: error.message || "注册失败" });
   }
+});
+
+app.post("/api/auth/forgot-password", rateLimit({ windowMs: 15 * 60_000, max: 5, keyPrefix: "forgot" }), async (req, res) => {
+  try {
+    const reset = await createPasswordReset(req.body?.email);
+    if (reset) {
+      const baseUrl = process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
+      await sendMail({ to: reset.user.email, subject: "知返密码重置", text: `请在 30 分钟内打开：${baseUrl}/reset-password?token=${reset.token}` });
+    }
+    res.json({ ok: true, message: "如果邮箱存在，重置邮件已经发送", ...(process.env.NODE_ENV !== "production" && reset ? { developmentToken: reset.token } : {}) });
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+
+app.post("/api/auth/reset-password", rateLimit({ windowMs: 15 * 60_000, max: 10, keyPrefix: "reset" }), async (req, res) => {
+  try { await resetPassword(req.body?.token, req.body?.password); res.json({ ok: true }); }
+  catch (error) { res.status(400).json({ error: error.message }); }
 });
 
 app.post("/api/auth/login", rateLimit({ windowMs: 15 * 60_000, max: 20, keyPrefix: "login" }), async (req, res) => {
@@ -426,7 +469,11 @@ app.get("/api/health", async (_req, res) => {
       configured: modelConfig.configured,
       database: await databaseStatus(),
       embedding: embeddingStatus(),
-      retrievalService: await retrievalServiceHealth()
+      retrievalService: await retrievalServiceHealth(),
+      storage: objectStorageStatus(),
+      queue: queueStatus(),
+      mail: mailStatus(),
+      secrets: secretsEncryptionStatus()
     });
   } catch (error) {
     res.status(503).json({ ok: false, error: error.message });
@@ -434,6 +481,58 @@ app.get("/api/health", async (_req, res) => {
 });
 
 app.use("/api", requireAuth);
+
+app.get("/api/diagnostics/metrics", (_req, res) => res.json({ metrics: metricsSnapshot() }));
+
+app.delete("/api/account", async (req, res) => {
+  try {
+    const user = await getUserById(req.userId);
+    if (!user || req.body?.confirmation !== user.username) return res.status(400).json({ error: "请输入用户名确认删除账号" });
+    await deleteUser(req.userId);
+    res.clearCookie(cookieName, cookieOptions);
+    res.json({ ok: true });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.get("/api/reminders", async (req, res) => res.json({ reminders: await listReminders(req.userId, String(req.query.status || "pending")) }));
+app.post("/api/projects/:projectId/reminders", async (req, res) => {
+  if (!(await projectBelongsToUser(req.params.projectId, req.userId))) return res.status(404).json({ error: "学习项目不存在" });
+  const reminder = await createReminder({ id: randomUUID(), userId: req.userId, projectId: req.params.projectId, conceptId: req.body?.conceptId, dueAt: req.body?.dueAt || nextReviewAt(req.body || {}), channel: req.body?.channel, payload: req.body?.payload });
+  res.status(201).json({ reminder });
+});
+
+app.get("/api/billing/plans", (_req, res) => res.json({ plans: Object.values(plans) }));
+app.get("/api/billing/subscriptions", async (req, res) => res.json({ subscriptions: await listSubscriptions(req.userId) }));
+app.post("/api/billing/orders", async (req, res) => {
+  try {
+    const order = newOrder(req.userId, req.body?.planId, req.body?.provider || "sandbox");
+    const payment = await createPaymentAdapter(order.provider).create(order);
+    order.externalId = payment.externalId;
+    order.metadata = { payUrl: payment.payUrl, pendingIntegration: payment.pendingIntegration || false };
+    await saveOrder(order);
+    res.status(201).json({ order, payment });
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+app.post("/api/payments/sandbox/:orderId/complete", async (req, res) => {
+  if (process.env.NODE_ENV === "production" && process.env.PAYMENT_SANDBOX !== "true") return res.status(404).json({ error: "沙箱支付未启用" });
+  const owned = await getOrder(req.params.orderId, req.userId);
+  if (!owned) return res.status(404).json({ error: "订单不存在" });
+  const order = await markOrderPaid(owned.id);
+  if (!order) return res.status(409).json({ error: "订单状态不可更新" });
+  const plan = plans[order.plan_id];
+  await createSubscription({ id: randomUUID(), userId: req.userId, orderId: order.id, planId: order.plan_id, endsAt: new Date(Date.now() + plan.durationDays * 86_400_000).toISOString() });
+  res.json({ ok: true, orderId: order.id });
+});
+
+app.get("/api/projects/:projectId/export", async (req, res) => {
+  const project = await getProject(req.params.projectId, req.userId);
+  if (!project) return res.status(404).json({ error: "学习项目不存在" });
+  const format = String(req.query.format || "markdown");
+  const markdown = `# ${project.title}\n\n${project.analysis?.summary || project.description || ""}\n\n## 核心知识\n${(project.analysis?.modules || []).flatMap((module) => module.concepts || []).map((concept) => `- **${concept.title}**：${concept.explanation || ""}`).join("\n")}\n\n## 盲区\n${(project.blindspots || []).map((item) => `- ${item.title}：${item.problem || ""}`).join("\n")}`;
+  if (format === "json") return res.attachment(`${project.id}.json`).type("application/json").send(JSON.stringify(project, null, 2));
+  if (format === "zip") { const zip = new JSZip(); zip.file("README.md", markdown); zip.file("project.json", JSON.stringify(project, null, 2)); return res.attachment(`${project.id}.zip`).type("application/zip").send(await zip.generateAsync({ type: "nodebuffer" })); }
+  res.attachment(`${project.id}.md`).type("text/markdown; charset=utf-8").send(markdown);
+});
 
 app.get("/api/settings/model", async (req, res) => {
   try {
@@ -613,19 +712,17 @@ app.delete("/api/projects/:projectId/documents/:documentId", async (req, res) =>
   }
 });
 
-app.post("/api/projects/:projectId/reindex", async (req, res) => {
-  try {
-    const project = await getProject(req.params.projectId, req.userId);
-    if (!project) return res.status(404).json({ error: "学习项目不存在" });
-    const documents = await listDocumentsForProject(req.params.projectId, req.userId);
-    if (!documents.length) return res.status(400).json({ error: "当前项目没有可以重建索引的资料" });
-
-    let totalChunks = 0;
-    let totalParents = 0;
+async function reindexProject(projectId, userId, onProgress = () => {}) {
+    const project = await getProject(projectId, userId);
+    if (!project) throw new Error("学习项目不存在");
+    const documents = await listDocumentsForProject(projectId, userId);
+    if (!documents.length) throw new Error("当前项目没有可以重建索引的资料");
+    let totalChunks = 0; let totalParents = 0;
     const updatedSources = new Map();
-    const embeddingConfig = await getEmbeddingConfig(req.userId);
-    for (const document of documents) {
-      const buffer = await readFile(document.storage_path);
+    const embeddingConfig = await getEmbeddingConfig(userId);
+    for (const [documentIndex, document] of documents.entries()) {
+      onProgress(Math.round(documentIndex / documents.length * 90));
+      const buffer = await getObject({ key: document.stored_name, storagePath: document.storage_path });
       const source = await parseFile({
         originalname: document.filename,
         mimetype: document.mime_type,
@@ -637,8 +734,8 @@ app.post("/api/projects/:projectId/reindex", async (req, res) => {
       const hierarchy = chunkSources([source]);
       const embeddings = await embedTexts(hierarchy.chunks.map((chunk) => chunk.content), embeddingConfig.embedding);
       await replaceDocumentIndex({
-        projectId: req.params.projectId,
-        userId: req.userId,
+        projectId,
+        userId,
         document,
         source,
         chunks: hierarchy.chunks,
@@ -654,9 +751,9 @@ app.post("/api/projects/:projectId/reindex", async (req, res) => {
       });
     }
 
-    const nextProject = {
-      ...project,
-      userId: req.userId,
+  const nextProject = {
+    ...project,
+    userId,
       analysis: {
         ...(project.analysis || {}),
         sources: (project.analysis?.sources || []).map((source) => (
@@ -672,11 +769,29 @@ app.post("/api/projects/:projectId/reindex", async (req, res) => {
       }
     };
     await saveProject(nextProject);
-    await recordEvent(req.userId, req.params.projectId, "documents_reindexed", { documents: documents.length, chunks: totalChunks, parents: totalParents });
-    res.json({ project: nextProject, documents: documents.length, chunks: totalChunks, parents: totalParents });
+    await recordEvent(userId, projectId, "documents_reindexed", { documents: documents.length, chunks: totalChunks, parents: totalParents });
+    onProgress(100);
+    return { project: nextProject, documents: documents.length, chunks: totalChunks, parents: totalParents };
+}
+
+app.post("/api/projects/:projectId/reindex", async (req, res) => {
+  try {
+    if (req.query.background === "true") {
+      if (!(await projectBelongsToUser(req.params.projectId, req.userId))) return res.status(404).json({ error: "学习项目不存在" });
+      const job = await enqueueTask("reindex", { projectId: req.params.projectId, userId: req.userId }, ({ projectId, userId }, progress) => reindexProject(projectId, userId, progress));
+      return res.status(202).json({ job });
+    }
+    res.json(await reindexProject(req.params.projectId, req.userId));
   } catch (error) {
     res.status(400).json({ error: error.message || "重建资料索引失败" });
   }
+});
+
+app.get("/api/tasks/:taskId", async (req, res) => {
+  const task = await getTask(req.params.taskId);
+  if (!task) return res.status(404).json({ error: "任务不存在" });
+  if (task.userId && task.userId !== req.userId) return res.status(404).json({ error: "任务不存在" });
+  res.json({ task });
 });
 
 app.post("/api/analyze", rateLimit({ windowMs: 60_000, max: 12, keyPrefix: "analyze" }), upload.array("files", 12), async (req, res) => {
@@ -839,11 +954,13 @@ ${corpus}`
 });
 
 app.post("/api/coach", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "coach" }), async (req, res) => {
+  let stage = "校验输入";
   try {
     const { projectId, sessionId, question, concept, answer, role = "child", turn = 1 } = req.body || {};
     if (!answer?.trim()) return res.status(400).json({ error: "请先写下你的解释" });
     let evidence = [];
     if (projectId) {
+      stage = "检索学习资料";
       const retrievalConfig = await getEmbeddingConfig(req.userId);
       const retrievalQuery = `${question?.question || ""} ${concept?.title || question?.concept || ""} ${answer}`;
       const [queryEmbedding] = await embedTexts([retrievalQuery], retrievalConfig.embedding);
@@ -896,6 +1013,7 @@ app.post("/api/coach", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "coach"
       }
       return res.json(payload);
     }
+    stage = "生成教练追问";
     const result = await deepseek([
       {
         role: "system",
@@ -936,7 +1054,7 @@ app.post("/api/coach", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "coach"
     }
     res.json(payload);
   } catch (error) {
-    res.status(500).json({ error: error.message || "教练暂时无法回应" });
+    res.status(500).json({ error: `${stage}失败：${error.message || "教练暂时无法回应"}`, stage });
   }
 });
 
@@ -1192,12 +1310,15 @@ ${JSON.stringify(project).slice(0, 120000)}
 });
 
 app.post("/api/rag", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "rag" }), async (req, res) => {
+  let stage = "校验输入";
   try {
     const { projectId, query } = req.body || {};
     if (!projectId) return res.status(400).json({ error: "缺少学习项目" });
     if (!query?.trim()) return res.status(400).json({ error: "请输入问题" });
+    stage = "生成问题向量";
     const retrievalConfig = await getEmbeddingConfig(req.userId);
     const [queryEmbedding] = await embedTexts([query], retrievalConfig.embedding);
+    stage = "召回资料片段";
     const candidates = await hybridSearch(projectId, req.userId, query, queryEmbedding, 20);
     if (!candidates.length) {
       return res.json({
@@ -1207,12 +1328,21 @@ app.post("/api/rag", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "rag" }),
         demo: !(await getModelConfig(req.userId)).apiKey
       });
     }
-    const sources = await rerankCandidates(query, candidates, 5, retrievalConfig.reranker);
+    stage = "精排候选片段";
+    let degraded = null;
+    let sources;
+    try {
+      sources = await rerankCandidates(query, candidates, 5, retrievalConfig.reranker);
+    } catch (error) {
+      degraded = `Reranker 不可用，已降级为向量与关键词融合排序：${error.message}`;
+      sources = fallbackRankCandidates(candidates, 5);
+    }
     const rerankById = new Map(sources.map((item) => [item.id, item.rerankScore]));
     const debug = {
       candidateCount: candidates.length,
       threshold: relevanceThreshold,
       embedding: embeddingStatus(retrievalConfig.embedding),
+      degraded,
       candidates: candidates.map((item, index) => ({
         rank: index + 1,
         id: item.id,
@@ -1245,6 +1375,7 @@ app.post("/api/rag", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "rag" }),
     let answer;
     const modelConfigured = Boolean((await getModelConfig(req.userId)).apiKey);
     if (modelConfigured) {
+      stage = "生成资料回答";
       const result = await deepseek([
         {
           role: "system",
@@ -1280,10 +1411,11 @@ ${sources.map((source, index) => `[${index + 1}] ${source.filename} 第${source.
       debug,
       retrieval: "bge-m3-hybrid-rerank",
       insufficient: false,
+      warning: degraded,
       demo: !modelConfigured
     });
   } catch (error) {
-    res.status(500).json({ error: error.message || "资料检索失败" });
+    res.status(500).json({ error: `${stage}失败：${error.message || "资料检索失败"}`, stage });
   }
 });
 
@@ -1291,13 +1423,9 @@ app.get("/api/documents/:documentId/file", async (req, res) => {
   try {
     const document = await getDocument(req.params.documentId, req.userId);
     if (!document) return res.status(404).json({ error: "资料不存在" });
-    await access(document.storage_path);
     res.attachment(document.filename);
-    const stream = createReadStream(document.storage_path);
-    stream.on("error", (error) => {
-      if (error && !res.headersSent) res.status(404).json({ error: "资料文件不存在" });
-    });
-    stream.pipe(res);
+    res.type(document.mime_type || "application/octet-stream");
+    res.send(await getObject({ key: document.stored_name, storagePath: document.storage_path }));
   } catch (error) {
     res.status(404).json({ error: error.message || "资料文件不存在" });
   }

@@ -1,4 +1,5 @@
 import { getUserAppSetting, saveUserAppSetting } from "./storage.mjs";
+import { decryptSecret, encryptSecret } from "./secret-crypto.mjs";
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_MODEL = "deepseek-v4-flash";
@@ -29,7 +30,7 @@ export async function getModelConfig(userId) {
   return {
     baseUrl: normalizeBaseUrl(stored.baseUrl || process.env.DEEPSEEK_BASE_URL || DEFAULT_BASE_URL),
     model: String(stored.model || process.env.DEEPSEEK_MODEL || DEFAULT_MODEL).trim(),
-    apiKey: String(stored.apiKey || process.env.DEEPSEEK_API_KEY || "").trim()
+    apiKey: String(decryptSecret(stored.apiKey) || process.env.DEEPSEEK_API_KEY || "").trim()
   };
 }
 
@@ -60,7 +61,7 @@ export async function updateModelConfig(userId, input = {}) {
     apiKey: input.clearApiKey ? "" : String(input.apiKey || current.apiKey || "").trim()
   };
   if (!next.model) throw new Error("模型名称不能为空");
-  await saveUserAppSetting(userId, "deepseek", next);
+  await saveUserAppSetting(userId, "deepseek", { ...next, apiKey: encryptSecret(next.apiKey) });
   return getPublicModelConfig(userId);
 }
 
@@ -99,7 +100,7 @@ export async function getVisionConfig(userId) {
       DEFAULT_VISION_BASE_URL
     ),
     model: String(stored.model || process.env.VISION_MODEL || DEFAULT_VISION_MODEL).trim(),
-    apiKey: String(stored.apiKey || process.env.VISION_API_KEY || "").trim()
+    apiKey: String(decryptSecret(stored.apiKey) || process.env.VISION_API_KEY || "").trim()
   };
 }
 
@@ -125,7 +126,7 @@ export async function updateVisionConfig(userId, input = {}) {
     apiKey: input.clearApiKey ? "" : String(input.apiKey || current.apiKey || "").trim()
   };
   if (!next.model) throw new Error("视觉模型名称不能为空");
-  await saveUserAppSetting(userId, "vision", next);
+  await saveUserAppSetting(userId, "vision", { ...next, apiKey: encryptSecret(next.apiKey) });
   return getPublicVisionConfig(userId);
 }
 
@@ -202,8 +203,10 @@ function providerNameFromUrl(baseUrl) {
 
 export async function getEmbeddingConfig(userId) {
   const stored = (await getUserAppSetting(userId, "embedding")) || {};
-  const embedding = resolveEmbeddingConfig(stored.embedding || {});
-  const reranker = resolveRerankerConfig(stored.reranker || {}, embedding);
+  const embeddingStored = { ...(stored.embedding || {}), apiKey: decryptSecret(stored.embedding?.apiKey) };
+  const rerankerStored = { ...(stored.reranker || {}), apiKey: decryptSecret(stored.reranker?.apiKey) };
+  const embedding = resolveEmbeddingConfig(embeddingStored);
+  const reranker = resolveRerankerConfig(rerankerStored, embedding);
   return { embedding, reranker };
 }
 
@@ -234,7 +237,8 @@ export async function updateEmbeddingConfig(userId, input = {}) {
     provider: input.embedding?.provider === "remote" ? "remote" : "local",
     baseUrl: input.embedding?.baseUrl ? normalizeBaseUrl(input.embedding.baseUrl, DEFAULT_EMBEDDING_BASE_URL) : current.embedding.baseUrl,
     model: String(input.embedding?.model || current.embedding.model).trim(),
-    dimensions: Math.max(1, Number(input.embedding?.dimensions || current.embedding.dimensions))
+    dimensions: Math.max(1, Number(input.embedding?.dimensions || current.embedding.dimensions)),
+    apiKey: current.embedding.apiKey
   };
   const clearEmbeddingKey = input.embedding?.clearApiKey;
   if (input.embedding?.apiKey || clearEmbeddingKey) {
@@ -246,7 +250,8 @@ export async function updateEmbeddingConfig(userId, input = {}) {
     baseUrl: input.reranker?.baseUrl
       ? normalizeBaseUrl(input.reranker.baseUrl, DEFAULT_RERANKER_BASE_URL)
       : current.reranker.baseUrl,
-    model: String(input.reranker?.model || current.reranker.model).trim()
+    model: String(input.reranker?.model || current.reranker.model).trim(),
+    apiKey: current.reranker.apiKey
   };
   const clearRerankerKey = input.reranker?.clearApiKey;
   if (input.reranker?.apiKey || clearRerankerKey) {
@@ -254,8 +259,8 @@ export async function updateEmbeddingConfig(userId, input = {}) {
   }
 
   await saveUserAppSetting(userId, "embedding", {
-    embedding: nextEmbedding,
-    reranker: nextReranker
+    embedding: { ...nextEmbedding, apiKey: encryptSecret(nextEmbedding.apiKey) },
+    reranker: { ...nextReranker, apiKey: encryptSecret(nextReranker.apiKey) }
   });
   return getPublicEmbeddingConfig(userId);
 }
@@ -269,7 +274,16 @@ export async function testEmbeddingConfig(userId, input = {}) {
     apiKey: String(input.embedding?.apiKey || current.embedding.apiKey || "").trim()
   });
   if (config.provider === "local") {
-    return { ok: true, message: "本地 BGE-M3 服务将随应用自动启动", local: true };
+    const response = await fetch(`${config.baseUrl}/embeddings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: config.model, input: ["连接测试"], dimensions: config.dimensions }),
+      signal: AbortSignal.timeout(15_000)
+    });
+    if (!response.ok) throw new Error(`本地 Embedding 测试失败（${response.status}）：${(await response.text()).slice(0, 180)}`);
+    const payload = await response.json();
+    if (!Array.isArray(payload.data?.[0]?.embedding)) throw new Error("本地 Embedding 返回格式不正确");
+    return { ok: true, message: `本地 Embedding 可用，向量维度 ${payload.data[0].embedding.length}`, local: true };
   }
   const result = await testOpenAiCompatibleConfig({
     baseUrl: config.baseUrl,
@@ -293,7 +307,16 @@ export async function testRerankerConfig(userId, input = {}) {
     apiKey: String(input.reranker?.apiKey || current.reranker.apiKey || "").trim()
   }, embedding);
   if (config.provider === "local") {
-    return { ok: true, message: "本地 bge-reranker 服务将随应用自动启动", local: true };
+    const response = await fetch(`${config.baseUrl}/rerank`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: config.model, query: "连接测试", documents: ["这是一段连接测试文本"] }),
+      signal: AbortSignal.timeout(30_000)
+    });
+    if (!response.ok) throw new Error(`本地 Reranker 测试失败（${response.status}）：${(await response.text()).slice(0, 180)}`);
+    const payload = await response.json();
+    if (!Array.isArray(payload.results)) throw new Error("本地 Reranker 返回格式不正确");
+    return { ok: true, message: "本地 Reranker 可用", local: true };
   }
   const response = await fetch(`${config.baseUrl}/rerank`, {
     method: "POST",

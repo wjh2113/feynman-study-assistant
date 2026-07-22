@@ -32,7 +32,7 @@ function authHeaders(apiKey) {
   return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
 }
 
-async function postJson(url, payload, apiKey, timeoutMs = 180_000) {
+async function postJson(url, payload, apiKey, timeoutMs = Number(process.env.RETRIEVAL_TIMEOUT_MS || 30_000)) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -48,7 +48,7 @@ async function postJson(url, payload, apiKey, timeoutMs = 180_000) {
     }
     return response.json();
   } catch (error) {
-    if (error.name === "AbortError") throw new Error("模型处理超时");
+    if (error.name === "AbortError") throw new Error(`模型服务处理超过 ${Math.round(timeoutMs / 1000)} 秒，已停止等待`);
     throw error;
   } finally {
     clearTimeout(timer);
@@ -102,6 +102,16 @@ export async function rerankCandidates(query, candidates, topK = 5, config) {
     ...candidates[result.index],
     rerankScore: Number(result.relevance_score || 0)
   }));
+}
+
+export function fallbackRankCandidates(candidates, topK = 5) {
+  return [...candidates]
+    .map((candidate) => ({
+      ...candidate,
+      rerankScore: Math.max(Number(candidate.vectorScore || 0), Math.min(0.99, Number(candidate.fusionScore || 0) * 20))
+    }))
+    .sort((a, b) => b.rerankScore - a.rerankScore)
+    .slice(0, topK);
 }
 
 export function embeddingStatus(config) {

@@ -1,11 +1,15 @@
-import { randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import {
   createUser,
   createUserSession,
+  consumePasswordResetToken,
   deleteUserSession,
+  getUserByEmail,
   getUserByUsername,
-  getUserIdBySession
+  getUserIdBySession,
+  savePasswordResetToken,
+  updateUserPassword
 } from "./storage.mjs";
 
 const scryptAsync = promisify(scrypt);
@@ -31,7 +35,7 @@ export function generateToken() {
   return randomBytes(32).toString("hex");
 }
 
-export async function registerUser(username, password) {
+export async function registerUser(username, password, email = null) {
   if (!username?.trim() || !password?.trim()) {
     throw new Error("用户名和密码不能为空");
   }
@@ -47,12 +51,32 @@ export async function registerUser(username, password) {
   const { id } = await createUser({
     id: randomUUID(),
     username: username.trim(),
+    email: email ? String(email).trim().toLowerCase() : null,
     passwordHash: hash,
     salt
   });
   const token = generateToken();
   await createUserSession(token, id);
   return { id, username: username.trim(), token };
+}
+
+export async function createPasswordReset(email) {
+  const user = await getUserByEmail(String(email || "").trim());
+  if (!user) return null;
+  const token = randomBytes(32).toString("hex");
+  const tokenHash = createHash("sha256").update(token).digest("hex");
+  await savePasswordResetToken(tokenHash, user.id, new Date(Date.now() + 30 * 60_000).toISOString());
+  return { token, user };
+}
+
+export async function resetPassword(token, newPassword) {
+  if (String(newPassword || "").length < 8) throw new Error("新密码至少需要 8 位");
+  const tokenHash = createHash("sha256").update(String(token || "")).digest("hex");
+  const userId = await consumePasswordResetToken(tokenHash);
+  if (!userId) throw new Error("重置链接无效或已过期");
+  const { hash, salt } = await hashPassword(newPassword);
+  await updateUserPassword(userId, hash, salt);
+  return true;
 }
 
 export async function loginUser(username, password) {
