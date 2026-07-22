@@ -8,6 +8,7 @@ import { calculateEvidenceMastery, nextReviewAt } from "../server/learning-sched
 import { createPaymentAdapter, newOrder, plans } from "../server/payments.mjs";
 import { deleteObject, getObject, putObject } from "../server/object-storage.mjs";
 import { enqueueTask, getTask } from "../server/task-queue.mjs";
+import { resolveEmbeddingConfig, resolveRerankerConfig } from "../server/model-config.mjs";
 
 test("模型密钥使用 AES-256-GCM 加密并可解密", () => {
   const previous = process.env.APP_ENCRYPTION_KEY;
@@ -50,4 +51,34 @@ test("无 Redis 时后台任务以内存队列执行并保留状态", async () =
   assert.equal(completed.status, "completed");
   assert.equal(completed.progress, 100);
   assert.equal(completed.result, 6);
+});
+
+test("检索模型默认使用云端且本地模式不会混用云端地址", () => {
+  const previousEmbeddingProvider = process.env.EMBEDDING_PROVIDER;
+  const previousEmbeddingBaseUrl = process.env.EMBEDDING_BASE_URL;
+  const previousRerankerProvider = process.env.RERANKER_PROVIDER;
+  const previousRerankerBaseUrl = process.env.RERANKER_BASE_URL;
+  delete process.env.EMBEDDING_PROVIDER;
+  delete process.env.EMBEDDING_BASE_URL;
+  delete process.env.RERANKER_PROVIDER;
+  delete process.env.RERANKER_BASE_URL;
+  try {
+    const remoteEmbedding = resolveEmbeddingConfig({});
+    assert.equal(remoteEmbedding.provider, "remote");
+    assert.match(remoteEmbedding.baseUrl, /dashscope/);
+
+    const localEmbedding = resolveEmbeddingConfig({ provider: "local", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" });
+    assert.equal(localEmbedding.provider, "local");
+    assert.equal(localEmbedding.baseUrl, "http://127.0.0.1:8001/v1");
+    assert.equal(localEmbedding.model, "BAAI/bge-m3");
+
+    const localReranker = resolveRerankerConfig({ provider: "local", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" }, localEmbedding);
+    assert.equal(localReranker.baseUrl, "http://127.0.0.1:8001/v1");
+    assert.equal(localReranker.model, "BAAI/bge-reranker-v2-m3");
+  } finally {
+    if (previousEmbeddingProvider === undefined) delete process.env.EMBEDDING_PROVIDER; else process.env.EMBEDDING_PROVIDER = previousEmbeddingProvider;
+    if (previousEmbeddingBaseUrl === undefined) delete process.env.EMBEDDING_BASE_URL; else process.env.EMBEDDING_BASE_URL = previousEmbeddingBaseUrl;
+    if (previousRerankerProvider === undefined) delete process.env.RERANKER_PROVIDER; else process.env.RERANKER_PROVIDER = previousRerankerProvider;
+    if (previousRerankerBaseUrl === undefined) delete process.env.RERANKER_BASE_URL; else process.env.RERANKER_BASE_URL = previousRerankerBaseUrl;
+  }
 });

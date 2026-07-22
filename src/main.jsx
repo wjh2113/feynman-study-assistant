@@ -656,7 +656,7 @@ function Sources({ project, updateProject, navigate, showToast }) {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "重建索引失败");
       updateProject(data.project);
-      showToast(`已用 BGE-M3 重建 ${data.documents} 份资料：${data.parents} 个父块、${data.chunks} 个子块`);
+      showToast(`已重建 ${data.documents} 份资料的检索索引：${data.parents} 个父块、${data.chunks} 个子块`);
     } catch (error) {
       showToast(error.message);
     } finally {
@@ -704,7 +704,7 @@ function Sources({ project, updateProject, navigate, showToast }) {
         <div className="panel-head">
           <div><span className="section-kicker">已入库</span><h3>{sources.length} 份资料</h3></div>
           <div className="source-panel-actions">
-            {!!sources.length && <button className="secondary-btn" onClick={reindexSources} disabled={reindexing}>{reindexing ? <Spinner /> : <RotateCcw size={14} />}{reindexing ? "正在重建索引…" : "用 BGE-M3 重建索引"}</button>}
+            {!!sources.length && <button className="secondary-btn" onClick={reindexSources} disabled={reindexing}>{reindexing ? <Spinner /> : <RotateCcw size={14} />}{reindexing ? "正在重建索引…" : "重建检索索引"}</button>}
             <button className="filter-btn">全部类型 <ChevronDown size={14} /></button>
           </div>
         </div>
@@ -1767,15 +1767,15 @@ function ModelSettingsPage({ showToast }) {
   const [embeddingTesting, setEmbeddingTesting] = useState(false);
   const [rerankerTesting, setRerankerTesting] = useState(false);
   const [retrievalForm, setRetrievalForm] = useState({
-    provider: "local",
-    embeddingPreset: "local",
-    embeddingBaseUrl: "http://127.0.0.1:8001/v1",
-    embeddingModel: "BAAI/bge-m3",
+    provider: "remote",
+    embeddingPreset: "dashscope",
+    embeddingBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    embeddingModel: "text-embedding-v3",
     embeddingApiKey: "",
     embeddingDimensions: 1024,
-    rerankerPreset: "local",
-    rerankerBaseUrl: "http://127.0.0.1:8001/v1",
-    rerankerModel: "BAAI/bge-reranker-v2-m3",
+    rerankerPreset: "dashscope",
+    rerankerBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    rerankerModel: "gte-rerank",
     rerankerApiKey: ""
   });
 
@@ -1785,7 +1785,11 @@ function ModelSettingsPage({ showToast }) {
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "读取检索模型状态失败");
-        setRetrievalSaved({ embedding: data.embedding, service: data.retrievalService });
+        setRetrievalSaved((current) => ({
+          ...(current || {}),
+          healthEmbedding: data.embedding,
+          service: data.retrievalService
+        }));
       })
       .catch((error) => setRetrievalSaved({ error: error.message }))
       .finally(() => setRetrievalLoading(false));
@@ -1828,6 +1832,7 @@ function ModelSettingsPage({ showToast }) {
         if (!response.ok) throw new Error(data.error || "读取检索配置失败");
         const embedding = data.embedding || {};
         const reranker = data.reranker || {};
+        setRetrievalSaved((current) => ({ ...(current || {}), ...data }));
         const pickPreset = (provider, baseUrl) => {
           if (provider === "local") return "local";
           const key = Object.keys(EMBEDDING_PRESETS).find((k) =>
@@ -1837,7 +1842,7 @@ function ModelSettingsPage({ showToast }) {
         };
         setRetrievalForm((current) => ({
           ...current,
-          provider: embedding.provider || "local",
+          provider: embedding.provider || "remote",
           embeddingPreset: pickPreset(embedding.provider, embedding.baseUrl),
           embeddingBaseUrl: embedding.baseUrl || current.embeddingBaseUrl,
           embeddingModel: embedding.model || current.embeddingModel,
@@ -2308,7 +2313,7 @@ function ModelSettingsPage({ showToast }) {
                   </label>
                 )}
 
-                {retrievalSaved?.service?.error && (
+                {retrievalForm.provider === "local" && retrievalSaved?.service?.error && (
                   <div className="connection-result error"><CircleAlert size={16} /><span>本地服务：{retrievalSaved.service.error}</span></div>
                 )}
               </div>

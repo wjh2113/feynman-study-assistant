@@ -143,6 +143,7 @@ export async function testVisionConfig(userId, input = {}) {
 }
 
 const DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+const LOCAL_RETRIEVAL_BASE_URL = "http://127.0.0.1:8001/v1";
 const DEFAULT_EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL || DASHSCOPE_BASE_URL;
 const DEFAULT_EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-v3";
 const DEFAULT_EMBEDDING_DIMENSIONS = 1024;
@@ -153,10 +154,9 @@ export function resolveEmbeddingConfig(stored = {}) {
   const envProvider = String(process.env.EMBEDDING_PROVIDER || "").trim();
   const useLocal =
     String(stored.provider || "").trim() === "local" ||
-    (envProvider === "local") ||
-    (!stored.baseUrl && !envProvider && !process.env.EMBEDDING_BASE_URL);
+    envProvider === "local";
   const baseUrl = normalizeBaseUrl(
-    stored.baseUrl || process.env.EMBEDDING_BASE_URL || DEFAULT_EMBEDDING_BASE_URL,
+    useLocal ? LOCAL_RETRIEVAL_BASE_URL : stored.baseUrl || process.env.EMBEDDING_BASE_URL || DEFAULT_EMBEDDING_BASE_URL,
     DEFAULT_EMBEDDING_BASE_URL
   );
   const apiKey = String(stored.apiKey || process.env.EMBEDDING_API_KEY || "").trim();
@@ -164,7 +164,7 @@ export function resolveEmbeddingConfig(stored = {}) {
     provider: useLocal ? "local" : "remote",
     baseUrl,
     apiKey,
-    model: String(stored.model || process.env.EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL).trim(),
+    model: useLocal ? "BAAI/bge-m3" : String(stored.model || process.env.EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL).trim(),
     dimensions: Math.max(
       1,
       Number(stored.dimensions || process.env.EMBEDDING_DIMENSIONS || DEFAULT_EMBEDDING_DIMENSIONS)
@@ -176,10 +176,9 @@ export function resolveRerankerConfig(stored = {}, embeddingConfig) {
   const envProvider = String(process.env.RERANKER_PROVIDER || "").trim();
   const useLocal =
     String(stored.provider || "").trim() === "local" ||
-    (envProvider === "local") ||
-    (!stored.baseUrl && !envProvider && !process.env.RERANKER_BASE_URL);
+    envProvider === "local";
   const baseUrl = normalizeBaseUrl(
-    stored.baseUrl || process.env.RERANKER_BASE_URL || embeddingConfig?.baseUrl || DEFAULT_RERANKER_BASE_URL,
+    useLocal ? LOCAL_RETRIEVAL_BASE_URL : stored.baseUrl || process.env.RERANKER_BASE_URL || embeddingConfig?.baseUrl || DEFAULT_RERANKER_BASE_URL,
     DEFAULT_RERANKER_BASE_URL
   );
   const apiKey = String(stored.apiKey || process.env.RERANKER_API_KEY || embeddingConfig?.apiKey || "").trim();
@@ -187,7 +186,7 @@ export function resolveRerankerConfig(stored = {}, embeddingConfig) {
     provider: useLocal ? "local" : "remote",
     baseUrl,
     apiKey,
-    model: String(stored.model || process.env.RERANKER_MODEL || DEFAULT_RERANKER_MODEL).trim()
+    model: useLocal ? "BAAI/bge-reranker-v2-m3" : String(stored.model || process.env.RERANKER_MODEL || DEFAULT_RERANKER_MODEL).trim()
   };
 }
 
