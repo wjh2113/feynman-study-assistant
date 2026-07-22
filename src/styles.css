@@ -238,8 +238,8 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 .source-link { border: 0; background: transparent; color: var(--green); padding: 0; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; font-size: 9px; }
 
 .coach-layout { display: grid; grid-template-columns: minmax(0, 1fr) 268px; gap: 20px; align-items: start; }
-.coach-main { min-height: 660px; border: 1px solid var(--line); border-radius: 13px; background: var(--paper); overflow: hidden; display: flex; flex-direction: column; }
-.coach-toolbar { min-height: 62px; padding: 11px 15px 11px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 15px; }
+.coach-main { height: clamp(480px, calc(100vh - 240px), 570px); min-height: 0; border: 1px solid var(--line); border-radius: 13px; background: var(--paper); overflow: hidden; display: flex; flex-direction: column; }
+.coach-toolbar { min-height: 52px; padding: 8px 13px 8px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .coach-toolbar > div:first-child { display: flex; align-items: center; gap: 8px; }
 .coach-toolbar span { color: #888c83; font-size: 9px; }
 .coach-toolbar select { max-width: 190px; border: 0; background: transparent; color: #3c413b; font-weight: 600; font-size: 11px; }
@@ -248,21 +248,21 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 .role-switch { display: flex; padding: 3px; border-radius: 8px; background: #efefea; }
 .role-switch button { border: 0; border-radius: 6px; padding: 6px 9px; color: #898c84; background: transparent; cursor: pointer; font-size: 9px; }
 .role-switch button.active { color: var(--green); background: white; box-shadow: 0 2px 5px rgba(40,45,40,.07); font-weight: 600; }
-.chat-area { flex: 1; min-height: 420px; max-height: 500px; overflow-y: auto; padding: 22px 24px; background: linear-gradient(#fafaf7, #f7f8f4); }
-.coach-intro { display: flex; align-items: center; gap: 10px; margin-bottom: 25px; }
-.coach-avatar { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; color: #6d583d; background: #f1dfc6; }
+.chat-area { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px 18px; background: linear-gradient(#fafaf7, #f7f8f4); }
+.coach-intro { display: flex; align-items: center; gap: 9px; margin-bottom: 16px; }
+.coach-avatar { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 11px; color: #6d583d; background: #f1dfc6; }
 .coach-intro strong, .coach-intro span { display: block; }
 .coach-intro strong { font-family: var(--serif); font-size: 12px; }.coach-intro span { margin-top: 3px; color: #94978f; font-size: 9px; }
-.message { margin-bottom: 18px; display: flex; gap: 8px; align-items: flex-start; }
-.message > div:last-child { max-width: 77%; padding: 12px 14px; border-radius: 4px 13px 13px 13px; font-size: 11px; line-height: 1.8; }
+.message { margin-bottom: 12px; display: flex; gap: 8px; align-items: flex-start; }
+.message > div:last-child { max-width: 82%; padding: 10px 12px; border-radius: 4px 13px 13px 13px; font-size: 11px; line-height: 1.65; }
 .message.ai > div:last-child { border: 1px solid #e1e3dc; background: white; color: #4f554e; }
 .message.user { justify-content: flex-end; }.message.user > div:last-child { border-radius: 13px 4px 13px 13px; background: var(--green); color: white; }
 .mini-avatar { width: 25px; height: 25px; flex: none; border-radius: 7px; display: grid; place-items: center; color: var(--green); background: var(--green-soft); margin-top: 3px; }
-.answer-box { margin: 15px; border: 1px solid #d9ddd5; border-radius: 11px; background: white; box-shadow: 0 5px 20px rgba(39,48,41,.05); }
+.answer-box { flex: none; margin: 10px 12px 12px; border: 1px solid #d9ddd5; border-radius: 11px; background: white; box-shadow: 0 5px 20px rgba(39,48,41,.05); }
 .answer-box:focus-within { border-color: #85a491; box-shadow: 0 0 0 3px rgba(46,103,82,.07); }
-.answer-box textarea { width: 100%; height: 92px; resize: none; border: 0; background: transparent; padding: 13px 14px; color: #40453f; font-size: 11px; line-height: 1.7; }
+.answer-box textarea { width: 100%; height: 62px; resize: none; border: 0; background: transparent; padding: 10px 12px; color: #40453f; font-size: 11px; line-height: 1.6; }
 .answer-box textarea:focus { outline: 0; }
-.answer-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 9px 9px 13px; }
+.answer-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 7px 7px 11px; }
 .answer-foot > span { color: #a1a49c; font-size: 8px; }
 .answer-foot-actions { display: flex; align-items: center; gap: 7px; }
 .answer-send-btn { border: 0; border-radius: 7px; padding: 7px 11px; display: flex; align-items: center; gap: 6px; background: var(--green); color: white; cursor: pointer; font-size: 9px; }
@@ -499,7 +499,7 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
   .donut-row { justify-content: flex-start; }
   .map-tree { padding: 15px; }
   .concept-list { margin-left: 22px; }
-  .coach-main { min-height: 590px; }
+  .coach-main { height: min(550px, calc(100vh - 150px)); min-height: 480px; }
   .coach-toolbar { align-items: flex-start; flex-direction: column; }
   .role-switch { width: 100%; }.role-switch button { flex: 1; }
   .coach-side { grid-template-columns: 1fr; }
