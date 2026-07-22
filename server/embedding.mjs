@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { keywordTokens } from "./chunking.mjs";
 import { resolveEmbeddingConfig, resolveRerankerConfig } from "./model-config.mjs";
+import { buildRerankerRequest } from "./reranker-client.mjs";
 
 export const embeddingDimensions = 1024;
 
@@ -93,12 +94,14 @@ export async function rerankCandidates(query, candidates, topK = 5, config) {
   }
 
   const { baseUrl, apiKey, model } = config || envRerankerConfig();
-  const payload = await postJson(`${baseUrl}/rerank`, {
-    model,
+  const request = buildRerankerRequest(
+    { baseUrl, model },
     query,
-    documents: candidates.map((item) => `${item.headingPath ? `章节：${item.headingPath}\n` : ""}${item.content}`)
-  }, apiKey);
-  return (payload.results || []).slice(0, topK).map((result) => ({
+    candidates.map((item) => `${item.headingPath ? `章节：${item.headingPath}\n` : ""}${item.content}`),
+    topK
+  );
+  const payload = await postJson(request.endpoint, request.body, apiKey);
+  return request.parseResults(payload).slice(0, topK).map((result) => ({
     ...candidates[result.index],
     rerankScore: Number(result.relevance_score || 0)
   }));

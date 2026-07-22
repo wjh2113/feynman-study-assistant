@@ -1,5 +1,6 @@
 import { getUserAppSetting, saveUserAppSetting } from "./storage.mjs";
 import { decryptSecret, encryptSecret } from "./secret-crypto.mjs";
+import { buildRerankerRequest } from "./reranker-client.mjs";
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_MODEL = "deepseek-v4-flash";
@@ -148,7 +149,7 @@ const DEFAULT_EMBEDDING_BASE_URL = process.env.EMBEDDING_BASE_URL || DASHSCOPE_B
 const DEFAULT_EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-v3";
 const DEFAULT_EMBEDDING_DIMENSIONS = 1024;
 const DEFAULT_RERANKER_BASE_URL = process.env.RERANKER_BASE_URL || DASHSCOPE_BASE_URL;
-const DEFAULT_RERANKER_MODEL = process.env.RERANKER_MODEL || "gte-rerank";
+const DEFAULT_RERANKER_MODEL = process.env.RERANKER_MODEL || "qwen3-rerank";
 
 export function resolveEmbeddingConfig(stored = {}) {
   const envProvider = String(process.env.EMBEDDING_PROVIDER || "").trim();
@@ -317,26 +318,26 @@ export async function testRerankerConfig(userId, input = {}) {
     if (!Array.isArray(payload.results)) throw new Error("本地 Reranker 返回格式不正确");
     return { ok: true, message: "本地 Reranker 可用", local: true };
   }
-  const response = await fetch(`${config.baseUrl}/rerank`, {
+  const request = buildRerankerRequest(config, "test", ["this is a test document"], 1);
+  const response = await fetch(request.endpoint, {
     method: "POST",
     headers: {
       ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
-      model: config.model,
-      query: "test",
-      documents: ["this is a test document"]
-    })
+    body: JSON.stringify(request.body),
+    signal: AbortSignal.timeout(30_000)
   });
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(`Reranker 连接失败（${response.status}）：${detail.slice(0, 180)}`);
   }
   const payload = await response.json();
+  const results = request.parseResults(payload);
+  if (!Array.isArray(results)) throw new Error("Reranker 返回格式不正确");
   return {
     ok: true,
     provider: providerNameFromUrl(config.baseUrl),
-    resultsCount: Array.isArray(payload.results) ? payload.results.length : null
+    resultsCount: results.length
   };
 }

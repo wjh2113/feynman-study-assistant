@@ -9,6 +9,7 @@ import { createPaymentAdapter, newOrder, plans } from "../server/payments.mjs";
 import { deleteObject, getObject, putObject } from "../server/object-storage.mjs";
 import { enqueueTask, getTask } from "../server/task-queue.mjs";
 import { resolveEmbeddingConfig, resolveRerankerConfig } from "../server/model-config.mjs";
+import { buildRerankerRequest } from "../server/reranker-client.mjs";
 
 test("模型密钥使用 AES-256-GCM 加密并可解密", () => {
   const previous = process.env.APP_ENCRYPTION_KEY;
@@ -81,4 +82,27 @@ test("检索模型默认使用云端且本地模式不会混用云端地址", ()
     if (previousRerankerProvider === undefined) delete process.env.RERANKER_PROVIDER; else process.env.RERANKER_PROVIDER = previousRerankerProvider;
     if (previousRerankerBaseUrl === undefined) delete process.env.RERANKER_BASE_URL; else process.env.RERANKER_BASE_URL = previousRerankerBaseUrl;
   }
+});
+
+test("百炼 Reranker 同时兼容完整接口和两种请求协议", () => {
+  const compatible = buildRerankerRequest(
+    { baseUrl: "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-api/v1/reranks", model: "qwen3-rerank" },
+    "问题",
+    ["资料"],
+    1
+  );
+  assert.equal(compatible.endpoint.endsWith("/reranks"), true);
+  assert.equal(compatible.endpoint.includes("/reranks/rerank"), false);
+  assert.equal(compatible.body.top_n, 1);
+  assert.deepEqual(compatible.parseResults({ results: [{ index: 0 }] }), [{ index: 0 }]);
+
+  const native = buildRerankerRequest(
+    { baseUrl: "https://workspace.cn-beijing.maas.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank", model: "qwen3-vl-rerank" },
+    "问题",
+    ["资料"],
+    1
+  );
+  assert.equal(native.body.input.query, "问题");
+  assert.equal(native.body.parameters.top_n, 1);
+  assert.deepEqual(native.parseResults({ output: { results: [{ index: 0 }] } }), [{ index: 0 }]);
 });
