@@ -10,8 +10,8 @@ function normalizeOcrText(value) {
     .trim();
 }
 
-export async function recognizeImage(buffer, mimeType = "image/png", label = "图片") {
-  const config = await getVisionConfig();
+export async function recognizeImage(buffer, mimeType = "image/png", label = "图片", userId) {
+  const config = await getVisionConfig(userId);
   if (!config.apiKey) {
     return {
       text: "",

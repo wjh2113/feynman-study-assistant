@@ -590,6 +590,7 @@ function Sources({ project, updateProject, navigate, showToast }) {
   const [reindexing, setReindexing] = useState(false);
   const fileInput = useRef();
   const sources = project.analysis?.sources || [];
+  const hasPersistedSources = Number(project.documentCount || 0) > 0 || sources.some((source) => source.downloadUrl);
 
   const addFiles = (list) => {
     const accepted = Array.from(list).filter((file) => /\.(pdf|docx|txt|md|markdown|png|jpe?g|webp)$/i.test(file.name));
@@ -597,16 +598,17 @@ function Sources({ project, updateProject, navigate, showToast }) {
     if (accepted.length !== list.length) showToast("支持 PDF、DOCX、TXT、Markdown、PNG、JPG 和 WebP");
   };
 
-  const analyze = async () => {
-    if (!files.length && sources.length) {
+  const analyze = async (overrideFiles) => {
+    const selectedFiles = Array.isArray(overrideFiles) ? overrideFiles : files;
+    if (!selectedFiles.length && hasPersistedSources) {
       navigate("map");
       return;
     }
-    if (!files.length) return showToast("请先添加至少一份学习资料");
+    if (!selectedFiles.length) return showToast("请先添加至少一份学习资料");
     setLoading(true);
     try {
       const body = new FormData();
-      files.forEach((file) => body.append("files", file));
+      selectedFiles.forEach((file) => body.append("files", file));
       body.append("projectId", project.id);
       body.append("title", project.title);
       body.append("mode", project.mode);
@@ -617,7 +619,8 @@ function Sources({ project, updateProject, navigate, showToast }) {
         analysis: data,
         description: data.summary,
         blindspots: [],
-        sessions: []
+        sessions: [],
+        documentCount: data.sources?.length || selectedFiles.length
       });
       showToast(data.demo ? "知识骨架已生成（当前为演示模式）" : "DeepSeek 已完成资料分析");
       setFiles([]);
@@ -627,6 +630,16 @@ function Sources({ project, updateProject, navigate, showToast }) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const importSampleMaterials = () => {
+    const samples = [
+      new File([`# AI 产品方法论\n\nAI 产品不是给旧功能增加聊天框，而是从模型能力出发重构用户任务链路。\n\n## 能力边界\n高风险回答必须设置人工确认条件，并向用户展示模型的不确定性。\n\n## 数据飞轮\n产品使用产生反馈，反馈改善模型，模型改进后带来更多有效使用。`], "AI产品方法论示例.md", { type: "text/markdown" }),
+      new File([`# 课堂经验\n\n不要掩盖模型的不确定性，要设计处理不确定性的体验。上线前先明确错误成本和人工介入阈值。\n\n点赞点踩不一定是高质量反馈，用户如何修改模型输出往往更能反映真实偏好。`], "课堂经验示例.md", { type: "text/markdown" }),
+      new File([`# 个人学习笔记\n\n先验证最危险的假设，再增加投入。产品进展应以关键不确定性是否减少来判断。\n\n价值指标必须对应用户任务的最终结果，每次真实使用都应产生可学习的反馈信号。`], "个人学习笔记示例.md", { type: "text/markdown" })
+    ];
+    setFiles(samples);
+    analyze(samples);
   };
 
   const deleteSource = async (source) => {
@@ -686,6 +699,16 @@ function Sources({ project, updateProject, navigate, showToast }) {
         <div className="upload-hint"><Zap size={14} /> PDF 扫描页、文档截图和单独图片会进入 OCR 识别流程</div>
       </div>
 
+      {!hasPersistedSources && sources.length > 0 && (
+        <div className="request-warning">
+          <CircleAlert size={16} />
+          <span>下方内容是产品演示，不是已上传资料，暂不能参与检索。</span>
+          <button className="secondary-btn" onClick={importSampleMaterials} disabled={loading}>
+            {loading ? <Spinner /> : <UploadCloud size={15} />} 导入可检索示例资料
+          </button>
+        </div>
+      )}
+
       {files.length > 0 && (
         <section className="panel file-panel pending-files">
           <div className="panel-head"><div><span className="section-kicker">等待分析</span><h3>{files.length} 份新资料</h3></div></div>
@@ -702,9 +725,9 @@ function Sources({ project, updateProject, navigate, showToast }) {
 
       <section className="panel file-panel">
         <div className="panel-head">
-          <div><span className="section-kicker">已入库</span><h3>{sources.length} 份资料</h3></div>
+          <div><span className="section-kicker">{hasPersistedSources ? "已入库" : "产品演示"}</span><h3>{sources.length} 份资料</h3></div>
           <div className="source-panel-actions">
-            {!!sources.length && <button className="secondary-btn" onClick={reindexSources} disabled={reindexing}>{reindexing ? <Spinner /> : <RotateCcw size={14} />}{reindexing ? "正在重建索引…" : "重建检索索引"}</button>}
+            {hasPersistedSources && !!sources.length && <button className="secondary-btn" onClick={reindexSources} disabled={reindexing}>{reindexing ? <Spinner /> : <RotateCcw size={14} />}{reindexing ? "正在重建索引…" : "重建检索索引"}</button>}
             <button className="filter-btn">全部类型 <ChevronDown size={14} /></button>
           </div>
         </div>
@@ -727,14 +750,14 @@ function Sources({ project, updateProject, navigate, showToast }) {
                 {source.downloadUrl ? (
                   <a className="icon-btn" href={source.downloadUrl} title="下载原始资料"><Download size={17} /></a>
                 ) : <button className="icon-btn"><MoreHorizontal size={18} /></button>}
-                <button
+                {hasPersistedSources && <button
                   className="icon-btn source-delete-btn"
                   aria-label={`删除资料 ${source.name}`}
                   title="删除资料"
                   onClick={() => setDeleteSourceId(source.id)}
                 >
                   <Trash2 size={16} />
-                </button>
+                </button>}
               </div>
               {deleteSourceId === source.id && (
                 <div className="source-delete-confirm" role="alert">
@@ -900,7 +923,7 @@ function RagAssistant({ project, navigate, showToast }) {
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState([]);
   const [requestError, setRequestError] = useState("");
-  const hasSources = Boolean(project.analysis?.sources?.length);
+  const hasSources = Number(project.documentCount || 0) > 0 || Boolean(project.analysis?.sources?.some((source) => source.downloadUrl));
 
   useEffect(() => {
     let cancelled = false;

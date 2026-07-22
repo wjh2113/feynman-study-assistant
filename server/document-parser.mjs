@@ -51,8 +51,8 @@ function mergeNativeAndOcr(nativeText, ocrText) {
   return [nativeClean, `[OCR识别]\n${ocrClean}`].filter(Boolean).join("\n\n");
 }
 
-async function runOcr(buffer, mimeType, label, report) {
-  const result = await recognizeImage(buffer, mimeType, label);
+async function runOcr(buffer, mimeType, label, report, userId) {
+  const result = await recognizeImage(buffer, mimeType, label, userId);
   if (result.status === "ready") {
     report.imagesOcrd += 1;
     report.ocrCharacters += result.text.length;
@@ -75,14 +75,14 @@ async function renderPdfPage(page) {
   return canvas.toBuffer("image/jpeg", 82);
 }
 
-async function parsePdf(buffer, filename) {
+async function parsePdf(buffer, filename, userId) {
   const pdf = await getDocument({
     data: new Uint8Array(buffer),
     useSystemFonts: true,
     disableFontFace: true
   }).promise;
   const report = createReport("PDF");
-  const vision = await getVisionConfig();
+  const vision = await getVisionConfig(userId);
   const pages = [];
   let ocrCandidates = 0;
 
@@ -109,7 +109,7 @@ async function parsePdf(buffer, filename) {
       if (vision.apiKey) {
         try {
           const rendered = await renderPdfPage(page);
-          ocrText = await runOcr(rendered, "image/jpeg", `${filename} 第 ${index} 页`, report);
+          ocrText = await runOcr(rendered, "image/jpeg", `${filename} 第 ${index} 页`, report, userId);
         } catch (error) {
           report.ocrStatus = "partial";
           appendWarning(report, `第 ${index} 页渲染失败，未能 OCR：${error.message}`);
@@ -135,7 +135,7 @@ async function parsePdf(buffer, filename) {
   return { filename, type: "PDF", pages, parseReport: report };
 }
 
-async function parseDocx(buffer, filename) {
+async function parseDocx(buffer, filename, userId) {
   const raw = await mammoth.extractRawText({ buffer });
   const nativeText = cleanText(raw.value);
   const report = createReport("DOCX");
@@ -153,7 +153,8 @@ async function parseDocx(buffer, filename) {
       imageBuffer,
       imageMime(entry.name),
       `${filename} 内嵌图片 ${index + 1}`,
-      report
+      report,
+      userId
     );
     if (ocrText) ocrSections.push(`图片 ${index + 1}：${ocrText}`);
   }
@@ -169,14 +170,15 @@ async function parseDocx(buffer, filename) {
   };
 }
 
-async function parseImage(file, filename, ext) {
+async function parseImage(file, filename, ext, userId) {
   const report = createReport(ext.slice(1).toUpperCase());
   report.imagesFound = 1;
   const ocrText = await runOcr(
     file.buffer,
     file.mimetype || imageMime(filename),
     filename,
-    report
+    report,
+    userId
   );
   if (!ocrText) appendWarning(report, "图片没有提取到可用于学习的文字");
   return {
@@ -192,12 +194,12 @@ function decodeUploadName(filename) {
   return decoded.includes("\uFFFD") ? filename : decoded;
 }
 
-export async function parseFile(file) {
+export async function parseFile(file, userId) {
   const filename = decodeUploadName(file.originalname);
   const ext = path.extname(filename).toLowerCase();
-  if (ext === ".pdf") return parsePdf(file.buffer, filename);
-  if (ext === ".docx") return parseDocx(file.buffer, filename);
-  if (IMAGE_EXTENSIONS.has(ext)) return parseImage(file, filename, ext);
+  if (ext === ".pdf") return parsePdf(file.buffer, filename, userId);
+  if (ext === ".docx") return parseDocx(file.buffer, filename, userId);
+  if (IMAGE_EXTENSIONS.has(ext)) return parseImage(file, filename, ext, userId);
   if ([".txt", ".md", ".markdown"].includes(ext)) {
     const text = cleanText(file.buffer.toString("utf8"));
     const report = createReport(ext.slice(1).toUpperCase());

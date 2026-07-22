@@ -616,7 +616,13 @@ app.post("/api/settings/reranker/test", async (req, res) => {
 
 app.get("/api/projects", async (req, res) => {
   try {
-    res.json({ projects: await listProjects(req.userId) });
+    const projects = await listProjects(req.userId);
+    res.json({
+      projects: await Promise.all(projects.map(async (project) => ({
+        ...project,
+        documentCount: (await listDocumentsForProject(project.id, req.userId)).length
+      })))
+    });
   } catch (error) {
     res.status(500).json({ error: error.message || "读取项目失败" });
   }
@@ -626,7 +632,7 @@ app.get("/api/projects/:projectId", async (req, res) => {
   try {
     const project = await getProject(req.params.projectId, req.userId);
     if (!project) return res.status(404).json({ error: "学习项目不存在" });
-    res.json({ project });
+    res.json({ project: { ...project, documentCount: (await listDocumentsForProject(project.id, req.userId)).length } });
   } catch (error) {
     res.status(500).json({ error: error.message || "读取项目失败" });
   }
@@ -728,7 +734,7 @@ async function reindexProject(projectId, userId, onProgress = () => {}) {
         mimetype: document.mime_type,
         size: Number(document.byte_size || buffer.length),
         buffer
-      });
+      }, userId);
       source.documentKey = document.id;
       source.parsedPreview = source.pages.map((page) => `第 ${page.page} 页\n${page.text}`).join("\n\n").slice(0, 30000);
       const hierarchy = chunkSources([source]);
@@ -783,6 +789,7 @@ app.post("/api/projects/:projectId/reindex", async (req, res) => {
     }
     res.json(await reindexProject(req.params.projectId, req.userId));
   } catch (error) {
+    logError(error, { requestId: req.requestId, route: "project_reindex", projectId: req.params.projectId, userId: req.userId });
     res.status(400).json({ error: error.message || "重建资料索引失败" });
   }
 });
@@ -800,7 +807,7 @@ app.post("/api/analyze", rateLimit({ windowMs: 60_000, max: 12, keyPrefix: "anal
     const files = req.files || [];
     if (!files.length) return res.status(400).json({ error: "请至少上传一份学习资料" });
     for (const file of files) {
-      const source = await parseFile(file);
+      const source = await parseFile(file, req.userId);
       source.documentKey = randomUUID();
       source.summary = buildSourceSummary(source);
       source.parsedPreview = source.pages
