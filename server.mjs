@@ -894,7 +894,8 @@ app.post("/api/analyze", rateLimit({ windowMs: 60_000, max: 12, keyPrefix: "anal
 资料如下：
 ${corpus}`
         }
-      ]);
+      ], 0.35, req.userId);
+      if (!result || typeof result !== "object") throw new Error("文本模型没有返回有效的资料分析结果");
     }
     const documentSummaries = normalizeDocumentSummaries(result.documentSummaries, sources);
     const enrichedSources = storedSources.map((stored, index) => {
@@ -1032,7 +1033,10 @@ app.post("/api/coach", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "coach"
 返回：
 {"reply":"只包含一个追问","phase":"child|expert","evaluation":{"clarity":0,"logic":0,"example":0,"boundary":0},"blindspot":null或{"title":"","problem":"","action":""}}`
       }
-    ], 0.55);
+    ], 0.55, req.userId);
+    if (!result?.reply || !result?.evaluation || typeof result.evaluation !== "object") {
+      throw new Error("文本模型没有返回有效的教练追问结构");
+    }
     const payload = {
       ...result,
       evidence: evidence.map(({ filename, page, content }) => ({ filename, page, quote: content.slice(0, 180) })),
@@ -1166,7 +1170,7 @@ async function generateVariantQuestion(project, blindspot, concept, userId) {
 
 返回：{"question":"一个具体的变式追问"}`
       }
-    ], 0.55);
+    ], 0.55, userId);
     if (result?.question) return { ...base, question: result.question };
   }
   return {
@@ -1283,7 +1287,8 @@ ${JSON.stringify(project).slice(0, 120000)}
 "sections":[{"title":"","purpose":"","keyPoints":[""],"evidence":["仅填写项目数据中真实存在的文件、页码、对练或盲区"],"writingPrompt":""}]}}
 要求 outline.sections 为5至7章，每章都说明写作目的、2至4个核心论点、可核对依据和具体写作提示。`
       }
-    ]);
+    ], 0.35, req.userId);
+    if (!result || typeof result !== "object") throw new Error("文本模型没有返回有效的学习成果结构");
     const normalized = {
       ...result,
       takeaways: Array.isArray(result.takeaways) ? result.takeaways : [],
@@ -1389,7 +1394,8 @@ app.post("/api/rag", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "rag" }),
 ${sources.map((source, index) => `[${index + 1}] ${source.filename} 第${source.page}${source.pageEnd > source.page ? `-${source.pageEnd}` : ""}页 · ${source.headingPath || "未识别章节"}\n命中子块：${source.content}\n章节父块：${source.parentContent || source.content}`).join("\n\n")}
 返回 {"answer":"基于资料的回答，包含[1]式引用"}`
         }
-      ], 0.25);
+      ], 0.25, req.userId);
+      if (!result?.answer) throw new Error("文本模型没有返回有效的资料回答");
       answer = result.answer;
     } else {
       answer = `（演示模式）这是资料中最相关的片段，来自《${sources[0].filename}》第 ${sources[0].page} 页：\n\n“${sources[0].content.slice(0, 240)}${sources[0].content.length > 240 ? "……" : ""}”\n\n配置 DeepSeek API Key 后，我会基于这些证据给出完整回答。`;
