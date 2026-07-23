@@ -1107,6 +1107,7 @@ app.post("/api/coach", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "coach"
   try {
     const { projectId, sessionId, question, concept, answer, role = "child", turn = 1 } = req.body || {};
     if (!answer?.trim()) return res.status(400).json({ error: "请先写下你的解释" });
+    const finalTurn = Number(turn) >= 3;
     let evidence = [];
     if (projectId) {
       stage = "检索学习资料";
@@ -1120,12 +1121,15 @@ app.post("/api/coach", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "coach"
       const hasExample = /比如|例如|就像|好比/.test(answer);
       const usesJargon = /(赋能|抓手|闭环|范式|飞轮|方法论)/.test(answer) && answer.length < 90;
       const payload = {
-        reply: usesJargon
+        reply: finalTurn
+          ? `本轮三问已完成。你对“${concept?.title || "这个概念"}”的解释已经覆盖了核心含义；接下来请根据评分和盲区提示复习，结束本轮后可选择其他问题继续练习。`
+          : usesJargon
           ? `你刚才用了“${answer.match(/赋能|抓手|闭环|范式|飞轮|方法论/)?.[0]}”这个词。如果不能使用这个词，你会怎样向一个完全不懂的人解释？`
           : hasExample
             ? `这个例子很有帮助。现在换个方向：在什么情况下，${concept?.title || "这个方法"}可能不会奏效？`
             : `我大概听懂了，但还不够具体。你能用一个生活中的例子说明“${concept?.title || "这个概念"}”是怎样发生的吗？`,
         phase: turn >= 2 ? "expert" : role,
+        completed: finalTurn,
         evaluation: {
           clarity: usesJargon ? 58 : 76,
           logic: answer.length > 80 ? 78 : 65,
@@ -1167,7 +1171,7 @@ app.post("/api/coach", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "coach"
       {
         role: "system",
         content:
-          "你是费曼学习教练。不要替用户完善答案；一次只追问一个最关键的问题。发现黑话就要求用人话，发现逻辑跳跃就追问因果。第3轮后可切换为严厉专家。只输出合法JSON。"
+          "你是费曼学习教练。一轮对练最多包含3个问题，初始问题算第1个。前两轮不要替用户完善答案，一次只追问一个最关键的问题；发现黑话就要求用人话，发现逻辑跳跃就追问因果。第3轮用户回答后必须结束本轮，只给简短总结、评分和盲区，不得再提出任何问题。只输出合法JSON。"
       },
       {
         role: "user",
@@ -1177,9 +1181,10 @@ app.post("/api/coach", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "coach"
 对话轮次：${turn}
 用户解释：${answer}
 可用于核对的资料片段：${JSON.stringify(evidence)}
+本轮是否应结束：${finalTurn ? "是。不得继续追问，reply必须是陈述式总结。" : "否。reply只包含一个追问。"}
 
 返回：
-{"reply":"只包含一个追问","phase":"child|expert","evaluation":{"clarity":0,"logic":0,"example":0,"boundary":0},"blindspot":null或{"title":"","problem":"","action":""}}`
+{"reply":"追问或最终总结","phase":"child|expert","completed":${finalTurn},"evaluation":{"clarity":0,"logic":0,"example":0,"boundary":0},"blindspot":null或{"title":"","problem":"","action":""}}`
       }
     ], 0.55, req.userId);
     if (!result?.reply || !result?.evaluation || typeof result.evaluation !== "object") {
@@ -1187,6 +1192,7 @@ app.post("/api/coach", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "coach"
     }
     const payload = {
       ...result,
+      completed: finalTurn,
       evidence: evidence.map(({ filename, page, content }) => ({ filename, page, quote: content.slice(0, 180) })),
       demo: false
     };

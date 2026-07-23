@@ -763,6 +763,24 @@ test("费曼教练能识别例子并追问边界", async () => {
   assert.ok(data.evaluation.example >= 80);
 });
 
+test("费曼教练在第三个问题回答后结束本轮且不再追问", async () => {
+  const response = await authFetch(`${baseUrl}/api/coach`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      concept: { title: "能力边界" },
+      answer: "这个方法依赖数据质量，数据不足时应该改由人工判断。",
+      role: "expert",
+      turn: 3
+    })
+  });
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.completed, true);
+  assert.doesNotMatch(data.reply, /[？?]\s*$/);
+  assert.match(data.reply, /三问已完成|结束本轮/);
+});
+
 test("空回答会被拒绝", async () => {
   const response = await authFetch(`${baseUrl}/api/coach`, {
     method: "POST",

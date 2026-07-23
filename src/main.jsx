@@ -1215,6 +1215,7 @@ function Coach({ project, updateProject, showToast, navigate }) {
   const [role, setRole] = useState("child");
   const [answer, setAnswer] = useState("");
   const [turn, setTurn] = useState(1);
+  const [completed, setCompleted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [requestError, setRequestError] = useState("");
   const [evaluation, setEvaluation] = useState(null);
@@ -1242,6 +1243,7 @@ function Coach({ project, updateProject, showToast, navigate }) {
           setSessionId(existing.id);
           setMessages(existing.messages.length ? existing.messages : [{ from: "ai", text: initialQuestion?.question }]);
           setTurn((existing.messages.filter((m) => m.from === "user").length || 0) + 1);
+          setCompleted(existing.messages.filter((m) => m.from === "user").length >= 3 || Boolean(existing.status));
           setEvaluation(existing.evaluations.at(-1) || null);
           setRole(existing.messages.length >= 4 ? "expert" : "child");
         } else {
@@ -1286,6 +1288,7 @@ function Coach({ project, updateProject, showToast, navigate }) {
     const next = questions.find((item) => item.id === event.target.value);
     setQuestion(next);
     setTurn(1);
+    setCompleted(false);
     setRole("child");
     setEvaluation(null);
     setMessages([{ from: "ai", text: next.question }]);
@@ -1297,6 +1300,7 @@ function Coach({ project, updateProject, showToast, navigate }) {
       setSessionId(existing.id);
       setMessages(existing.messages.length ? existing.messages : [{ from: "ai", text: next.question }]);
       setTurn((existing.messages.filter((m) => m.from === "user").length || 0) + 1);
+      setCompleted(existing.messages.filter((m) => m.from === "user").length >= 3 || Boolean(existing.status));
       setEvaluation(existing.evaluations.at(-1) || null);
       setRole(existing.messages.length >= 4 ? "expert" : "child");
     } else {
@@ -1319,7 +1323,7 @@ function Coach({ project, updateProject, showToast, navigate }) {
   };
 
   const submit = async () => {
-    if (!answer.trim() || loading) return;
+    if (!answer.trim() || loading || completed) return;
     const userText = answer.trim();
     setAnswer("");
     setRequestError("");
@@ -1338,6 +1342,7 @@ function Coach({ project, updateProject, showToast, navigate }) {
       setEvaluation(data.evaluation);
       setRole(data.phase || role);
       setTurn((value) => value + 1);
+      setCompleted(Boolean(data.completed));
       await persistMessages(finalMessages, finalEvaluations, data.phase || role);
       if (data.blindspot) {
         const exists = project.blindspots?.some((item) => item.title === data.blindspot.title);
@@ -1447,20 +1452,21 @@ function Coach({ project, updateProject, showToast, navigate }) {
             <textarea
               value={answer}
               onChange={(event) => setAnswer(event.target.value)}
+              disabled={completed}
               onKeyDown={(event) => {
                 if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submit();
               }}
-              placeholder="用你自己的话解释，不必追求完美……"
+              placeholder={completed ? "本轮三问已完成，请点击“结束并保存”" : "用你自己的话解释，不必追求完美……"}
             />
             <div className="answer-foot">
-              <span>⌘ Enter 发送 · 可语音输入</span>
+              <span>{completed ? "已完成 3 个问题，本轮不会继续追问" : "⌘ Enter 发送 · 可语音输入"}</span>
               <div className="answer-foot-actions">
                 <VoiceInputButton
-                  disabled={loading}
+                  disabled={loading || completed}
                   onTranscript={(text) => setAnswer((current) => `${current}${current.trim() ? " " : ""}${text}`)}
                   showToast={showToast}
                 />
-                <button className="answer-send-btn" onClick={submit} disabled={!answer.trim() || loading}><Send size={16} /> 发送解释</button>
+                <button className="answer-send-btn" onClick={submit} disabled={!answer.trim() || loading || completed}><Send size={16} /> 发送解释</button>
               </div>
             </div>
           </div>
@@ -1635,6 +1641,14 @@ function OutputStudio({ project, updateProject, showToast }) {
 
   const exportMarkdown = () => {
     if (!pager) return;
+    const mindMapMarkdown = (project.analysis?.modules || []).length ? `
+
+## 思维导图
+
+- ${project.title}
+${(project.analysis.modules || []).map((module) => `  - ${module.title}
+${(module.concepts || []).map((concept) => `    - ${concept.title}${concept.explanation ? `：${concept.explanation}` : ""}`).join("\n")}`).join("\n")}
+` : "";
     const outlineMarkdown = pager.outline ? `
 
 ---
@@ -1657,7 +1671,7 @@ ${(section.evidence || []).length ? section.evidence.map((item) => `- ${item}`).
 
 **写作提示：** ${section.writingPrompt}`).join("\n\n")}
 ` : "";
-    const markdown = `# ${pager.title}\n\n> ${pager.thesis}\n\n## 三个关键收获\n\n${(pager.takeaways || []).map((item) => `- ${item}`).join("\n")}\n\n## 立即行动\n\n${pager.action}\n\n## 我的复盘\n\n${pager.reflection}\n${outlineMarkdown}`;
+    const markdown = `# ${pager.title}\n\n> ${pager.thesis}\n\n## 三个关键收获\n\n${(pager.takeaways || []).map((item) => `- ${item}`).join("\n")}\n\n## 立即行动\n\n${pager.action}\n\n## 我的复盘\n\n${pager.reflection}\n${mindMapMarkdown}${outlineMarkdown}`;
     const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -1703,6 +1717,8 @@ ${(section.evidence || []).length ? section.evidence.map((item) => `- ${item}`).
               <footer><span>知返 · 费曼学习助手</span><span>资料 → 骨架 → 输出 → 能力</span></footer>
             </article>
 
+            <MindMap project={project} />
+
             <article className="panel output-outline">
               <header>
                 <span className="section-kicker">专业作品大纲</span>
@@ -1737,6 +1753,54 @@ ${(section.evidence || []).length ? section.evidence.map((item) => `- ${item}`).
         </div>
       )}
     </>
+  );
+}
+
+function MindMap({ project }) {
+  const modules = project.analysis?.modules || [];
+  return (
+    <article className="panel output-mind-map">
+      <header>
+        <div>
+          <span className="section-kicker">知识结构可视化</span>
+          <h2>学习思维导图</h2>
+          <p>从主题展开到知识模块与核心概念，掌握度来自你的费曼对练结果。</p>
+        </div>
+        <BrainCircuit size={25} />
+      </header>
+      {modules.length ? (
+        <div className="mind-map-scroll">
+          <div className="mind-map-canvas">
+            <div className="mind-map-root">
+              <span>学习主题</span>
+              <strong>{project.title}</strong>
+            </div>
+            <div className="mind-map-branches">
+              {modules.map((module, moduleIndex) => (
+                <div className="mind-map-branch" key={module.id || `${module.title}-${moduleIndex}`}>
+                  <div className="mind-map-module">
+                    <span>{String(moduleIndex + 1).padStart(2, "0")}</span>
+                    <strong>{module.title}</strong>
+                  </div>
+                  <div className="mind-map-concepts">
+                    {(module.concepts || []).map((concept, conceptIndex) => (
+                      <div className="mind-map-concept" key={concept.id || `${concept.title}-${conceptIndex}`}>
+                        <div>
+                          <strong>{concept.title}</strong>
+                          {concept.explanation && <span>{concept.explanation}</span>}
+                        </div>
+                        <b>{Math.max(0, Math.min(100, Number(concept.mastery || 0)))}%</b>
+                      </div>
+                    ))}
+                    {!module.concepts?.length && <div className="mind-map-concept empty">暂未提取核心概念</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : <EmptyMini text="资料解析完成后会自动生成思维导图。" />}
+    </article>
   );
 }
 

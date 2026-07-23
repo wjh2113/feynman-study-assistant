@@ -332,6 +332,34 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 .output-outline > header { padding-bottom: 24px; border-bottom: 2px solid var(--ink); }
 .output-outline > header h2 { margin: 8px 0 10px; font-family: var(--serif); font-size: 23px; }
 .output-outline > header p { margin: 13px 0 0; color: #646a62; font-size: 10px; line-height: 1.8; }
+.output-mind-map { max-width: 760px; padding: 28px 30px 32px; overflow: hidden; }
+.output-mind-map > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding-bottom: 20px; border-bottom: 1px solid #e3e5df; }
+.output-mind-map > header h2 { margin: 7px 0 7px; font-family: var(--serif); font-size: 22px; }
+.output-mind-map > header p { max-width: 520px; margin: 0; color: #747a72; font-size: 9px; line-height: 1.7; }
+.output-mind-map > header > svg { flex: none; color: var(--green); }
+.mind-map-scroll { margin-top: 24px; overflow-x: auto; padding: 5px 4px 12px; }
+.mind-map-canvas { min-width: 680px; display: grid; grid-template-columns: 150px minmax(480px, 1fr); gap: 42px; align-items: center; }
+.mind-map-root { position: relative; border-radius: 12px; padding: 16px; color: white; background: var(--green); box-shadow: 0 10px 25px rgba(46,103,82,.18); }
+.mind-map-root::after { content: ""; position: absolute; left: 100%; top: 50%; width: 43px; border-top: 2px solid #b9cdbf; }
+.mind-map-root span, .mind-map-root strong { display: block; }
+.mind-map-root span { opacity: .72; font-size: 8px; }
+.mind-map-root strong { margin-top: 5px; font-family: var(--serif); font-size: 14px; line-height: 1.45; }
+.mind-map-branches { position: relative; display: grid; gap: 14px; }
+.mind-map-branches::before { content: ""; position: absolute; left: -22px; top: 24px; bottom: 24px; border-left: 2px solid #b9cdbf; }
+.mind-map-branch { position: relative; display: grid; grid-template-columns: 145px minmax(250px, 1fr); gap: 28px; align-items: center; }
+.mind-map-branch::before { content: ""; position: absolute; right: 100%; top: 50%; width: 22px; border-top: 2px solid #b9cdbf; }
+.mind-map-module { position: relative; border: 1px solid #cbdccf; border-radius: 10px; padding: 11px 12px; background: #edf5ef; }
+.mind-map-module::after { content: ""; position: absolute; left: 100%; top: 50%; width: 29px; border-top: 1px solid #cad8ce; }
+.mind-map-module span { margin-right: 7px; color: #83a18d; font-size: 8px; }
+.mind-map-module strong { color: #3f5948; font-size: 10px; }
+.mind-map-concepts { display: grid; gap: 7px; }
+.mind-map-concept { position: relative; min-height: 42px; border: 1px solid #e0e3dc; border-radius: 9px; padding: 9px 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: white; }
+.mind-map-concept::before { content: ""; position: absolute; right: 100%; top: 50%; width: 29px; border-top: 1px solid #cad8ce; }
+.mind-map-concept strong, .mind-map-concept span { display: block; }
+.mind-map-concept strong { color: #4b514b; font-size: 9px; }
+.mind-map-concept span { max-width: 310px; margin-top: 3px; overflow: hidden; color: #858b83; font-size: 8px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.mind-map-concept b { flex: none; border-radius: 12px; padding: 4px 6px; color: var(--green); background: var(--green-soft); font-size: 8px; }
+.mind-map-concept.empty { color: #8b9088; font-size: 9px; }
 .outline-meta { display: flex; flex-wrap: wrap; gap: 7px; }
 .outline-meta span { border-radius: 20px; padding: 5px 8px; color: var(--green); background: var(--green-soft); font-size: 8px; }
 .outline-section { display: grid; grid-template-columns: 42px 1fr; gap: 15px; padding: 25px 0; border-bottom: 1px solid #e5e6e0; }
@@ -539,6 +567,7 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
   .diagnosis, .repair { grid-template-columns: 1fr; gap: 4px; }
   .one-pager { padding: 28px 22px; }
   .one-pager section { grid-template-columns: 35px 1fr; gap: 9px; }
+  .output-mind-map { padding: 23px 18px; }
   .output-side { grid-template-columns: 1fr; }
   .settings-aside { grid-template-columns: 1fr; }
   .settings-actions { align-items: stretch; flex-direction: column; }
