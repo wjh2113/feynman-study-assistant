@@ -188,6 +188,13 @@ async function createDatabase() {
   await db.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
     version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
+  await db.query(`CREATE TABLE IF NOT EXISTS ingestion_jobs (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb, checkpoint JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL DEFAULT 'waiting', stage TEXT NOT NULL DEFAULT 'queued', progress INTEGER NOT NULL DEFAULT 0,
+    error TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
   await db.query(`CREATE TABLE IF NOT EXISTS password_reset_tokens (
     token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     expires_at TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -456,16 +463,22 @@ function vectorLiteral(vectorValue) {
   return `[${vectorValue.map((value) => Number(value).toFixed(8)).join(",")}]`;
 }
 
-export async function saveDocument({ projectId, userId, source, file, chunks, embeddings }) {
+export async function saveDocument({ projectId, userId, source, file, chunks, embeddings, stored: existingStored }) {
   const db = await getDatabase();
   const documentId = source.documentKey || randomUUID();
-  const stored = await persistOriginalFile(projectId, file);
+  const stored = existingStored || await persistOriginalFile(projectId, file);
 
-  const result = await db.query(
+  await db.query("DELETE FROM document_chunks WHERE document_id = $1 AND project_id = $2", [documentId, projectId]);
+  await db.query(
     `INSERT INTO documents(
        id, user_id, project_id, filename, stored_name, storage_path, mime_type,
        file_type, byte_size, page_count, chunk_count, summary, parse_report
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb)`,
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb)
+     ON CONFLICT(id) DO UPDATE SET
+       filename=EXCLUDED.filename, stored_name=EXCLUDED.stored_name, storage_path=EXCLUDED.storage_path,
+       mime_type=EXCLUDED.mime_type, file_type=EXCLUDED.file_type, byte_size=EXCLUDED.byte_size,
+       page_count=EXCLUDED.page_count, chunk_count=EXCLUDED.chunk_count,
+       summary=EXCLUDED.summary, parse_report=EXCLUDED.parse_report`,
     [
       documentId,
       userId,
@@ -608,6 +621,77 @@ export async function recordEvent(userId, projectId, eventType, payload) {
     "INSERT INTO learning_events(id, user_id, project_id, event_type, payload) VALUES ($1,$2,$3,$4,$5::jsonb)",
     [randomUUID(), userId, projectId, eventType, JSON.stringify(payload || {})]
   );
+}
+
+export async function createIngestionJob({ id, userId, projectId, payload }) {
+  const db = await getDatabase();
+  await db.query(
+    `INSERT INTO ingestion_jobs(id, user_id, project_id, payload) VALUES ($1,$2,$3,$4::jsonb)`,
+    [id, userId, projectId, JSON.stringify(payload || {})]
+  );
+  return getIngestionJob(id, userId);
+}
+
+export async function getIngestionJob(id, userId) {
+  const db = await getDatabase();
+  const result = await db.query("SELECT * FROM ingestion_jobs WHERE id = $1 AND user_id = $2", [id, userId]);
+  const row = result.rows[0];
+  if (!row) return null;
+  return { ...row, payload: safeJson(row.payload) || {}, checkpoint: safeJson(row.checkpoint) || {} };
+}
+
+export async function findActiveIngestionJob(projectId, userId, filenames = []) {
+  const db = await getDatabase();
+  const result = await db.query(
+    "SELECT * FROM ingestion_jobs WHERE project_id=$1 AND user_id=$2 AND status IN ('waiting','active') ORDER BY created_at DESC",
+    [projectId, userId]
+  );
+  const wanted = [...filenames].map(String).sort().join("\n");
+  for (const row of result.rows) {
+    const payload = safeJson(row.payload) || {};
+    const existing = (payload.files || []).map((file) => String(file.originalname)).sort().join("\n");
+    if (existing === wanted) return { ...row, payload, checkpoint: safeJson(row.checkpoint) || {} };
+  }
+  return null;
+}
+
+export async function listIngestionJobs(userId, statuses = ["waiting", "active"]) {
+  const db = await getDatabase();
+  const result = await db.query(
+    "SELECT id, project_id, status, stage, progress, error, payload, created_at, updated_at FROM ingestion_jobs WHERE user_id=$1 ORDER BY created_at DESC LIMIT 30",
+    [userId]
+  );
+  return result.rows
+    .filter((row) => !statuses.length || statuses.includes(row.status))
+    .map((row) => {
+      const payload = safeJson(row.payload) || {};
+      return {
+        id: row.id,
+        projectId: row.project_id,
+        status: row.status,
+        stage: row.stage,
+        progress: Number(row.progress || 0),
+        error: row.error,
+        filenames: (payload.files || []).map((file) => file.originalname),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      };
+    });
+}
+
+export async function updateIngestionJob(id, userId, patch = {}) {
+  const db = await getDatabase();
+  const current = await getIngestionJob(id, userId);
+  if (!current) return null;
+  const checkpoint = patch.checkpoint ? { ...current.checkpoint, ...patch.checkpoint } : current.checkpoint;
+  await db.query(
+    `UPDATE ingestion_jobs SET status=$3, stage=$4, progress=$5, error=$6,
+       checkpoint=$7::jsonb, updated_at=NOW() WHERE id=$1 AND user_id=$2`,
+    [id, userId, patch.status || current.status, patch.stage || current.stage,
+      Number(patch.progress ?? current.progress), patch.error === undefined ? current.error : patch.error,
+      JSON.stringify(checkpoint)]
+  );
+  return getIngestionJob(id, userId);
 }
 
 export async function getUserAppSetting(userId, key) {

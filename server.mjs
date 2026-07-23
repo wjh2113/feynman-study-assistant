@@ -47,6 +47,7 @@ import {
   databaseStatus,
   createReminder,
   createSubscription,
+  createIngestionJob,
   deleteExpiredUserSessions,
   deleteDocument,
   deleteProject,
@@ -54,16 +55,20 @@ import {
   getCoachSession,
   getDatabase,
   getDocument,
+  findActiveIngestionJob,
   getProject,
   getOrder,
+  getIngestionJob,
   hybridSearch,
   listCoachSessions,
   listDocumentsForProject,
+  listIngestionJobs,
   listProjects,
   listRagHistory,
   listReminders,
   listSubscriptions,
   markOrderPaid,
+  persistOriginalFile,
   projectBelongsToUser,
   recordEvent,
   replaceDocumentIndex,
@@ -72,7 +77,8 @@ import {
   saveOrder,
   saveProject,
   saveRagHistory,
-  updateDocumentInsights
+  updateDocumentInsights,
+  updateIngestionJob
 } from "./server/storage.mjs";
 
 const app = express();
@@ -189,15 +195,25 @@ async function deepseek(messages, temperature = 0.35, userId, timeoutMs = Number
 }
 
 function corpusFrom(sources) {
-  return sources
-    .flatMap((source) =>
-      source.pages.map(
-        (page) =>
-          `[SOURCE file="${source.filename}" page="${page.page}"]\n${page.text.slice(0, 90000)}`
-      )
+  const pages = sources.flatMap((source) =>
+    source.pages.map((page) => ({
+      filename: source.filename,
+      page: page.page,
+      text: String(page.text || "")
+    }))
+  );
+  if (!pages.length) return "";
+
+  // Keep model latency predictable and distribute the budget across the whole
+  // document instead of allowing the first large page to consume all context.
+  const totalBudget = 120_000;
+  const perPageBudget = Math.max(1_500, Math.min(30_000, Math.floor(totalBudget / pages.length)));
+  return pages
+    .map(({ filename, page, text }) =>
+      `[SOURCE file="${filename}" page="${page}"]\n${text.slice(0, perPageBudget)}`
     )
     .join("\n\n")
-    .slice(0, 650000);
+    .slice(0, totalBudget);
 }
 
 function extractSentences(text) {
@@ -801,31 +817,33 @@ app.get("/api/tasks/:taskId", async (req, res) => {
   res.json({ task });
 });
 
-app.post("/api/analyze", rateLimit({ windowMs: 60_000, max: 12, keyPrefix: "analyze" }), upload.array("files", 12), async (req, res) => {
-  try {
-    const sources = [];
-    const files = req.files || [];
-    if (!files.length) return res.status(400).json({ error: "请至少上传一份学习资料" });
-    for (const file of files) {
-      const source = await parseFile(file, req.userId);
-      source.documentKey = randomUUID();
-      source.summary = buildSourceSummary(source);
-      source.parsedPreview = source.pages
-        .map((page) => `第 ${page.page} 页：${page.text}`)
-        .join("\n\n")
-        .slice(0, 1600);
-      sources.push(source);
+async function analyzeFiles({ files, userId, title, mode, projectId, storedFiles = [], checkpoint = {}, onCheckpoint = async () => {}, onProgress = () => {} }) {
+    const sources = checkpoint.sources || [];
+    if (!files.length) throw new Error("请至少上传一份学习资料");
+    if (!sources.length) {
+      await onProgress({ percent: 5, stage: "ocr", label: "正在解析文档与识别图片" });
+      for (const [fileIndex, file] of files.entries()) {
+        const source = await parseFile(file, userId);
+        source.documentKey = storedFiles[fileIndex]?.documentKey || randomUUID();
+        source.summary = buildSourceSummary(source);
+        source.parsedPreview = source.pages
+          .map((page) => `第 ${page.page} 页：${page.text}`)
+          .join("\n\n")
+          .slice(0, 1600);
+        sources.push(source);
+        await onProgress({ percent: 5 + Math.round(((fileIndex + 1) / files.length) * 35), stage: "ocr", label: "文档解析与 OCR 已完成" });
+      }
+      await onCheckpoint({ sources });
+    } else {
+      await onProgress({ percent: 40, stage: "ocr", label: "已从检查点恢复 OCR 结果" });
     }
-    const title = req.body.title || "新的学习项目";
-    const mode = req.body.mode || "course";
-    const projectId = req.body.projectId || `project-${Date.now()}`;
-    const existingProject = await getProject(projectId, req.userId);
+    const existingProject = await getProject(projectId, userId);
     await saveProject(
       existingProject
-        ? { ...existingProject, userId: req.userId }
+        ? { ...existingProject, userId }
         : {
             id: projectId,
-            userId: req.userId,
+            userId,
             title,
             mode,
             description: "资料正在持久化并建立检索索引。",
@@ -840,10 +858,13 @@ app.post("/api/analyze", rateLimit({ windowMs: 60_000, max: 12, keyPrefix: "anal
 
     const hierarchy = chunkSources(sources);
     const allChunks = hierarchy.chunks;
-    const embeddingConfig = await getEmbeddingConfig(req.userId);
-    const allEmbeddings = await embedTexts(allChunks.map((chunk) => chunk.content), embeddingConfig.embedding);
-    const storedSources = [];
-    for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
+    await onProgress({ percent: 45, stage: "embedding", label: "正在生成 Embedding 向量" });
+    const embeddingConfig = await getEmbeddingConfig(userId);
+    const allEmbeddings = checkpoint.embeddings || await embedTexts(allChunks.map((chunk) => chunk.content), embeddingConfig.embedding);
+    if (!checkpoint.embeddings) await onCheckpoint({ embeddings: allEmbeddings });
+    await onProgress({ percent: 62, stage: "embedding", label: "Embedding 向量已生成" });
+    const storedSources = checkpoint.storedSources || [];
+    if (!storedSources.length) for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
       const source = sources[sourceIndex];
       const sourceChunks = [];
       const sourceEmbeddings = [];
@@ -856,20 +877,23 @@ app.post("/api/analyze", rateLimit({ windowMs: 60_000, max: 12, keyPrefix: "anal
       storedSources.push(
         await saveDocument({
           projectId,
-          userId: req.userId,
+          userId,
           source,
           file: files[sourceIndex],
           chunks: sourceChunks,
-          embeddings: sourceEmbeddings
+          embeddings: sourceEmbeddings,
+          stored: storedFiles[sourceIndex]
         })
       );
     }
+    if (!checkpoint.storedSources) await onCheckpoint({ storedSources });
+    await onProgress({ percent: 75, stage: "content", label: "正在生成内容分析" });
 
     const demo = demoAnalysis(title, mode, sources);
-    const modelConfig = await getModelConfig(req.userId);
+    const modelConfig = await getModelConfig(userId);
     const modelConfigured = Boolean(modelConfig.apiKey);
-    let result = {};
-    if (modelConfigured) {
+    let result = checkpoint.contentAnalysis || {};
+    if (modelConfigured && !checkpoint.contentAnalysis) {
       const corpus = corpusFrom(sources);
       result = await deepseek([
         {
@@ -901,10 +925,12 @@ app.post("/api/analyze", rateLimit({ windowMs: 60_000, max: 12, keyPrefix: "anal
 资料如下：
 ${corpus}`
         }
-      ], 0.35, req.userId);
+      ], 0.35, userId, Number(process.env.INGESTION_GENERATION_TIMEOUT_MS || 300_000));
       if (!result || typeof result !== "object") throw new Error("文本模型没有返回有效的资料分析结果");
+      await onCheckpoint({ contentAnalysis: result });
     }
     const documentSummaries = normalizeDocumentSummaries(result.documentSummaries, sources);
+    await onProgress({ percent: 90, stage: "storage", label: "正在写入资料与索引" });
     const enrichedSources = storedSources.map((stored, index) => {
       const summary = documentSummaries[index];
       return {
@@ -939,7 +965,7 @@ ${corpus}`
     };
     await saveProject({
       ...(existingProject || {}),
-      userId: req.userId,
+      userId,
       id: projectId,
       title,
       mode,
@@ -951,14 +977,129 @@ ${corpus}`
       sessions: existingProject?.sessions || [],
       onePager: existingProject?.onePager || null
     });
-    await recordEvent(req.userId, projectId, "documents_indexed", {
+    await recordEvent(userId, projectId, "documents_indexed", {
       documents: enrichedSources.map(({ id, name, chunks }) => ({ id, name, chunks })),
       chunks: allChunks.length
     });
-    res.json(analysis);
+    await onProgress({ percent: 100, stage: "completed", label: "资料解析完成" });
+    return analysis;
+}
+
+async function runAnalysisJob(payload, progress) {
+  const ingestion = await getIngestionJob(payload.ingestionId, payload.userId);
+  if (!ingestion) throw new Error("后台解析记录不存在");
+  let currentStage = ingestion.stage || "queued";
+  const reportProgress = async (value) => {
+    const info = typeof value === "object" ? value : { percent: Number(value || 0) };
+    currentStage = info.stage || currentStage;
+    await updateIngestionJob(payload.ingestionId, payload.userId, {
+      status: info.stage === "completed" ? "completed" : "active",
+      stage: currentStage,
+      progress: Number(info.percent || 0),
+      error: null
+    });
+    progress(info);
+  };
+  try {
+    await updateIngestionJob(payload.ingestionId, payload.userId, { status: "active", error: null });
+    const hydratedFiles = await Promise.all(payload.files.map(async (file) => ({
+      originalname: file.originalname,
+      mimetype: file.mimetype,
+      size: file.size,
+      buffer: await getObject({ key: file.stored.storedName, storagePath: file.stored.storagePath })
+    })));
+    const analysis = await analyzeFiles({
+      ...payload,
+      files: hydratedFiles,
+      storedFiles: payload.files.map((file) => ({ ...file.stored, documentKey: file.documentKey })),
+      checkpoint: ingestion.checkpoint,
+      onCheckpoint: (patch) => updateIngestionJob(payload.ingestionId, payload.userId, { checkpoint: patch }),
+      onProgress: reportProgress
+    });
+    await updateIngestionJob(payload.ingestionId, payload.userId, {
+      status: "completed", stage: "completed", progress: 100, error: null
+    });
+    return { projectId: payload.projectId, ingestionId: payload.ingestionId, analysis };
   } catch (error) {
+    await updateIngestionJob(payload.ingestionId, payload.userId, {
+      status: "failed", stage: currentStage, error: error.message
+    });
+    throw error;
+  }
+}
+
+function enqueueAnalysis(payload) {
+  return enqueueTask("analyze", payload, runAnalysisJob);
+}
+
+app.post("/api/analyze", rateLimit({ windowMs: 60_000, max: 12, keyPrefix: "analyze" }), upload.array("files", 12), async (req, res) => {
+  try {
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: "请至少上传一份学习资料" });
+    const input = {
+      files,
+      userId: req.userId,
+      title: req.body.title || "新的学习项目",
+      mode: req.body.mode || "course",
+      projectId: req.body.projectId || `project-${Date.now()}`
+    };
+    if (req.query.background === "true") {
+      const existingProject = await getProject(input.projectId, input.userId);
+      if (!existingProject) throw new Error("学习项目不存在");
+      const duplicate = await findActiveIngestionJob(input.projectId, input.userId, files.map((file) => file.originalname));
+      if (duplicate) return res.status(409).json({ error: "相同资料已经在后台解析，请勿重复上传", ingestionId: duplicate.id });
+      const persisted = [];
+      for (const file of files) persisted.push(await persistOriginalFile(input.projectId, file));
+      const ingestionId = randomUUID();
+      const jobFiles = files.map((file, index) => ({
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size,
+        stored: persisted[index],
+        documentKey: randomUUID()
+      }));
+      const payload = { ingestionId, projectId: input.projectId, userId: input.userId, title: input.title, mode: input.mode, files: jobFiles };
+      await createIngestionJob({ id: ingestionId, userId: input.userId, projectId: input.projectId, payload });
+      const job = await enqueueAnalysis(payload);
+      return res.status(202).json({ task: job, ingestionId });
+    }
+    res.json(await analyzeFiles(input));
+  } catch (error) {
+    logError(error, { requestId: req.requestId, route: "analyze", userId: req.userId });
     res.status(400).json({ error: error.message || "分析失败" });
   }
+});
+
+app.post("/api/ingestions/:ingestionId/retry", async (req, res) => {
+  try {
+    const ingestion = await getIngestionJob(req.params.ingestionId, req.userId);
+    if (!ingestion) return res.status(404).json({ error: "后台解析任务不存在" });
+    if (ingestion.status !== "failed") return res.status(409).json({ error: "只有失败的解析任务可以重试" });
+    await updateIngestionJob(ingestion.id, req.userId, { status: "waiting", error: null });
+    const task = await enqueueAnalysis(ingestion.payload);
+    res.status(202).json({ task, ingestionId: ingestion.id, resumedFrom: ingestion.stage });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "重试后台解析失败" });
+  }
+});
+
+app.get("/api/ingestions", async (req, res) => {
+  const statuses = String(req.query.status || "waiting,active").split(",").map((item) => item.trim()).filter(Boolean);
+  res.json({ ingestions: await listIngestionJobs(req.userId, statuses) });
+});
+
+app.get("/api/ingestions/:ingestionId", async (req, res) => {
+  const ingestion = await getIngestionJob(req.params.ingestionId, req.userId);
+  if (!ingestion) return res.status(404).json({ error: "后台解析任务不存在" });
+  res.json({ ingestion: {
+    id: ingestion.id,
+    projectId: ingestion.project_id,
+    status: ingestion.status,
+    stage: ingestion.stage,
+    progress: Number(ingestion.progress || 0),
+    error: ingestion.error,
+    filenames: (ingestion.payload.files || []).map((file) => file.originalname)
+  } });
 });
 
 app.post("/api/coach", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "coach" }), async (req, res) => {

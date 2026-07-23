@@ -356,6 +356,75 @@ test("TXT 与 Markdown 资料可上传并生成知识骨架", async () => {
   assert.ok(data.questions[0].concept);
 });
 
+test("资料上传可创建后台解析任务并在完成后返回分析结果", async () => {
+  const projectId = `background-analysis-${port}`;
+  const created = await authFetch(`${baseUrl}/api/projects/${projectId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: "后台解析测试",
+      mode: "course",
+      progress: 8,
+      analysis: { sources: [] },
+      blindspots: [],
+      sessions: []
+    })
+  });
+  assert.equal(created.status, 200);
+
+  const body = new FormData();
+  body.append("files", new Blob(["后台任务应该完成解析、索引与项目更新。"], { type: "text/plain" }), "后台资料.txt");
+  body.append("title", "后台解析测试");
+  body.append("mode", "course");
+  body.append("projectId", projectId);
+  const queued = await authFetch(`${baseUrl}/api/analyze?background=true`, { method: "POST", body });
+  assert.equal(queued.status, 202, await queued.clone().text());
+  const queuedData = await queued.json();
+  assert.ok(queuedData.task?.id);
+
+  let task;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const response = await authFetch(`${baseUrl}/api/tasks/${queuedData.task.id}`);
+    assert.equal(response.status, 200);
+    task = (await response.json()).task;
+    if (task.status === "completed" || task.status === "failed") break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(task?.status, "completed", task?.error);
+  assert.equal(task.result.projectId, projectId);
+  assert.equal(task.result.analysis.sources[0].name, "后台资料.txt");
+  assert.ok(task.result.analysis.retrieval.chunks >= 1);
+});
+
+test("后台解析失败后保留任务记录并允许从失败阶段重试", async () => {
+  const projectId = `background-retry-${port}`;
+  await authFetch(`${baseUrl}/api/projects/${projectId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "后台重试测试", mode: "course", progress: 8, analysis: { sources: [] } })
+  });
+  const body = new FormData();
+  body.append("files", new Blob(["unsupported"], { type: "application/octet-stream" }), "失败资料.csv");
+  body.append("projectId", projectId);
+  const queued = await authFetch(`${baseUrl}/api/analyze?background=true`, { method: "POST", body });
+  assert.equal(queued.status, 202);
+  const queuedData = await queued.json();
+  let ingestion;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const status = await authFetch(`${baseUrl}/api/ingestions/${queuedData.ingestionId}`);
+    ingestion = (await status.json()).ingestion;
+    if (ingestion.status === "failed") break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(ingestion.status, "failed");
+  assert.equal(ingestion.stage, "ocr");
+  const retried = await authFetch(`${baseUrl}/api/ingestions/${queuedData.ingestionId}/retry`, { method: "POST" });
+  assert.equal(retried.status, 202, await retried.clone().text());
+  const retryData = await retried.json();
+  assert.equal(retryData.ingestionId, queuedData.ingestionId);
+  assert.equal(retryData.resumedFrom, "ocr");
+});
+
 test("图片资料会调用视觉模型 OCR，并把识别结果写入总结和检索分块", async () => {
   const savedVision = await authFetch(`${baseUrl}/api/settings/vision`, {
     method: "PUT",
@@ -747,6 +816,56 @@ test("API Key 可持久化、脱敏显示并清除", async () => {
   });
   assert.equal(clearResponse.status, 200);
   assert.equal((await clearResponse.json()).configured, false);
+});
+
+test("检索设置返回脱敏 Key，且 Reranker 可共用 Embedding Key", async () => {
+  const saveResponse = await authFetch(`${baseUrl}/api/settings/embedding`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      embedding: {
+        provider: "remote",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model: "text-embedding-v3",
+        dimensions: 1024,
+        apiKey: "sk-embedding-secret-1234"
+      },
+      reranker: {
+        provider: "remote",
+        baseUrl: "https://workspace.cn-beijing.maas.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank",
+        model: "qwen3-vl-rerank",
+        apiKey: "sk-reranker-secret-5678"
+      }
+    })
+  });
+  assert.equal(saveResponse.status, 200, await saveResponse.clone().text());
+  const saved = await saveResponse.json();
+  assert.match(saved.embedding.apiKeyMasked, /^sk-e.*1234$/);
+  assert.match(saved.reranker.apiKeyMasked, /^sk-r.*5678$/);
+  assert.equal(JSON.stringify(saved).includes("sk-embedding-secret-1234"), false);
+  assert.equal(JSON.stringify(saved).includes("sk-reranker-secret-5678"), false);
+
+  const shareResponse = await authFetch(`${baseUrl}/api/settings/embedding`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      embedding: {
+        provider: "remote",
+        baseUrl: saved.embedding.baseUrl,
+        model: saved.embedding.model,
+        dimensions: saved.embedding.dimensions
+      },
+      reranker: {
+        provider: "remote",
+        baseUrl: saved.reranker.baseUrl,
+        model: saved.reranker.model,
+        clearApiKey: true
+      }
+    })
+  });
+  assert.equal(shareResponse.status, 200, await shareResponse.clone().text());
+  const shared = await shareResponse.json();
+  assert.equal(shared.reranker.apiKeyMasked, shared.embedding.apiKeyMasked);
 });
 
 test("商业化基础接口支持提醒、导出、沙箱支付和运行指标", async () => {

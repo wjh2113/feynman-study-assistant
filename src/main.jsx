@@ -261,6 +261,9 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [persistenceReady, setPersistenceReady] = useState(false);
+  const [analysisTasks, setAnalysisTasks] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   const project = projects.find((item) => item.id === activeProjectId) || projects[0];
 
@@ -334,6 +337,102 @@ function App() {
     setToast(message);
     window.clearTimeout(showToast.timer);
     showToast.timer = window.setTimeout(() => setToast(""), 2800);
+  };
+
+  const notify = (message, type = "success", action = null) => {
+    setNotifications((items) => [
+      { id: `${Date.now()}-${Math.random()}`, message, type, action, createdAt: Date.now() },
+      ...items
+    ].slice(0, 20));
+    showToast(message);
+  };
+
+  const trackAnalysisTask = (task, projectId, filenames, ingestionId) => {
+    setAnalysisTasks((items) => [
+      ...items.filter((item) => item.id !== task.id),
+      { id: task.id, ingestionId, projectId, filenames, status: task.status || "waiting", progress: 0, stage: "queued", label: "等待后台任务开始" }
+    ]);
+  };
+
+  useEffect(() => {
+    if (!user) return undefined;
+    let cancelled = false;
+    fetch("/api/ingestions?status=waiting,active")
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "读取后台任务失败");
+        if (!cancelled) setAnalysisTasks((data.ingestions || []).map((item) => ({
+          id: item.id,
+          ingestionId: item.id,
+          projectId: item.projectId,
+          filenames: item.filenames || [],
+          status: item.status,
+          progress: item.progress || 0,
+          stage: item.stage || "queued",
+          label: "正在恢复后台解析任务"
+        })));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [user]);
+
+  useEffect(() => {
+    if (!analysisTasks.length || !user) return undefined;
+    let cancelled = false;
+    const poll = async () => {
+      const updates = await Promise.all(analysisTasks.map(async (tracked) => {
+        try {
+          const response = await fetch(`/api/ingestions/${encodeURIComponent(tracked.ingestionId)}`);
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || "读取后台任务失败");
+          return { tracked, task: data.ingestion };
+        } catch (error) {
+          return { tracked, error };
+        }
+      }));
+      if (cancelled) return;
+      for (const { tracked, task, error } of updates) {
+        if (error) continue;
+        if (task.status === "completed") {
+          const response = await fetch(`/api/projects/${encodeURIComponent(tracked.projectId)}`);
+          const data = await response.json();
+          if (response.ok && data.project) setProjects((items) => items.map((item) => item.id === tracked.projectId ? withCurrentDemoContent(data.project) : item));
+          setAnalysisTasks((items) => items.filter((item) => item.id !== tracked.id));
+          notify(`资料解析完成：${tracked.filenames.join("、")}`);
+        } else if (task.status === "failed") {
+          setAnalysisTasks((items) => items.filter((item) => item.id !== tracked.id));
+          notify(`资料解析失败：${task.error || "请检查模型配置后重试"}`, "error", {
+            ingestionId: tracked.ingestionId,
+            projectId: tracked.projectId,
+            filenames: tracked.filenames
+          });
+        } else {
+          const progress = typeof task.progress === "object" ? task.progress : { percent: Number(task.progress || 0), stage: task.stage };
+          const stageLabels = { queued: "等待后台任务开始", ocr: "正在解析文档与识别图片", embedding: "正在生成 Embedding 向量", content: "正在生成内容分析", storage: "正在写入资料与索引" };
+          setAnalysisTasks((items) => items.map((item) => item.id === tracked.id
+            ? { ...item, status: task.status, progress: Number(progress.percent || 0), stage: progress.stage || item.stage, label: progress.label || stageLabels[progress.stage] || item.label }
+            : item));
+        }
+      }
+    };
+    poll();
+    const timer = window.setInterval(poll, 1800);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [analysisTasks.length, user]);
+
+  const retryIngestion = async (notification) => {
+    const action = notification.action;
+    if (!action?.ingestionId) return;
+    try {
+      const response = await fetch(`/api/ingestions/${encodeURIComponent(action.ingestionId)}/retry`, { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "重试失败");
+      trackAnalysisTask(data.task, action.projectId, action.filenames, data.ingestionId);
+      setNotifications((items) => items.filter((item) => item.id !== notification.id));
+      showToast(`已从“${data.resumedFrom || "失败阶段"}”继续解析`);
+    } catch (error) {
+      showToast(error.message);
+    }
   };
 
   const changeView = (id) => {
@@ -442,7 +541,23 @@ function App() {
           <div className="topbar-actions">
             <button className="search-pill" onClick={() => changeView("rag")}><Search size={16} /><span>询问资料库</span><kbd>RAG</kbd></button>
             <button className="model-settings-shortcut" onClick={() => changeView("settings")}><Settings size={16} /><span>模型配置</span></button>
-            <button className="icon-btn"><CircleAlert size={18} /></button>
+            <div className="notification-shell">
+              <button className="icon-btn notification-button" aria-label="任务通知" onClick={() => setNotificationsOpen((value) => !value)}>
+                <CircleAlert size={18} />
+                {!!notifications.length && <em>{Math.min(notifications.length, 9)}</em>}
+              </button>
+              {notificationsOpen && (
+                <div className="notification-panel">
+                  <header><strong>任务通知</strong><button onClick={() => setNotifications([])}>清空</button></header>
+                  {notifications.length ? notifications.map((item) => (
+                    <div className={`notification-item ${item.type}`} key={item.id}>
+                      <span>{item.message}</span>
+                      {item.action?.ingestionId && <button onClick={() => retryIngestion(item)}>继续重试</button>}
+                    </div>
+                  )) : <p>暂无任务通知</p>}
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
@@ -450,7 +565,7 @@ function App() {
           {project ? (
             <>
               {activeView === "overview" && <Overview project={project} navigate={changeView} />}
-              {activeView === "sources" && <Sources project={project} updateProject={updateProject} navigate={changeView} showToast={showToast} />}
+              {activeView === "sources" && <Sources project={project} updateProject={updateProject} navigate={changeView} showToast={showToast} onTaskStarted={trackAnalysisTask} analysisTask={analysisTasks.find((task) => task.projectId === project.id)} />}
               {activeView === "map" && <KnowledgeMap project={project} navigate={changeView} />}
               {activeView === "rag" && <RagAssistant project={project} navigate={changeView} showToast={showToast} />}
               {activeView === "coach" && <Coach project={project} updateProject={updateProject} showToast={showToast} navigate={changeView} />}
@@ -581,7 +696,7 @@ function Overview({ project, navigate }) {
   );
 }
 
-function Sources({ project, updateProject, navigate, showToast }) {
+function Sources({ project, updateProject, navigate, showToast, onTaskStarted, analysisTask }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [openSource, setOpenSource] = useState(null);
@@ -605,6 +720,7 @@ function Sources({ project, updateProject, navigate, showToast }) {
       return;
     }
     if (!selectedFiles.length) return showToast("请先添加至少一份学习资料");
+    if (analysisTask) return showToast("当前项目已有资料正在后台解析");
     setLoading(true);
     try {
       const body = new FormData();
@@ -612,19 +728,13 @@ function Sources({ project, updateProject, navigate, showToast }) {
       body.append("projectId", project.id);
       body.append("title", project.title);
       body.append("mode", project.mode);
-      const response = await fetch("/api/analyze", { method: "POST", body });
+      const response = await fetch("/api/analyze?background=true", { method: "POST", body });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "分析失败");
-      updateProject({
-        analysis: data,
-        description: data.summary,
-        blindspots: [],
-        sessions: [],
-        documentCount: data.sources?.length || selectedFiles.length
-      });
-      showToast(data.demo ? "知识骨架已生成（当前为演示模式）" : "DeepSeek 已完成资料分析");
+      if (!data.task?.id) throw new Error("后台任务创建失败");
+      onTaskStarted(data.task, project.id, selectedFiles.map((file) => file.name), data.ingestionId);
+      showToast("资料已上传，正在后台解析；完成后会通知你");
       setFiles([]);
-      setOpenSource(data.sources?.[0]?.id || null);
     } catch (error) {
       showToast(error.message);
     } finally {
@@ -698,6 +808,20 @@ function Sources({ project, updateProject, navigate, showToast }) {
         <p>支持 PDF、DOCX、TXT、Markdown、PNG、JPG、WebP · 单个文件不超过 30 MB</p>
         <div className="upload-hint"><Zap size={14} /> PDF 扫描页、文档截图和单独图片会进入 OCR 识别流程</div>
       </div>
+
+      {analysisTask && (
+        <div className="analysis-task-card" role="status">
+          <Spinner />
+          <div><strong>{analysisTask.label || "资料正在后台解析"}</strong><span>可以继续使用其他功能，完成后会发送通知</span></div>
+          <div className="analysis-task-progress"><i style={{ width: `${analysisTask.progress || 3}%` }} /></div>
+          <b>{Math.max(3, analysisTask.progress || 0)}%</b>
+          <div className="analysis-stage-list">
+            {[['ocr', 'OCR'], ['embedding', 'Embedding'], ['content', '内容分析'], ['storage', '入库']].map(([stage, label]) => (
+              <span className={analysisTask.stage === stage ? "active" : ""} key={stage}>{label}</span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {!hasPersistedSources && sources.length > 0 && (
         <div className="request-warning">
@@ -2038,6 +2162,31 @@ function ModelSettingsPage({ showToast }) {
     }
   };
 
+  const shareEmbeddingKeyWithReranker = async () => {
+    if (!retrievalForm.embeddingApiKey && !retrievalSaved?.embedding?.configured) {
+      showToast("请先填写并保存 Embedding API Key");
+      return;
+    }
+    setRetrievalSaving(true);
+    try {
+      const response = await fetch("/api/settings/embedding", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildRetrievalPayload({ reranker: true }))
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "共用 Embedding Key 失败");
+      setRetrievalSaved({ embedding: data.embedding, reranker: data.reranker });
+      setRetrievalForm((current) => ({ ...current, embeddingApiKey: "", rerankerApiKey: "" }));
+      setRerankerTest(null);
+      showToast("Reranker 已改为共用 Embedding API Key");
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      setRetrievalSaving(false);
+    }
+  };
+
   const testEmbeddingConnection = async () => {
     setEmbeddingTesting(true);
     setEmbeddingTest(null);
@@ -2289,7 +2438,9 @@ function ModelSettingsPage({ showToast }) {
                       autoComplete="off"
                       value={retrievalForm.embeddingApiKey}
                       onChange={(event) => setRetrievalForm((current) => ({ ...current, embeddingApiKey: event.target.value }))}
-                      placeholder={retrievalSaved?.embedding?.configured ? "已保存密钥，留空保持不变" : "输入 Embedding API Key"}
+                      placeholder={retrievalSaved?.embedding?.configured
+                        ? `已保存：${retrievalSaved.embedding.apiKeyMasked || "密钥"}，留空保持不变`
+                        : "输入 Embedding API Key"}
                     />
                   </label>
                 )}
@@ -2331,9 +2482,21 @@ function ModelSettingsPage({ showToast }) {
                       autoComplete="off"
                       value={retrievalForm.rerankerApiKey}
                       onChange={(event) => setRetrievalForm((current) => ({ ...current, rerankerApiKey: event.target.value }))}
-                      placeholder={retrievalSaved?.reranker?.configured ? "已保存密钥，留空保持不变" : "输入 Reranker API Key"}
+                      placeholder={retrievalSaved?.reranker?.configured
+                        ? `已保存：${retrievalSaved.reranker.apiKeyMasked || "密钥"}，留空保持不变`
+                        : "输入 Reranker API Key"}
                     />
                   </label>
+                )}
+                {retrievalForm.provider === "remote" && retrievalSaved?.embedding?.configured && (
+                  <button
+                    type="button"
+                    className="text-btn"
+                    onClick={shareEmbeddingKeyWithReranker}
+                    disabled={retrievalSaving}
+                  >
+                    Reranker 共用 Embedding Key
+                  </button>
                 )}
 
                 {retrievalForm.provider === "local" && retrievalSaved?.service?.error && (

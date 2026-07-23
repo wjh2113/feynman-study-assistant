@@ -7,6 +7,21 @@ import { recognizeImage } from "./ocr.mjs";
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 const MAX_OCR_IMAGES_PER_FILE = 20;
+const OCR_CONCURRENCY = Math.max(1, Math.min(6, Number(process.env.OCR_CONCURRENCY || 3)));
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
 
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -145,9 +160,7 @@ async function parseDocx(buffer, filename, userId) {
     .filter((entry) => !entry.dir && /^word\/media\//i.test(entry.name))
     .slice(0, MAX_OCR_IMAGES_PER_FILE);
   report.imagesFound = media.length;
-  const ocrSections = [];
-
-  for (const [index, entry] of media.entries()) {
+  const ocrSections = await mapWithConcurrency(media, OCR_CONCURRENCY, async (entry, index) => {
     const imageBuffer = await entry.async("nodebuffer");
     const ocrText = await runOcr(
       imageBuffer,
@@ -156,16 +169,17 @@ async function parseDocx(buffer, filename, userId) {
       report,
       userId
     );
-    if (ocrText) ocrSections.push(`图片 ${index + 1}：${ocrText}`);
-  }
+    return ocrText ? `图片 ${index + 1}：${ocrText}` : "";
+  });
   if (media.length && report.ocrStatus === "not_configured") {
     appendWarning(report, "检测到 DOCX 内嵌图片，但未配置 OCR 视觉模型");
   }
-  const text = mergeNativeAndOcr(nativeText, ocrSections.join("\n\n"));
+  const joinedOcr = ocrSections.filter(Boolean).join("\n\n");
+  const text = mergeNativeAndOcr(nativeText, joinedOcr);
   return {
     filename,
     type: "DOCX",
-    pages: [{ page: 1, text, nativeText, ocrText: ocrSections.join("\n\n") }],
+    pages: [{ page: 1, text, nativeText, ocrText: joinedOcr }],
     parseReport: report
   };
 }

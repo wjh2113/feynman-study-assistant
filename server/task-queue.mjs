@@ -34,7 +34,7 @@ export async function enqueueTask(name, payload, localHandler) {
     return { id: String(job.id), name, status: "waiting", backend: "redis" };
   }
   const id = randomUUID();
-  const job = { id, name, userId: payload.userId, status: "waiting", progress: 0, createdAt: Date.now(), backend: "memory" };
+  const job = { id, name, userId: payload.userId, payload, status: "waiting", progress: 0, createdAt: Date.now(), backend: "memory" };
   memoryJobs.set(id, job);
   queueMicrotask(async () => {
     job.status = "active";
@@ -56,7 +56,18 @@ export async function getTask(id) {
     if (!job) return null;
     return { id: String(job.id), name: job.name, userId: job.data?.userId, status: await job.getState(), progress: job.progress, result: job.returnvalue, error: job.failedReason, backend: "redis" };
   }
-  return memoryJobs.get(id) || null;
+  const job = memoryJobs.get(id);
+  if (!job) return null;
+  const { payload: _payload, ...publicJob } = job;
+  return publicJob;
+}
+
+export async function getTaskPayload(id) {
+  if (redisEnabled()) {
+    const job = await bullQueue().getJob(id);
+    return job?.data || null;
+  }
+  return memoryJobs.get(id)?.payload || null;
 }
 
 export function queueStatus() { return { backend: redisEnabled() ? "redis" : "memory", durable: redisEnabled() }; }

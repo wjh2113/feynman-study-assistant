@@ -219,14 +219,16 @@ export async function getPublicEmbeddingConfig(userId) {
       baseUrl: embedding.baseUrl,
       model: embedding.model,
       dimensions: embedding.dimensions,
-      configured: embedding.provider === "local" ? true : Boolean(embedding.apiKey)
+      configured: embedding.provider === "local" ? true : Boolean(embedding.apiKey),
+      apiKeyMasked: embedding.provider === "local" ? "" : maskKey(embedding.apiKey)
     },
     reranker: {
       provider: reranker.provider,
       providerName: reranker.provider === "local" ? "本地 bge-reranker" : providerNameFromUrl(reranker.baseUrl),
       baseUrl: reranker.baseUrl,
       model: reranker.model,
-      configured: reranker.provider === "local" ? true : Boolean(reranker.apiKey)
+      configured: reranker.provider === "local" ? true : Boolean(reranker.apiKey),
+      apiKeyMasked: reranker.provider === "local" ? "" : maskKey(reranker.apiKey)
     }
   };
 }

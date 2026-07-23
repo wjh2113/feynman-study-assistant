@@ -1,6 +1,7 @@
 import { getVisionConfig } from "./model-config.mjs";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const OCR_TIMEOUT_MS = Number(process.env.OCR_TIMEOUT_MS || 25_000);
 
 function normalizeOcrText(value) {
   return String(value || "")
@@ -30,13 +31,16 @@ export async function recognizeImage(buffer, mimeType = "image/png", label = "�
     };
   }
 
-  const response = await fetch(`${config.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OCR_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
       model: config.model,
       temperature: 0,
       messages: [
@@ -58,23 +62,35 @@ export async function recognizeImage(buffer, mimeType = "image/png", label = "�
           ]
         }
       ]
-    })
-  });
+      }),
+      signal: controller.signal
+    });
 
-  if (!response.ok) {
-    const detail = await response.text();
+    if (!response.ok) {
+      const detail = await response.text();
+      return {
+        text: "",
+        status: "failed",
+        warning: `OCR 调用失败（${response.status}）：${detail.slice(0, 160)}`
+      };
+    }
+
+    const payload = await response.json();
+    const text = normalizeOcrText(payload.choices?.[0]?.message?.content);
+    return {
+      text: text === "[无可识别文字]" ? "" : text,
+      status: "ready",
+      warning: ""
+    };
+  } catch (error) {
     return {
       text: "",
       status: "failed",
-      warning: `OCR 调用失败（${response.status}）：${detail.slice(0, 160)}`
+      warning: error.name === "AbortError"
+        ? `OCR 处理“${label}”超过 ${Math.round(OCR_TIMEOUT_MS / 1000)} 秒，已跳过该图片`
+        : `OCR 处理“${label}”失败：${error.message}`
     };
+  } finally {
+    clearTimeout(timer);
   }
-
-  const payload = await response.json();
-  const text = normalizeOcrText(payload.choices?.[0]?.message?.content);
-  return {
-    text: text === "[无可识别文字]" ? "" : text,
-    status: "ready",
-    warning: ""
-  };
 }
