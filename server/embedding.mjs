@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { keywordTokens } from "./chunking.mjs";
+import { embeddingDimensions } from "./constants.mjs";
 import { resolveEmbeddingConfig, resolveRerankerConfig } from "./model-config.mjs";
 import { buildRerankerRequest } from "./reranker-client.mjs";
 
-export const embeddingDimensions = 1024;
+export { embeddingDimensions };
 
 export const relevanceThreshold = Math.max(0, Math.min(1, Number(process.env.RAG_RELEVANCE_THRESHOLD || 0.35)));
 

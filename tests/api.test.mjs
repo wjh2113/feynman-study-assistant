@@ -196,6 +196,17 @@ test("未登录请求、跨站写请求和已移除的用户列表接口会被�
   });
   assert.equal(crossSite.status, 403);
 
+  const viteProxy = await fetch(`${baseUrl}/api/projects/origin-check`, {
+    method: "PUT",
+    headers: {
+      ...cookieHeader(),
+      Origin: "http://127.0.0.1:5173",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ title: "Vite proxy" })
+  });
+  assert.notEqual(viteProxy.status, 403);
+
   const users = await authFetch(`${baseUrl}/api/users`);
   assert.equal(users.status, 404);
 });

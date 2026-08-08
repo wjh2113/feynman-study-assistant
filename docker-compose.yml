@@ -1,3 +1,6 @@
+# 本地/京东云主机同 VPC 基础设施。
+# 生产文件请用京东云 OSS（STORAGE_PROVIDER=jdcloud），不要把上传目录挂在本 compose 里。
+# 详见 docs/jdcloud-storage.md
 services:
   postgres:
     image: pgvector/pgvector:pg17

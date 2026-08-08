@@ -213,6 +213,7 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 .concept-list button { min-height: 39px; border: 0; border-radius: 7px; padding: 0 9px; background: transparent; display: grid; grid-template-columns: 16px 1fr auto auto; gap: 7px; align-items: center; text-align: left; cursor: pointer; font-size: 10px; }
 .concept-list button:hover, .concept-list button.selected { background: #eff3ee; color: var(--green); }
 .concept-list button em { color: #9a9d95; font-size: 8px; font-style: normal; }
+.concept-empty { padding: 10px 9px; color: #92968e; font-size: 9px; }
 .mastery-dot { width: 14px; height: 14px; border: 2px solid #d1d4cd; border-radius: 50%; display: grid; place-items: center; }
 .mastery-dot.level-2 { border-color: #d7a05b; background: #f5e9da; }.mastery-dot.level-3, .mastery-dot.level-4 { border-color: var(--green); color: white; background: var(--green); }
 .concept-detail { position: sticky; top: 84px; border: 1px solid var(--line); background: var(--paper); border-radius: 13px; padding: 25px; box-shadow: 0 12px 32px rgba(39,48,41,.05); }

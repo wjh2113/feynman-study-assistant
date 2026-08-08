@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { recalculateMasteryAndProgress, scoreToMastery } from "../src/progress.mjs";
+import { recalculateMasteryAndProgress, scoreToMastery } from "../src/lib/progress.mjs";
 
 test("scoreToMastery 映射规则", () => {
   assert.equal(scoreToMastery(95), 4);

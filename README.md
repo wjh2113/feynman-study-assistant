@@ -23,10 +23,20 @@
 - API：Node.js + Express
 - 本地数据库：PGlite + pgvector，数据保存在 `.data/postgres`
 - 生产数据库：PostgreSQL 17 + pgvector
-- 文件存储：开发环境本机 `.data/uploads`，生产环境阿里云 OSS
+- 文件存储：开发环境本机 `.data/uploads`；生产推荐京东云 OSS（S3 兼容，`STORAGE_PROVIDER=jdcloud`），亦兼容阿里云 OSS
 - 任务队列：开发环境内存队列，生产环境 Redis + BullMQ
 - 邮件：SMTP；支付：沙箱、微信支付与支付宝适配器
 - 默认云模型：DeepSeek 文本模型、阿里云百炼 Qwen OCR、`text-embedding-v3`、`gte-rerank`
+
+### 目录结构
+
+- `server.mjs`：Express 薄启动入口（挂载中间件、路由与静态资源）
+- `server/middleware`、`server/routes`、`server/services`：HTTP 与业务服务
+- `server/db`、`server/repos`：数据库客户端/schema 与检索；CRUD facade 仍在 `server/storage.mjs`
+- `src/main.jsx`：前端入口；`src/app`、`src/features`、`src/api`、`src/components`、`src/lib`
+- `tests/`：Node 内置测试（API / 单元 / 集成）
+- `docs/`：产品与商业文档；京东云存储见 [`docs/jdcloud-storage.md`](docs/jdcloud-storage.md)
+- `.data/`：本地数据库与上传文件（已忽略，勿提交）
 
 项目默认使用远程 Embedding 和 Reranker，不再要求安装 Python 或下载本地 BGE 模型。仓库中的旧 `model_service` 已移除。仍可通过配置兼容 OpenAI API 的其他服务商；如果自行恢复本地服务，可以把 Provider 改为 `local` 并启用 `BGE_AUTO_START`。
 
@@ -90,9 +100,51 @@ REDIS_URL=redis://127.0.0.1:6379
 
 应用启动时会创建 `vector` 扩展、数据表、索引和迁移版本记录。生产环境不要使用 Compose 示例密码，并应使用独立数据库账户、私有网络、加密备份和 TLS。
 
+## 部署模式与数据存储
+
+通过 `DEPLOY_MODE` 选择：
+
+| 模式 | 配置 | 用户/项目/向量 | 原文件 | 任务队列 |
+|------|------|----------------|--------|----------|
+| **单机** `standalone` | 京东云一台云主机即可 | PGlite → `.data/postgres` | 本地盘 → `.data/uploads` | 内存队列（可不配 Redis） |
+| **云** `cloud`（默认） | 拆分存储 | `DATABASE_URL`（PG+pgvector） | 京东云 OSS（`jdcloud`） | Redis + BullMQ |
+
+### 单机模式（推荐先这样上京东云）
+
+```env
+NODE_ENV=production
+DEPLOY_MODE=standalone
+STORAGE_PROVIDER=local
+DATA_DIR=.data
+APP_ENCRYPTION_KEY=
+ALLOWED_ORIGINS=https://study.example.com
+```
+
+务必把 `.data` 挂到云硬盘并定期快照；换机前先备份整个目录。
+
+### 云模式
+
+```env
+NODE_ENV=production
+DEPLOY_MODE=cloud
+DATABASE_URL=postgresql://zhifan:强密码@10.x.x.x:5432/zhifan
+DATABASE_SSL=false
+REDIS_URL=redis://:密码@10.x.x.x:6379
+STORAGE_PROVIDER=jdcloud
+S3_REGION=cn-north-1
+S3_ENDPOINT=https://s3-internal.cn-north-1.jdcloud-oss.com
+S3_BUCKET=zhifan-uploads
+S3_ACCESS_KEY_ID=
+S3_ACCESS_KEY_SECRET=
+APP_ENCRYPTION_KEY=
+ALLOWED_ORIGINS=https://study.example.com
+```
+
+云模式生产缺少 `DATABASE_URL` / `REDIS_URL` / 远程对象存储时会拒绝启动；单机模式放宽这三项，但仍要求 `APP_ENCRYPTION_KEY` 与 `ALLOWED_ORIGINS`。详见 [`docs/jdcloud-storage.md`](docs/jdcloud-storage.md)。
+
 ## 商业化基础配置
 
-生产环境必须设置一个长期稳定的 `APP_ENCRYPTION_KEY`（建议使用密码管理器生成 32 字节随机值）；它用于 AES-256-GCM 加密用户保存的模型密钥，丢失后已有密钥无法恢复。对象存储设置 `STORAGE_PROVIDER=oss` 并配置 `OSS_REGION`、`OSS_BUCKET`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`。密码找回邮件配置 `SMTP_HOST`、`SMTP_PORT`、`SMTP_USER`、`SMTP_PASS` 和 `MAIL_FROM`。
+生产环境必须设置一个长期稳定的 `APP_ENCRYPTION_KEY`（建议使用密码管理器生成 32 字节随机值）；它用于 AES-256-GCM 加密用户保存的模型密钥，丢失后已有密钥无法恢复。对象存储推荐 `STORAGE_PROVIDER=jdcloud` 并配置 `S3_REGION`、`S3_ENDPOINT`、`S3_BUCKET`、`S3_ACCESS_KEY_ID`、`S3_ACCESS_KEY_SECRET`；若仍用阿里云则设 `STORAGE_PROVIDER=oss` 与 `OSS_*`。密码找回邮件配置 `SMTP_HOST`、`SMTP_PORT`、`SMTP_USER`、`SMTP_PASS` 和 `MAIL_FROM`。
 
 支付默认使用 `PAYMENT_PROVIDER=sandbox`，可以完整测试下单与回调后的订阅开通，但不会真实扣款。切换 `wechat` 或 `alipay` 前，应在隔离环境填入 `.env.example` 列出的商户号、应用 ID、私钥和平台证书，并完成签名、验签、金额、防重放、幂等、退款和对账验收；当前正式适配器会在凭据不完整时快速失败，避免误以为已经收款。
 
@@ -124,7 +176,7 @@ npm run test:integration
 
 应用使用 HttpOnly、SameSite=Lax、生产环境 Secure Cookie。所有会改变状态的 API 都校验 `Origin`，生产环境缺少或不匹配的 Origin 会被拒绝；`ALLOWED_ORIGINS` 只能填写受信任的 HTTPS 来源。会话默认 30 天过期，服务启动及运行期间会清理过期记录。
 
-当前限流保存在单个 Node 进程内存中。多实例部署必须在反向代理、API 网关或 Redis 中配置共享限流，不能仅依赖应用内限流。
+应用内限流在配置了 `REDIS_URL` 时使用 Redis 共享计数（多实例一致）；未配置 Redis 时回退到单进程内存（单机模式可接受）。多实例云部署仍建议在反向代理/网关层再加一层限流，并正确设置 `TRUST_PROXY`。
 
 ## 数据与备份
 
