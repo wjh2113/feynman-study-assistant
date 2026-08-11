@@ -1,5 +1,7 @@
 import React, { useState } from "react";
+import { ConfirmDialog } from "../../components/ConfirmDialog.jsx";
 import { PageHeading } from "../../components/PageHeading.jsx";
+import { EmptyMini } from "../../components/EmptyMini.jsx";
 import { Spinner } from "../../components/Spinner.jsx";
 import {
   BookMarked,
@@ -14,18 +16,37 @@ import {
 import { generateOnePager } from "../../api/projects.js";
 import { MindMap } from "./MindMap.jsx";
 
-export function OutputStudio({ project, updateProject, showToast }) {
-  const [loading, setLoading] = useState(false);
-  const [pager, setPager] = useState(project.onePager);
-  const [edited, setEdited] = useState(false);
+function overlapsSelection(item, selectedDocumentIds = []) {
+  const ids = Array.isArray(item?.documentIds) ? item.documentIds : [];
+  if (!ids.length) return true;
+  return ids.some((id) => selectedDocumentIds.includes(id));
+}
 
-  const generate = async () => {
-    if (pager && edited) {
-      if (!window.confirm("重新生成会覆盖你手动编辑的内容，是否继续？")) return;
-    }
+export function OutputStudio({ project, selectedDocumentIds = [], updateProject, showToast }) {
+  const [loading, setLoading] = useState(false);
+  const [pager, setPager] = useState(project?.onePager || null);
+  const [edited, setEdited] = useState(false);
+  const [confirmRegenerate, setConfirmRegenerate] = useState(false);
+  const sessions = (project.sessions || []).filter((item) => overlapsSelection(item, selectedDocumentIds));
+  const blindspots = (project.blindspots || []).filter((item) => overlapsSelection(item, selectedDocumentIds));
+  const sessionCount = sessions.length;
+  const blindspotCount = blindspots.length;
+  const practiceDocs = (project.analysis?.sources || []).filter((source) => selectedDocumentIds.includes(source.id));
+  const docsLabel = practiceDocs.length
+    ? practiceDocs.map((doc) => doc.name).slice(0, 2).join("、") + (practiceDocs.length > 2 ? " 等" : "")
+    : "已选资料";
+
+  if (!selectedDocumentIds.length) return <EmptyMini text="请先在上方勾选要练习的资料" />;
+
+  const runGenerate = async () => {
+    setConfirmRegenerate(false);
     setLoading(true);
     try {
-      const data = await generateOnePager(project);
+      const data = await generateOnePager(project, {
+        documentIds: selectedDocumentIds,
+        practiceDocumentIds: selectedDocumentIds,
+        practiceDocs
+      });
       setPager(data);
       setEdited(false);
       updateProject({ onePager: data });
@@ -35,6 +56,14 @@ export function OutputStudio({ project, updateProject, showToast }) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const generate = async () => {
+    if (pager && edited) {
+      setConfirmRegenerate(true);
+      return;
+    }
+    await runGenerate();
   };
 
   const saveEdits = () => {
@@ -111,8 +140,8 @@ ${(section.evidence || []).length ? section.evidence.map((item) => `- ${item}`).
     <>
       <PageHeading
         eyebrow="第五步 · 把理解变成作品"
-        title="学习成果"
-        description="把资料、你的解释和修正后的思考，沉淀为一份真正属于你的成果。"
+        title={`学习成果 · ${docsLabel}`}
+        description={`把已选资料、你的解释和修正后的思考，沉淀为一份真正属于你的成果。`}
         action={pager ? <div className="topbar-actions"><button className="secondary-btn" onClick={exportMarkdown}><Download size={16} /> 导出 Markdown</button><a className="secondary-btn" href={`/api/projects/${encodeURIComponent(project.id)}/export?format=zip`}><Download size={16} /> 导出完整档案</a></div> : null}
         demo={project.analysis?.demo}
       />
@@ -122,12 +151,12 @@ ${(section.evidence || []).length ? section.evidence.map((item) => `- ${item}`).
             <div /><div /><div className="paper-front"><BookMarked size={31} /><span>ONE<br />PAGER</span></div>
           </div>
           <span className="section-kicker">你的学习即将留下痕迹</span>
-          <h2>生成一页纸学习卡</h2>
-          <p>AI 会综合资料骨架、费曼对练和认知盲区，提炼核心收获与下一步行动。内容可继续编辑，也可以导出保存。</p>
+          <h2>生成「{docsLabel}」一页纸学习卡</h2>
+          <p>AI 会综合已选资料骨架、费曼对练和认知盲区，提炼核心收获与下一步行动。内容可继续编辑，也可以导出保存。</p>
           <div className="output-source-chips">
-            <span><FileText size={14} /> {project.analysis?.sources?.length || 0} 份资料</span>
-            <span><MessageCircleQuestion size={14} /> {project.sessions?.length || 0} 次对练</span>
-            <span><Target size={14} /> {project.blindspots?.length || 0} 个盲区</span>
+            <span><FileText size={14} /> {practiceDocs.length || project.analysis?.sources?.length || 0} 份资料</span>
+            <span><MessageCircleQuestion size={14} /> {sessionCount} 次对练</span>
+            <span><Target size={14} /> {blindspotCount} 个盲区</span>
           </div>
           <button className="primary-btn large" onClick={generate} disabled={loading}>{loading ? <Spinner /> : <Sparkles size={18} />}{loading ? "正在整理你的思考…" : "生成一页纸与成果大纲"}</button>
         </div>
@@ -177,6 +206,17 @@ ${(section.evidence || []).length ? section.evidence.map((item) => `- ${item}`).
           </aside>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmRegenerate}
+        tone="warn"
+        title="重新生成会覆盖编辑"
+        description="你手动改过的一页纸内容将被新结果替换，是否继续？"
+        confirmLabel="重新生成"
+        cancelLabel="保留原文"
+        onCancel={() => setConfirmRegenerate(false)}
+        onConfirm={runGenerate}
+      />
     </>
   );
 }

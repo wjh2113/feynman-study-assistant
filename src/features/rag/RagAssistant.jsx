@@ -30,9 +30,9 @@ export function RagAssistant({ project, navigate, showToast }) {
     return () => { cancelled = true; };
   }, [project.id]);
 
-  const ask = async () => {
-    if (!query.trim() || loading) return;
-    const question = query.trim();
+  const ask = async (overrideText) => {
+    const question = String(overrideText ?? query).trim();
+    if (!question || loading) return;
     setQuery("");
     setRequestError("");
     setLoading(true);
@@ -60,9 +60,9 @@ export function RagAssistant({ project, navigate, showToast }) {
   return (
     <>
       <PageHeading
-        eyebrow="基于资料 · 混合检索"
+        eyebrow="严格据资料 · 原文引用"
         title="资料问答"
-        description="先用 pgvector 与全文关键词检索找到原文，再让 DeepSeek 严格依据证据回答。"
+        description="只根据你上传的资料回答，不扩展、不答非所问；每条回答都会列出引用的文件名与原文。"
         action={<button className="secondary-btn" onClick={() => navigate("sources")}><UploadCloud size={16} /> 管理资料</button>}
         demo={project.analysis?.demo}
       />
@@ -86,8 +86,13 @@ export function RagAssistant({ project, navigate, showToast }) {
             <VoiceInputButton
               className="floating"
               disabled={!hasSources || loading}
-              onTranscript={(text) => setQuery((current) => `${current}${current.trim() ? " " : ""}${text}`)}
               showToast={showToast}
+              title="语音提问"
+              tip="录音时实时显示浏览器转写，结束后自动交给 AI 修正"
+              placeholder="例如：这个方法落地时最大的风险是什么？"
+              confirmLabel="确认"
+              purpose="资料问答"
+              onTranscript={(text) => setQuery((current) => `${current}${current.trim() ? " " : ""}${text}`)}
             />
           </div>
           <button className="primary-btn" onClick={ask} disabled={!hasSources || !query.trim() || loading}>
@@ -112,17 +117,30 @@ export function RagAssistant({ project, navigate, showToast }) {
             {item.warning && <div className="request-warning"><CircleAlert size={15} /><span>{item.warning}</span></div>}
             {item.sources?.length > 0 && (
               <div className="rag-sources">
-                <span className="section-kicker">检索依据 · {item.sources.length} 个片段</span>
+                <span className="section-kicker">引用资料 · {item.sources.length} 处原文</span>
                 {item.sources.map((source, sourceIndex) => (
                   <div className="rag-source" key={source.id}>
-                    <strong>[{sourceIndex + 1}] {source.filename} · 第 {source.page}{source.pageEnd > source.page ? `-${source.pageEnd}` : ""} 页 · 精排 {Number(source.score || 0).toFixed(3)}</strong>
+                    <div className="rag-source-file">
+                      <FileText size={15} />
+                      <strong>[{sourceIndex + 1}] {source.filename || "未命名资料"}</strong>
+                      <span>第 {source.page}{source.pageEnd > source.page ? `-${source.pageEnd}` : ""} 页</span>
+                    </div>
                     {source.headingPath && <span className="rag-heading-path">{source.headingPath}</span>}
-                    <p>{source.quote}</p>
+                    <blockquote className="rag-quote">{source.content || source.quote}</blockquote>
+                    {source.parentContent && source.parentContent !== (source.content || source.quote) && (
+                      <details className="rag-quote-context">
+                        <summary>上下文</summary>
+                        <pre>{source.parentContent}</pre>
+                      </details>
+                    )}
                     {!!source.matchedKeywords?.length && <div className="rag-keywords">{source.matchedKeywords.map((word) => <span key={word}>{word}</span>)}</div>}
                     {source.documentId && <a href={`/api/documents/${source.documentId}/file`}>打开原始资料</a>}
                   </div>
                 ))}
               </div>
+            )}
+            {!item.insufficient && !item.sources?.length && item.answer && (
+              <div className="rag-sources-empty">本次回答未附带可展示的原文引用。</div>
             )}
             {item.debug && (
               <details className="rag-debug">

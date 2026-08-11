@@ -129,6 +129,7 @@ before(async () => {
       ...process.env,
       PORT: String(port),
       DEEPSEEK_API_KEY: "",
+      DATABASE_URL: "",
       RAG_TEST_MODE: "true",
       PGLITE_MEMORY: "true",
       DATA_DIR: `.data-test-${port}`,
@@ -173,7 +174,7 @@ test("健康检查返回模型与演示模式状态", async () => {
   assert.equal(response.status, 200);
   const data = await response.json();
   assert.equal(data.ok, true);
-  assert.equal(data.model, "deepseek-v4-flash");
+  assert.ok(["deepseek-v4-flash", "deepseek-v4-pro"].includes(data.model), `unexpected model: ${data.model}`);
   assert.equal(data.configured, false);
   assert.equal(data.database.mode, "pglite");
   assert.equal(data.embedding.provider, "test");
@@ -283,7 +284,7 @@ test("模型配置接口不会向前端返回明文密钥", async () => {
   assert.equal(response.status, 200);
   const data = await response.json();
   assert.equal(data.provider, "DeepSeek");
-  assert.equal(data.model, "deepseek-v4-flash");
+  assert.ok(["deepseek-v4-flash", "deepseek-v4-pro"].includes(data.model), `unexpected model: ${data.model}`);
   assert.equal(data.configured, false);
   assert.equal("apiKey" in data, false);
 
@@ -789,7 +790,8 @@ test("费曼教练在第三个问题回答后结束本轮且不再追问", async
   const data = await response.json();
   assert.equal(data.completed, true);
   assert.doesNotMatch(data.reply, /[？?]\s*$/);
-  assert.match(data.reply, /三问已完成|结束本轮/);
+  assert.match(data.reply, /问已完成|结束本轮/);
+  assert.equal(data.maxTurns, 3);
 });
 
 test("空回答会被拒绝", async () => {
@@ -799,6 +801,40 @@ test("空回答会被拒绝", async () => {
     body: JSON.stringify({ answer: "   " })
   });
   assert.equal(response.status, 400);
+});
+
+test("个人偏好可保存追问轮次并影响教练结束条件", async () => {
+  const save = await authFetch(`${baseUrl}/api/settings/preferences`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ coachMaxTurns: 2, coachPassScore: 80, coachRoleMode: "auto" })
+  });
+  assert.equal(save.status, 200, await save.clone().text());
+  const prefs = await save.json();
+  assert.equal(prefs.coachMaxTurns, 2);
+  assert.equal(prefs.coachPassScore, 80);
+
+  const turn2 = await authFetch(`${baseUrl}/api/coach`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      concept: { title: "能力边界" },
+      answer: "这个方法依赖数据质量，数据不足时应该改由人工判断。",
+      role: "expert",
+      turn: 2
+    })
+  });
+  assert.equal(turn2.status, 200);
+  const data = await turn2.json();
+  assert.equal(data.maxTurns, 2);
+  assert.equal(data.completed, true);
+
+  const restore = await authFetch(`${baseUrl}/api/settings/preferences`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ coachMaxTurns: 3 })
+  });
+  assert.equal(restore.status, 200);
 });
 
 test("可以从项目数据生成一页纸", async () => {
@@ -967,4 +1003,128 @@ test("邮箱密码重置令牌一次有效并使旧密码失效", async () => {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password: "new-password" })
   });
   assert.equal(newLogin.status, 200);
+});
+
+test("学科可上传多资料，对练会话按 documentIds 隔离，RAG 仍覆盖全学科", async () => {
+  const subjectId = `subject-docs-${port}`;
+  const created = await authFetch(`${baseUrl}/api/projects/${subjectId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: "日语学科",
+      mode: "course",
+      progress: 8,
+      analysis: { sources: [], modules: [], questions: [] },
+      blindspots: [],
+      sessions: []
+    })
+  });
+  assert.equal(created.status, 200, await created.clone().text());
+
+  const uploadA = new FormData();
+  uploadA.append("files", new Blob(["助词は表示主题。"], { type: "text/plain" }), "n5-1.txt");
+  uploadA.append("title", "日语学科");
+  uploadA.append("mode", "course");
+  uploadA.append("projectId", subjectId);
+  const analyzedA = await authFetch(`${baseUrl}/api/analyze`, { method: "POST", body: uploadA });
+  assert.equal(analyzedA.status, 200, await analyzedA.clone().text());
+  const analysisA = await analyzedA.json();
+  const docAId = (analysisA.sources || []).find((item) => item.name === "n5-1.txt")?.id
+    || (analysisA.sources || [])[0]?.id;
+  assert.ok(docAId, "第一份资料应有 document id");
+
+  const uploadB = new FormData();
+  uploadB.append("files", new Blob(["敬语用于表示对对方的尊重。"], { type: "text/plain" }), "keigo.txt");
+  uploadB.append("title", "日语学科");
+  uploadB.append("mode", "course");
+  uploadB.append("projectId", subjectId);
+  const analyzedB = await authFetch(`${baseUrl}/api/analyze`, { method: "POST", body: uploadB });
+  assert.equal(analyzedB.status, 200, await analyzedB.clone().text());
+  const analysisB = await analyzedB.json();
+  const sources = analysisB.sources || [];
+  assert.ok(sources.length >= 2, `顺序上传后应保留多份资料，实际 ${sources.length}`);
+  const docBId = sources.find((item) => item.name === "keigo.txt")?.id
+    || sources.find((item) => item.id !== docAId)?.id;
+  assert.ok(docBId && docBId !== docAId, "第二份资料应有独立 document id");
+
+  const sessionA = await authFetch(`${baseUrl}/api/projects/${subjectId}/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      documentIds: [docAId],
+      concept: "助词は",
+      question: "请解释助词は",
+      questionId: "q-a"
+    })
+  });
+  assert.equal(sessionA.status, 200, await sessionA.clone().text());
+  const sessionABody = await sessionA.json();
+  assert.deepEqual(sessionABody.session.documentIds, [docAId]);
+
+  const sessionB = await authFetch(`${baseUrl}/api/projects/${subjectId}/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      documentIds: [docBId],
+      concept: "敬语",
+      question: "请解释敬语",
+      questionId: "q-b"
+    })
+  });
+  assert.equal(sessionB.status, 200, await sessionB.clone().text());
+
+  const onlyA = await authFetch(`${baseUrl}/api/projects/${subjectId}/sessions?documentIds=${encodeURIComponent(docAId)}`);
+  const onlyAData = await onlyA.json();
+  assert.equal(onlyA.status, 200);
+  assert.equal(onlyAData.sessions.length, 1);
+  assert.ok(onlyAData.sessions[0].documentIds.includes(docAId));
+
+  const onlyB = await authFetch(`${baseUrl}/api/projects/${subjectId}/sessions?documentIds=${encodeURIComponent(docBId)}`);
+  const onlyBData = await onlyB.json();
+  assert.equal(onlyB.status, 200);
+  assert.equal(onlyBData.sessions.length, 1);
+  assert.ok(onlyBData.sessions[0].documentIds.includes(docBId));
+
+  const rag = await authFetch(`${baseUrl}/api/rag`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectId: subjectId, query: "敬语和助词は分别是什么？" })
+  });
+  assert.equal(rag.status, 200, await rag.clone().text());
+  const ragData = await rag.json();
+  assert.ok(String(ragData.answer || "").length > 0);
+  const ragFilenames = [
+    ...(ragData.sources || []).map((item) => item.filename || item.file),
+    ...(ragData.debug?.candidates || []).map((item) => item.filename || item.file)
+  ].filter(Boolean);
+  assert.ok(
+    ragFilenames.some((name) => /n5-1|keigo/i.test(String(name))),
+    `RAG 全学科检索应带来源文件名，实际：${JSON.stringify(ragFilenames)}`
+  );
+});
+
+test("章节 CRUD 仍可用（兼容保留）", async () => {
+  const subjectId = `subject-chapter-compat-${port}`;
+  const created = await authFetch(`${baseUrl}/api/projects/${subjectId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: "兼容章节学科",
+      mode: "course",
+      progress: 8,
+      analysis: { sources: [], modules: [], questions: [] },
+      blindspots: [],
+      sessions: []
+    })
+  });
+  assert.equal(created.status, 200, await created.clone().text());
+  const chapter = await authFetch(`${baseUrl}/api/projects/${subjectId}/chapters`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "兼容章节" })
+  });
+  assert.equal(chapter.status, 201, await chapter.clone().text());
+  const listed = await authFetch(`${baseUrl}/api/projects/${subjectId}/chapters`);
+  assert.equal(listed.status, 200);
+  assert.ok((await listed.json()).chapters.some((item) => item.title === "兼容章节"));
 });

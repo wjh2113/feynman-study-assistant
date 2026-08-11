@@ -1,19 +1,24 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { ConfirmDialog } from "../../components/ConfirmDialog.jsx";
 import { PageHeading } from "../../components/PageHeading.jsx";
 import { Spinner } from "../../components/Spinner.jsx";
 import {
   BrainCircuit,
   Check,
   CircleAlert,
+  Download,
   FileText,
   Sparkles,
+  UploadCloud,
   Zap
 } from "../../components/icons.jsx";
 import {
+  exportModelConfig,
   getEmbeddingSettings,
   getHealth,
   getModelSettings,
   getVisionSettings,
+  importModelConfig,
   putEmbeddingSettings,
   putModelSettings,
   putVisionSettings,
@@ -24,7 +29,7 @@ import {
 } from "../../api/settings.js";
 import { EMBEDDING_PRESETS } from "./embeddingPresets.js";
 
-export function ModelSettingsPage({ showToast }) {
+export function ModelSettingsPage({ showToast, embedded = false }) {
   const [form, setForm] = useState({
     baseUrl: "https://api.deepseek.com",
     model: "deepseek-v4-pro",
@@ -64,6 +69,54 @@ export function ModelSettingsPage({ showToast }) {
     rerankerModel: "gte-rerank",
     rerankerApiKey: ""
   });
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [confirmExport, setConfirmExport] = useState(false);
+  const [pendingImportFile, setPendingImportFile] = useState(null);
+  const importInputRef = useRef(null);
+
+  const pickPreset = (provider, baseUrl) => {
+    if (provider === "local") return "local";
+    const key = Object.keys(EMBEDDING_PRESETS).find((k) =>
+      k !== "local" && k !== "custom" && baseUrl?.includes(EMBEDDING_PRESETS[k].baseUrl.replace(/^https?:\/\//, "").split("/")[0])
+    );
+    return key || "custom";
+  };
+
+  const applyModelPublic = (data) => {
+    setSaved(data);
+    setForm((current) => ({ ...current, baseUrl: data.baseUrl, model: data.model, apiKey: "" }));
+  };
+
+  const applyVisionPublic = (data) => {
+    setVisionSaved(data);
+    setVisionForm((current) => ({
+      ...current,
+      baseUrl: data.baseUrl === "https://api.openai.com/v1"
+        ? "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        : data.baseUrl,
+      model: "qwen3.5-ocr",
+      apiKey: ""
+    }));
+  };
+
+  const applyEmbeddingPublic = (data) => {
+    const embedding = data.embedding || {};
+    const reranker = data.reranker || {};
+    setRetrievalSaved((current) => ({ ...(current || {}), ...data }));
+    setRetrievalForm((current) => ({
+      ...current,
+      provider: embedding.provider || "remote",
+      embeddingPreset: pickPreset(embedding.provider, embedding.baseUrl),
+      embeddingBaseUrl: embedding.baseUrl || current.embeddingBaseUrl,
+      embeddingModel: embedding.model || current.embeddingModel,
+      embeddingDimensions: embedding.dimensions || current.embeddingDimensions,
+      embeddingApiKey: "",
+      rerankerPreset: pickPreset(reranker.provider, reranker.baseUrl),
+      rerankerBaseUrl: reranker.baseUrl || current.rerankerBaseUrl,
+      rerankerModel: reranker.model || current.rerankerModel,
+      rerankerApiKey: ""
+    }));
+  };
 
   const loadRetrievalHealth = () => {
     setRetrievalLoading(true);
@@ -81,59 +134,72 @@ export function ModelSettingsPage({ showToast }) {
 
   useEffect(() => {
     getModelSettings()
-      .then((data) => {
-        setSaved(data);
-        setForm((current) => ({ ...current, baseUrl: data.baseUrl, model: data.model }));
-      })
+      .then(applyModelPublic)
       .catch((error) => showToast(error.message))
       .finally(() => setLoading(false));
   }, [showToast]);
 
   useEffect(() => {
     getVisionSettings()
-      .then((data) => {
-        setVisionSaved(data);
-        setVisionForm((current) => ({
-          ...current,
-          baseUrl: data.baseUrl === "https://api.openai.com/v1"
-            ? "https://dashscope.aliyuncs.com/compatible-mode/v1"
-            : data.baseUrl,
-          model: "qwen3.5-ocr"
-        }));
-      })
+      .then(applyVisionPublic)
       .catch((error) => showToast(error.message))
       .finally(() => setVisionLoading(false));
   }, [showToast]);
 
   useEffect(() => {
     getEmbeddingSettings()
-      .then((data) => {
-        const embedding = data.embedding || {};
-        const reranker = data.reranker || {};
-        setRetrievalSaved((current) => ({ ...(current || {}), ...data }));
-        const pickPreset = (provider, baseUrl) => {
-          if (provider === "local") return "local";
-          const key = Object.keys(EMBEDDING_PRESETS).find((k) =>
-            k !== "local" && k !== "custom" && baseUrl?.includes(EMBEDDING_PRESETS[k].baseUrl.replace(/^https?:\/\//, "").split("/")[0])
-          );
-          return key || "custom";
-        };
-        setRetrievalForm((current) => ({
-          ...current,
-          provider: embedding.provider || "remote",
-          embeddingPreset: pickPreset(embedding.provider, embedding.baseUrl),
-          embeddingBaseUrl: embedding.baseUrl || current.embeddingBaseUrl,
-          embeddingModel: embedding.model || current.embeddingModel,
-          embeddingDimensions: embedding.dimensions || current.embeddingDimensions,
-          rerankerPreset: pickPreset(reranker.provider, reranker.baseUrl),
-          rerankerBaseUrl: reranker.baseUrl || current.rerankerBaseUrl,
-          rerankerModel: reranker.model || current.rerankerModel
-        }));
-      })
+      .then(applyEmbeddingPublic)
       .catch((error) => showToast(error.message))
       .finally(() => setRetrievalLoading(false));
     loadRetrievalHealth();
   }, [showToast]);
+
+  const downloadConfigBackup = async () => {
+    setConfirmExport(false);
+    setBackupBusy(true);
+    try {
+      const { text, filename } = await exportModelConfig();
+      const blob = new Blob([text], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      showToast("配置已导出");
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const runImportConfigBackup = async (file) => {
+    if (!file) return;
+    setPendingImportFile(null);
+    setBackupBusy(true);
+    try {
+      const payload = JSON.parse(await file.text());
+      const result = await importModelConfig(payload);
+      if (result.model) applyModelPublic(result.model);
+      if (result.vision) applyVisionPublic(result.vision);
+      if (result.embedding) applyEmbeddingPublic(result.embedding);
+      setTestResult(null);
+      setVisionTest(null);
+      setEmbeddingTest(null);
+      setRerankerTest(null);
+      loadRetrievalHealth();
+      const keys = (result.importedKeys || []).join("、") || "配置";
+      showToast(`已导入 ${keys}`);
+    } catch (error) {
+      showToast(error.message || "导入失败");
+    } finally {
+      setBackupBusy(false);
+      if (importInputRef.current) importInputRef.current.value = "";
+    }
+  };
 
   const applyPreset = (key, kind) => {
     const preset = EMBEDDING_PRESETS[key] || EMBEDDING_PRESETS.custom;
@@ -312,12 +378,14 @@ export function ModelSettingsPage({ showToast }) {
 
   return (
     <>
-      <PageHeading
-        eyebrow="应用设置 · 模型服务"
-        title="模型设置"
-        description="支持 DeepSeek、Kimi 等 OpenAI 兼容接口；Qwen3.5-OCR 负责识别 PDF 扫描页、文档截图和图片文字。"
-      />
-      <div className="settings-layout">
+      {!embedded && (
+        <PageHeading
+          eyebrow="应用设置 · 模型服务"
+          title="模型设置"
+          description="支持 DeepSeek、Kimi 等 OpenAI 兼容接口；Qwen3.5-OCR 负责识别 PDF 扫描页、文档截图和图片文字。"
+        />
+      )}
+      <div className={`settings-layout ${embedded ? "settings-layout-embedded" : ""}`}>
         <div className="settings-main">
           <section className="panel settings-form">
           <div className="settings-head">
@@ -610,6 +678,50 @@ export function ModelSettingsPage({ showToast }) {
               </button>
             </div>
           </section>
+
+          <section className="panel settings-form">
+            <div className="settings-head">
+              <div className="settings-provider">
+                <Download size={20} />
+                <div>
+                  <strong>配置备份</strong>
+                  <span>导出 / 导入当前账号的模型、OCR、检索配置</span>
+                </div>
+              </div>
+            </div>
+            <div className="settings-fields">
+              <p className="settings-backup-note">
+                导出文件格式与命令行一致（zhifan-model-config/v1），可带到其他服务器后在此页导入，或使用
+                {" "}
+                <code>npm run config:import</code>
+                。文件含明文 API Key，请离线保管。
+              </p>
+            </div>
+            <div className="settings-actions">
+              <input
+                ref={importInputRef}
+                type="file"
+                accept="application/json,.json"
+                hidden
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) setPendingImportFile(file);
+                  else if (importInputRef.current) importInputRef.current.value = "";
+                }}
+              />
+              <button
+                className="secondary-btn"
+                type="button"
+                disabled={backupBusy}
+                onClick={() => importInputRef.current?.click()}
+              >
+                {backupBusy ? <Spinner /> : <UploadCloud size={16} />} 导入配置
+              </button>
+              <button className="primary-btn" type="button" disabled={backupBusy} onClick={() => setConfirmExport(true)}>
+                {backupBusy ? <Spinner /> : <Download size={16} />} 导出配置
+              </button>
+            </div>
+          </section>
         </div>
 
         <aside className="settings-aside">
@@ -621,7 +733,7 @@ export function ModelSettingsPage({ showToast }) {
           <div className="concept-note">
             <span className="section-kicker">隐私说明</span>
             <h3>密钥不会返回前端</h3>
-            <p>页面只读取脱敏状态。API Key保存在本机数据库中，仅在本地后端调用模型时使用。</p>
+            <p>日常设置页只显示脱敏状态。仅在你主动导出备份时，才会下载含明文密钥的 JSON。</p>
           </div>
           <div className="concept-note">
             <span className="section-kicker">体积提示</span>
@@ -630,6 +742,30 @@ export function ModelSettingsPage({ showToast }) {
           </div>
         </aside>
       </div>
+
+      <ConfirmDialog
+        open={confirmExport}
+        tone="warn"
+        title="导出配置备份？"
+        description="导出文件会包含解密后的 API Key，请妥善保管，不要上传到公开仓库。"
+        confirmLabel="继续导出"
+        cancelLabel="取消"
+        onCancel={() => setConfirmExport(false)}
+        onConfirm={downloadConfigBackup}
+      />
+      <ConfirmDialog
+        open={Boolean(pendingImportFile)}
+        tone="warn"
+        title="导入并覆盖配置？"
+        description="导入将覆盖当前账号已保存的模型、OCR 与检索配置。"
+        confirmLabel="确认导入"
+        cancelLabel="取消"
+        onCancel={() => {
+          setPendingImportFile(null);
+          if (importInputRef.current) importInputRef.current.value = "";
+        }}
+        onConfirm={() => runImportConfigBackup(pendingImportFile)}
+      />
     </>
   );
 }

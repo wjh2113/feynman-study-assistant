@@ -26,6 +26,7 @@ import projectsRouter from "./server/routes/projects.mjs";
 import ingestRouter from "./server/routes/ingest.mjs";
 import learningRouter from "./server/routes/learning.mjs";
 import ragRouter from "./server/routes/rag.mjs";
+import voiceRouter from "./server/routes/voice.mjs";
 
 const app = express();
 if (process.env.TRUST_PROXY) app.set("trust proxy", process.env.TRUST_PROXY);
@@ -71,6 +72,7 @@ app.use(projectsRouter); // export before settings in original; paths do not col
 app.use(settingsRouter);
 app.use(ingestRouter);
 app.use(ragRouter);
+app.use(voiceRouter);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.join(__dirname, "dist");

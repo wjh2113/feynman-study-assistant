@@ -22,6 +22,10 @@ const icon = (...children) =>
   };
 
 export const ArrowRight = icon(<path d="M5 12h14M13 6l6 6-6 6" />);
+export const Bell = icon(
+  <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />,
+  <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+);
 export const BookMarked = icon(<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />, <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" />, <path d="M10 2v8l3-2 3 2V2" />);
 export const BrainCircuit = icon(<path d="M9.5 4.5A3 3 0 0 0 4 6v1a3 3 0 0 0-2 3 3 3 0 0 0 2 3v1a3 3 0 0 0 5.5 1.5" />, <path d="M14.5 4.5A3 3 0 0 1 20 6v1a3 3 0 0 1 2 3 3 3 0 0 1-2 3v1a3 3 0 0 1-5.5 1.5" />, <path d="M9.5 4.5v15M14.5 4.5v15M9.5 9H7M17 12h-2.5M9.5 15H7" />);
 export const Check = icon(<path d="m5 12 4 4L19 6" />);
@@ -35,6 +39,7 @@ export const FolderOpen = icon(<path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2
 export const GraduationCap = icon(<path d="m2 10 10-5 10 5-10 5Z" />, <path d="M6 12v5c3 2 9 2 12 0v-5M22 10v6" />);
 export const House = icon(<path d="m3 11 9-8 9 8" />, <path d="M5 10v10h14V10M9 20v-6h6v6" />);
 export const Lightbulb = icon(<path d="M9 18h6M10 22h4" />, <path d="M8.5 15.5A6 6 0 1 1 15.5 15.5C14.5 16.2 14 17 14 18h-4c0-1-.5-1.8-1.5-2.5Z" />);
+export const LogOut = icon(<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />, <path d="M16 17l5-5-5-5M21 12H9" />);
 export const Menu = icon(<path d="M4 6h16M4 12h16M4 18h16" />);
 export const MessageCircleQuestion = icon(<path d="M21 11.5a8.4 8.4 0 0 1-9 8.5 9 9 0 0 1-4-.9L3 21l1.8-4.4A8.5 8.5 0 1 1 21 11.5Z" />, <path d="M9.8 9a2.2 2.2 0 0 1 4.3.7c0 1.6-2.1 1.7-2.1 3M12 16h.01" />);
 export const Mic = icon(<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />, <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3M8 22h8" />);

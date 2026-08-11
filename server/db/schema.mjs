@@ -37,6 +37,18 @@ export async function migrateSchema(db) {
   `);
   await db.query("ALTER TABLE projects ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE CASCADE");
   await db.query(`
+    CREATE TABLE IF NOT EXISTS chapters (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      state JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.query(`
     CREATE TABLE IF NOT EXISTS documents (
       id TEXT PRIMARY KEY,
       user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
@@ -57,6 +69,7 @@ export async function migrateSchema(db) {
   await db.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS summary JSONB NOT NULL DEFAULT '{}'::jsonb");
   await db.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS parse_report JSONB NOT NULL DEFAULT '{}'::jsonb");
   await db.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE CASCADE");
+  await db.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS chapter_id TEXT REFERENCES chapters(id) ON DELETE SET NULL");
   await db.query(`
     CREATE TABLE IF NOT EXISTS document_chunks (
       id TEXT PRIMARY KEY,
@@ -78,6 +91,7 @@ export async function migrateSchema(db) {
   await db.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS parent_content TEXT NOT NULL DEFAULT ''");
   await db.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS heading_path TEXT NOT NULL DEFAULT ''");
   await db.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE CASCADE");
+  await db.query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS chapter_id TEXT REFERENCES chapters(id) ON DELETE SET NULL");
   await db.query(`
     CREATE TABLE IF NOT EXISTS learning_events (
       id TEXT PRIMARY KEY,
@@ -114,6 +128,8 @@ export async function migrateSchema(db) {
     )
   `);
   await db.query("ALTER TABLE coach_sessions ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE CASCADE");
+  await db.query("ALTER TABLE coach_sessions ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb");
+  await db.query("ALTER TABLE coach_sessions ADD COLUMN IF NOT EXISTS chapter_id TEXT REFERENCES chapters(id) ON DELETE SET NULL");
   await db.query(`
     CREATE TABLE IF NOT EXISTS rag_history (
       id TEXT PRIMARY KEY,
@@ -168,17 +184,145 @@ export async function migrateSchema(db) {
   await db.query("ALTER TABLE rag_history ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE CASCADE");
   await db.query("CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id)");
   await db.query("CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id)");
+  await db.query("CREATE INDEX IF NOT EXISTS idx_documents_chapter ON documents(chapter_id)");
   await db.query("CREATE INDEX IF NOT EXISTS idx_chunks_project ON document_chunks(project_id)");
   await db.query("CREATE INDEX IF NOT EXISTS idx_chunks_user ON document_chunks(user_id)");
+  await db.query("CREATE INDEX IF NOT EXISTS idx_chunks_chapter ON document_chunks(chapter_id)");
   await db.query("CREATE INDEX IF NOT EXISTS idx_events_project ON learning_events(project_id)");
   await db.query("CREATE INDEX IF NOT EXISTS idx_events_user ON learning_events(user_id)");
   await db.query("CREATE INDEX IF NOT EXISTS idx_coach_sessions_project ON coach_sessions(project_id)");
   await db.query("CREATE INDEX IF NOT EXISTS idx_coach_sessions_user ON coach_sessions(user_id)");
+  await db.query("CREATE INDEX IF NOT EXISTS idx_coach_sessions_chapter ON coach_sessions(chapter_id)");
   await db.query("CREATE INDEX IF NOT EXISTS idx_rag_history_project ON rag_history(project_id)");
   await db.query("CREATE INDEX IF NOT EXISTS idx_rag_history_user ON rag_history(user_id)");
   await db.query("CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id)");
+  await db.query("CREATE INDEX IF NOT EXISTS idx_chapters_project ON chapters(project_id)");
+  await db.query("CREATE INDEX IF NOT EXISTS idx_chapters_user ON chapters(user_id)");
 
   await migrateLegacyDataIfNeeded(db);
+  await migrateChaptersIfNeeded(db);
+  await migrateDocumentPracticeIfNeeded(db);
+}
+
+async function migrateDocumentPracticeIfNeeded(db) {
+  const applied = await db.query("SELECT 1 FROM schema_migrations WHERE version = $1", ["003_document_practice"]);
+  if (applied.rows.length) return;
+
+  await db.query(
+    "ALTER TABLE coach_sessions ADD COLUMN IF NOT EXISTS document_ids JSONB NOT NULL DEFAULT '[]'::jsonb"
+  );
+  try {
+    await db.query(
+      "CREATE INDEX IF NOT EXISTS idx_coach_sessions_document_ids ON coach_sessions USING GIN (document_ids)"
+    );
+  } catch {
+    // PGlite / limited engines may not support GIN on JSONB; column alone is enough.
+  }
+
+  const projects = await db.query("SELECT id, state FROM projects");
+  for (const row of projects.rows) {
+    const projectState = typeof row.state === "string"
+      ? (() => { try { return JSON.parse(row.state); } catch { return {}; } })()
+      : (row.state || {});
+    const projectBlindspots = Array.isArray(projectState.blindspots) ? projectState.blindspots : [];
+    const projectSessions = Array.isArray(projectState.sessions) ? projectState.sessions : [];
+    const projectOnePager = projectState.onePager ?? null;
+    const practiceEmpty =
+      !projectBlindspots.length && !projectSessions.length && projectOnePager == null;
+    if (!practiceEmpty) continue;
+
+    const chapters = await db.query("SELECT state FROM chapters WHERE project_id = $1 ORDER BY sort_order ASC, created_at ASC", [row.id]);
+    const mergedBlindspots = [];
+    const mergedSessions = [];
+    let mergedOnePager = null;
+    for (const chapterRow of chapters.rows) {
+      const chapterState = typeof chapterRow.state === "string"
+        ? (() => { try { return JSON.parse(chapterRow.state); } catch { return {}; } })()
+        : (chapterRow.state || {});
+      if (Array.isArray(chapterState.blindspots)) mergedBlindspots.push(...chapterState.blindspots);
+      if (Array.isArray(chapterState.sessions)) mergedSessions.push(...chapterState.sessions);
+      if (mergedOnePager == null && chapterState.onePager != null) mergedOnePager = chapterState.onePager;
+    }
+
+    if (!mergedBlindspots.length && !mergedSessions.length && mergedOnePager == null) continue;
+
+    const nextProjectState = {
+      ...projectState,
+      blindspots: mergedBlindspots,
+      sessions: mergedSessions,
+      onePager: mergedOnePager
+    };
+    await db.query(
+      "UPDATE projects SET state = $2::jsonb, updated_at = NOW() WHERE id = $1",
+      [row.id, JSON.stringify(nextProjectState)]
+    );
+  }
+
+  await db.query(
+    "INSERT INTO schema_migrations(version) VALUES ('003_document_practice') ON CONFLICT(version) DO NOTHING"
+  );
+}
+
+async function migrateChaptersIfNeeded(db) {
+  const applied = await db.query("SELECT 1 FROM schema_migrations WHERE version = $1", ["002_chapters"]);
+  if (applied.rows.length) return;
+
+  const projects = await db.query("SELECT id, user_id, state FROM projects WHERE user_id IS NOT NULL");
+  for (const row of projects.rows) {
+    const existing = await db.query("SELECT id FROM chapters WHERE project_id = $1 LIMIT 1", [row.id]);
+    if (existing.rows.length) continue;
+
+    const projectState = typeof row.state === "string"
+      ? (() => { try { return JSON.parse(row.state); } catch { return {}; } })()
+      : (row.state || {});
+    const chapterId = randomUUID();
+    const now = Date.now();
+    const chapterState = {
+      id: chapterId,
+      projectId: row.id,
+      userId: row.user_id,
+      title: "默认章节",
+      sortOrder: 0,
+      blindspots: Array.isArray(projectState.blindspots) ? projectState.blindspots : [],
+      sessions: Array.isArray(projectState.sessions) ? projectState.sessions : [],
+      onePager: projectState.onePager ?? null,
+      analysis: {},
+      createdAt: now,
+      updatedAt: now
+    };
+    await db.query(
+      `INSERT INTO chapters(id, project_id, user_id, title, sort_order, state, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, TO_TIMESTAMP($7 / 1000.0), NOW())`,
+      [chapterId, row.id, row.user_id, "默认章节", 0, JSON.stringify(chapterState), now]
+    );
+
+    const nextProjectState = {
+      ...projectState,
+      blindspots: [],
+      sessions: [],
+      onePager: null
+    };
+    await db.query(
+      "UPDATE projects SET state = $2::jsonb, updated_at = NOW() WHERE id = $1",
+      [row.id, JSON.stringify(nextProjectState)]
+    );
+    await db.query(
+      "UPDATE documents SET chapter_id = $1 WHERE project_id = $2 AND chapter_id IS NULL",
+      [chapterId, row.id]
+    );
+    await db.query(
+      "UPDATE document_chunks SET chapter_id = $1 WHERE project_id = $2 AND chapter_id IS NULL",
+      [chapterId, row.id]
+    );
+    await db.query(
+      "UPDATE coach_sessions SET chapter_id = $1 WHERE project_id = $2 AND chapter_id IS NULL",
+      [chapterId, row.id]
+    );
+  }
+
+  await db.query(
+    "INSERT INTO schema_migrations(version) VALUES ('002_chapters') ON CONFLICT(version) DO NOTHING"
+  );
 }
 
 async function migrateLegacyDataIfNeeded(db) {

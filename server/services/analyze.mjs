@@ -6,15 +6,71 @@ import { parseFile } from "../document-parser.mjs";
 import { getObject } from "../object-storage.mjs";
 import { enqueueTask } from "../task-queue.mjs";
 import {
+  getChapter,
   getIngestionJob,
   getProject,
   recordEvent,
+  resolveChapterId,
+  saveChapter,
   saveDocument,
   saveProject,
   updateDocumentInsights,
   updateIngestionJob
 } from "../storage.mjs";
 import { deepseek } from "./llm.mjs";
+
+function mergeChapterQuestions(existing = [], incoming = []) {
+  const map = new Map();
+  for (const question of [...existing, ...incoming]) {
+    if (!question) continue;
+    const key = question.id || `${question.conceptId || ""}:${question.question || ""}`;
+    map.set(key, question);
+  }
+  return [...map.values()];
+}
+
+function mergeAnalysisSources(existing = [], incoming = []) {
+  const map = new Map();
+  for (const source of existing || []) {
+    if (!source?.id) continue;
+    map.set(source.id, source);
+  }
+  for (const source of incoming || []) {
+    if (!source?.id) continue;
+    map.set(source.id, { ...(map.get(source.id) || {}), ...source });
+  }
+  return [...map.values()];
+}
+
+function mergeAnalysisModules(existing = [], incoming = []) {
+  const map = new Map();
+  for (const module of existing || []) {
+    if (!module?.id) continue;
+    map.set(module.id, module);
+  }
+  for (const module of incoming || []) {
+    if (!module?.id) {
+      continue;
+    }
+    const prev = map.get(module.id);
+    if (!prev) {
+      map.set(module.id, module);
+      continue;
+    }
+    const concepts = new Map();
+    for (const concept of [...(prev.concepts || []), ...(module.concepts || [])]) {
+      if (!concept) continue;
+      const key = concept.id || concept.title;
+      if (key) concepts.set(key, concept);
+    }
+    map.set(module.id, {
+      ...prev,
+      ...module,
+      concepts: [...concepts.values()]
+    });
+  }
+  return [...map.values()];
+}
 
 export function corpusFrom(sources) {
   const pages = sources.flatMap((source) =>
@@ -246,7 +302,7 @@ export function normalizeQuestions(questions, analysis) {
   });
 }
 
-export async function analyzeFiles({ files, userId, title, mode, projectId, storedFiles = [], checkpoint = {}, onCheckpoint = async () => {}, onProgress = () => {} }) {
+export async function analyzeFiles({ files, userId, title, mode, projectId, chapterId = null, storedFiles = [], checkpoint = {}, onCheckpoint = async () => {}, onProgress = () => {} }) {
     const sources = checkpoint.sources || [];
     if (!files.length) throw new Error("请至少上传一份学习资料");
     if (!sources.length) {
@@ -284,6 +340,7 @@ export async function analyzeFiles({ files, userId, title, mode, projectId, stor
             onePager: null
           }
     );
+    const resolvedChapterId = await resolveChapterId(projectId, userId, chapterId);
 
     const hierarchy = chunkSources(sources);
     const allChunks = hierarchy.chunks;
@@ -307,6 +364,7 @@ export async function analyzeFiles({ files, userId, title, mode, projectId, stor
         await saveDocument({
           projectId,
           userId,
+          chapterId: resolvedChapterId,
           source,
           file: files[sourceIndex],
           chunks: sourceChunks,
@@ -374,11 +432,13 @@ ${corpus}`
         updateDocumentInsights(source.id, source.summary, source.parseReport)
       )
     );
+    const existingAnalysis = existingProject?.analysis || {};
     const mergedAnalysis = {
       ...demo,
       ...result,
       documentSummaries,
-      sources: enrichedSources,
+      sources: mergeAnalysisSources(existingAnalysis.sources, enrichedSources),
+      modules: mergeAnalysisModules(existingAnalysis.modules, result.modules || demo.modules || []),
       projectId,
       retrieval: {
         chunks: allChunks.length,
@@ -390,7 +450,10 @@ ${corpus}`
     };
     const analysis = {
       ...mergedAnalysis,
-      questions: normalizeQuestions(result.questions, mergedAnalysis)
+      questions: mergeChapterQuestions(
+        existingAnalysis.questions,
+        normalizeQuestions(result.questions, mergedAnalysis)
+      )
     };
     await saveProject({
       ...(existingProject || {}),
@@ -406,9 +469,22 @@ ${corpus}`
       sessions: existingProject?.sessions || [],
       onePager: existingProject?.onePager || null
     });
+    if (resolvedChapterId) {
+      const chapter = await getChapter(resolvedChapterId, userId);
+      if (chapter) {
+        await saveChapter({
+          ...chapter,
+          analysis: {
+            ...(chapter.analysis || {}),
+            questions: mergeChapterQuestions(chapter.analysis?.questions, analysis.questions)
+          }
+        });
+      }
+    }
     await recordEvent(userId, projectId, "documents_indexed", {
       documents: enrichedSources.map(({ id, name, chunks }) => ({ id, name, chunks })),
-      chunks: allChunks.length
+      chunks: allChunks.length,
+      chapterId: resolvedChapterId
     });
     await onProgress({ percent: 100, stage: "completed", label: "资料解析完成" });
     return analysis;

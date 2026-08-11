@@ -71,3 +71,40 @@ export function testRerankerSettings(body) {
     body: JSON.stringify(body)
   });
 }
+
+export async function exportModelConfig() {
+  const response = await fetch("/api/settings/config/export", { credentials: "same-origin" });
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { error: text || "导出响应无法解析" };
+  }
+  if (!response.ok) throw new Error(data.error || `导出失败（HTTP ${response.status}）`);
+
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const matched = disposition.match(/filename="([^"]+)"/i);
+  const filename = matched?.[1] || `zhifan-model-config-${new Date().toISOString().slice(0, 10)}.json`;
+  return { payload: data, filename, text: `${JSON.stringify(data, null, 2)}\n` };
+}
+
+export function importModelConfig(payload) {
+  return apiFetch("/api/settings/config/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getPreferences() {
+  return apiFetch("/api/settings/preferences");
+}
+
+export function putPreferences(body) {
+  return apiFetch("/api/settings/preferences", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+}

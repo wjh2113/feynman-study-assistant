@@ -47,6 +47,8 @@ export async function answerRagQuery({ userId, projectId, query }) {
         rank: index + 1,
         id: item.id,
         documentId: item.documentId,
+        chapterId: item.chapterId || null,
+        chapterTitle: item.chapterTitle || null,
         filename: item.filename,
         page: item.page,
         pageEnd: item.pageEnd,
@@ -82,33 +84,42 @@ export async function answerRagQuery({ userId, projectId, query }) {
         {
           role: "system",
           content:
-            "你是基于个人资料库回答问题的学习助手。只能依据通过BGE精排的证据回答，禁止使用资料外知识补全。引用结论时标注[1][2]序号；证据不能支持问题时回答资料中没有找到。只输出合法JSON。"
+            "你是严格的资料问答助手。只能依据下方检索到的原文证据回答用户问题。禁止使用资料外知识、禁止补充资料未写明的内容、禁止答非所问、禁止自由发挥。若证据不足以直接回答，必须回答「资料中没有找到相关内容」。每条结论后用[1][2]标注对应证据编号。只输出合法 JSON。"
         },
         {
           role: "user",
           content: `问题：${query}
-检索片段：
-${sources.map((source, index) => `[${index + 1}] ${source.filename} 第${source.page}${source.pageEnd > source.page ? `-${source.pageEnd}` : ""}页 · ${source.headingPath || "未识别章节"}\n命中子块：${source.content}\n章节父块：${source.parentContent || source.content}`).join("\n\n")}
-返回 {"answer":"基于资料的回答，包含[1]式引用"}`
+
+以下是唯一允许使用的证据（按文件名与页码标注）：
+${sources.map((source, index) => `[${index + 1}] 文件名：${source.filename}
+页码：第${source.page}${source.pageEnd > source.page ? `-${source.pageEnd}` : ""}页
+位置：${source.headingPath || "未识别小节"}
+原文：${source.content}${source.parentContent && source.parentContent !== source.content ? `\n上下文：${source.parentContent}` : ""}`).join("\n\n")}
+
+返回 JSON：{"answer":"只根据上述原文作答；句子后标注[n]；无法作答时写「资料中没有找到相关内容」"}`
         }
-      ], 0.25, userId);
+      ], 0.1, userId);
       if (!result?.answer) throw new Error("文本模型没有返回有效的资料回答");
       answer = result.answer;
     } else {
-      answer = `（演示模式）这是资料中最相关的片段，来自《${sources[0].filename}》第 ${sources[0].page} 页：\n\n“${sources[0].content.slice(0, 240)}${sources[0].content.length > 240 ? "……" : ""}”\n\n配置 DeepSeek API Key 后，我会基于这些证据给出完整回答。`;
+      answer = `（演示模式）资料《${sources[0].filename}》第 ${sources[0].page} 页原文：\n\n“${sources[0].content.slice(0, 400)}${sources[0].content.length > 400 ? "……" : ""}”\n\n配置 API Key 后，将严格依据检索原文回答，不会扩展资料外内容。`;
     }
     await recordEvent(userId, projectId, "rag_query", { query, sourceIds: sources.map((source) => source.id) });
     return {
       body: {
         answer,
-        sources: sources.map(({ id, documentId, filename, page, pageEnd, headingPath, content, rerankScore, matchedKeywords }) => ({
+        sources: sources.map(({ id, documentId, chapterId, chapterTitle, filename, page, pageEnd, headingPath, content, parentContent, rerankScore, matchedKeywords }) => ({
           id,
           documentId,
+          chapterId: chapterId || null,
+          chapterTitle: chapterTitle || null,
           filename,
           page,
           pageEnd,
           headingPath,
-          quote: content.slice(0, 360),
+          quote: content,
+          content,
+          parentContent: parentContent && parentContent !== content ? parentContent : null,
           score: rerankScore,
           matchedKeywords
         })),

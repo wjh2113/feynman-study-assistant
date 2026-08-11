@@ -20,7 +20,16 @@ import { analyzeBackground } from "../../api/ingest.js";
 import { deleteDocument, reindexProject } from "../../api/projects.js";
 import { FileTypeIcon } from "./FileTypeIcon.jsx";
 
-export function Sources({ project, updateProject, navigate, showToast, onTaskStarted, analysisTask }) {
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+
+export function Sources({
+  project,
+  updateProject,
+  navigate,
+  showToast,
+  onTaskStarted,
+  analysisTask
+}) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [openSource, setOpenSource] = useState(null);
@@ -32,9 +41,27 @@ export function Sources({ project, updateProject, navigate, showToast, onTaskSta
   const hasPersistedSources = Number(project.documentCount || 0) > 0 || sources.some((source) => source.downloadUrl);
 
   const addFiles = (list) => {
-    const accepted = Array.from(list).filter((file) => /\.(pdf|docx|txt|md|markdown|png|jpe?g|webp)$/i.test(file.name));
-    setFiles((current) => [...current, ...accepted].slice(0, 12));
-    if (accepted.length !== list.length) showToast("支持 PDF、DOCX、TXT、Markdown、PNG、JPG 和 WebP");
+    const incoming = Array.from(list || []);
+    const accepted = [];
+    let rejectedType = 0;
+    const oversized = [];
+    for (const file of incoming) {
+      if (!/\.(pdf|docx|txt|md|markdown|png|jpe?g|webp)$/i.test(file.name)) {
+        rejectedType += 1;
+        continue;
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        oversized.push(file.name);
+        continue;
+      }
+      accepted.push(file);
+    }
+    if (accepted.length) setFiles((current) => [...current, ...accepted].slice(0, 12));
+    if (oversized.length) {
+      showToast(`单个文件不能超过 100 MB：${oversized.slice(0, 2).join("、")}${oversized.length > 2 ? " 等" : ""}`);
+    } else if (rejectedType) {
+      showToast("支持 PDF、DOCX、TXT、Markdown、PNG、JPG 和 WebP");
+    }
   };
 
   const analyze = async (overrideFiles) => {
@@ -44,6 +71,10 @@ export function Sources({ project, updateProject, navigate, showToast, onTaskSta
       return;
     }
     if (!selectedFiles.length) return showToast("请先添加至少一份学习资料");
+    const oversized = selectedFiles.filter((file) => file.size > MAX_UPLOAD_BYTES);
+    if (oversized.length) {
+      return showToast(`单个文件不能超过 100 MB：${oversized[0].name}${oversized.length > 1 ? " 等" : ""}`);
+    }
     if (analysisTask) return showToast("当前项目已有资料正在后台解析");
     setLoading(true);
     try {
@@ -102,12 +133,82 @@ export function Sources({ project, updateProject, navigate, showToast, onTaskSta
     }
   };
 
+  const renderSource = (source) => {
+    const expanded = openSource === source.id;
+    const report = source.parseReport || {};
+    const ocrLabel =
+      report.ocrStatus === "ready" ? `OCR ${report.imagesOcrd || 0} 张`
+        : report.ocrStatus === "not_configured" ? "OCR 待配置"
+          : report.ocrStatus === "partial" ? "OCR 部分完成" : "无需 OCR";
+    return (
+      <div className={`source-item ${expanded ? "expanded" : ""}`} key={source.id}>
+        <div className="file-row">
+          <FileTypeIcon name={source.name} />
+          <div className="file-copy"><strong>{source.name}</strong><span>{source.type} · {source.pages || 1} 页 {source.chunks ? `· ${source.chunks} 个检索分块` : ""} · {ocrLabel}</span></div>
+          <button className="parse-toggle" onClick={() => setOpenSource(expanded ? null : source.id)}>
+            {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+            {expanded ? "收起解析" : "查看解析"}
+          </button>
+          {source.downloadUrl ? (
+            <a className="icon-btn" href={source.downloadUrl} title="下载原始资料"><Download size={17} /></a>
+          ) : <button className="icon-btn"><MoreHorizontal size={18} /></button>}
+          {hasPersistedSources && <button
+            className="icon-btn source-delete-btn"
+            aria-label={`删除资料 ${source.name}`}
+            title="删除资料"
+            onClick={() => setDeleteSourceId(source.id)}
+          >
+            <Trash2 size={16} />
+          </button>}
+        </div>
+        {deleteSourceId === source.id && (
+          <div className="source-delete-confirm" role="alert">
+            <div>
+              <strong>确认删除“{source.name}”？</strong>
+              <span>原始文件、资料记录和对应的向量检索分块都会删除，此操作无法撤销。</span>
+            </div>
+            <button className="secondary-btn" onClick={() => setDeleteSourceId(null)} disabled={deletingSourceId === source.id}>取消</button>
+            <button className="danger-btn" onClick={() => deleteSource(source)} disabled={deletingSourceId === source.id}>
+              {deletingSourceId === source.id ? <Spinner /> : <Trash2 size={15} />}
+              {deletingSourceId === source.id ? "正在删除…" : "确认删除"}
+            </button>
+          </div>
+        )}
+        {expanded && (
+          <div className="parse-detail">
+            <div className="parse-summary">
+              <span className="section-kicker">本资料总结</span>
+              <h3>{source.summary?.summary || "尚未生成总结"}</h3>
+              {!!source.summary?.keyPoints?.length && (
+                <ul>{source.summary.keyPoints.map((point, index) => <li key={index}>{point}</li>)}</ul>
+              )}
+              <p className="verification-note">{source.summary?.verificationNote}</p>
+            </div>
+            <div className="parse-stats">
+              <span>原生文本 <b>{report.nativeCharacters || 0}</b> 字</span>
+              <span>OCR 文本 <b>{report.ocrCharacters || 0}</b> 字</span>
+              <span>检测图片 <b>{report.imagesFound || 0}</b> 张</span>
+              <span>已 OCR <b>{report.imagesOcrd || 0}</b> 张</span>
+            </div>
+            {!!report.warnings?.length && (
+              <div className="parse-warning"><CircleAlert size={15} /><div>{report.warnings.map((warning) => <p key={warning}>{warning}</p>)}</div></div>
+            )}
+            <div className="parsed-preview">
+              <span className="section-kicker">解析原文预览（用于核对）</span>
+              <pre>{source.parsedPreview || "没有提取到可预览的文字。"}</pre>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <>
       <PageHeading
         eyebrow="第一步 · 构建专属语料库"
-        title="学习资料"
-        description="解析完成后先核对每份资料的总结、关键点和原文预览，再进入知识地图。"
+        title="学科资料"
+        description="上传课件与笔记。解析完成后先核对每份资料的总结、关键点和原文预览，再进入知识地图；练习时再勾选要使用的资料。"
         action={<button className="primary-btn" onClick={analyze} disabled={loading}>{loading ? <Spinner /> : <Sparkles size={17} />}{loading ? "正在提炼…" : files.length ? `分析 ${files.length} 份新资料` : "查看知识地图"}</button>}
       />
 
@@ -120,7 +221,7 @@ export function Sources({ project, updateProject, navigate, showToast, onTaskSta
         <input ref={fileInput} type="file" multiple accept=".pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg,.webp" onChange={(event) => addFiles(event.target.files)} />
         <div className="upload-icon"><UploadCloud size={28} /></div>
         <h3>拖入学习资料，或点击选择文件</h3>
-        <p>支持 PDF、DOCX、TXT、Markdown、PNG、JPG、WebP · 单个文件不超过 30 MB</p>
+        <p>支持 PDF、DOCX、TXT、Markdown、PNG、JPG、WebP · 单个文件不超过 100 MB</p>
         <div className="upload-hint"><Zap size={14} /> PDF 扫描页、文档截图和单独图片会进入 OCR 识别流程</div>
       </div>
 
@@ -170,75 +271,7 @@ export function Sources({ project, updateProject, navigate, showToast, onTaskSta
             <button className="filter-btn">全部类型 <ChevronDown size={14} /></button>
           </div>
         </div>
-        {sources.map((source) => {
-          const expanded = openSource === source.id;
-          const report = source.parseReport || {};
-          const ocrLabel =
-            report.ocrStatus === "ready" ? `OCR ${report.imagesOcrd || 0} 张`
-              : report.ocrStatus === "not_configured" ? "OCR 待配置"
-                : report.ocrStatus === "partial" ? "OCR 部分完成" : "无需 OCR";
-          return (
-            <div className={`source-item ${expanded ? "expanded" : ""}`} key={source.id}>
-              <div className="file-row">
-                <FileTypeIcon name={source.name} />
-                <div className="file-copy"><strong>{source.name}</strong><span>{source.type} · {source.pages || 1} 页 {source.chunks ? `· ${source.chunks} 个检索分块` : ""} · {ocrLabel}</span></div>
-                <button className="parse-toggle" onClick={() => setOpenSource(expanded ? null : source.id)}>
-                  {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                  {expanded ? "收起解析" : "查看解析"}
-                </button>
-                {source.downloadUrl ? (
-                  <a className="icon-btn" href={source.downloadUrl} title="下载原始资料"><Download size={17} /></a>
-                ) : <button className="icon-btn"><MoreHorizontal size={18} /></button>}
-                {hasPersistedSources && <button
-                  className="icon-btn source-delete-btn"
-                  aria-label={`删除资料 ${source.name}`}
-                  title="删除资料"
-                  onClick={() => setDeleteSourceId(source.id)}
-                >
-                  <Trash2 size={16} />
-                </button>}
-              </div>
-              {deleteSourceId === source.id && (
-                <div className="source-delete-confirm" role="alert">
-                  <div>
-                    <strong>确认删除“{source.name}”？</strong>
-                    <span>原始文件、资料记录和对应的向量检索分块都会删除，此操作无法撤销。</span>
-                  </div>
-                  <button className="secondary-btn" onClick={() => setDeleteSourceId(null)} disabled={deletingSourceId === source.id}>取消</button>
-                  <button className="danger-btn" onClick={() => deleteSource(source)} disabled={deletingSourceId === source.id}>
-                    {deletingSourceId === source.id ? <Spinner /> : <Trash2 size={15} />}
-                    {deletingSourceId === source.id ? "正在删除…" : "确认删除"}
-                  </button>
-                </div>
-              )}
-              {expanded && (
-                <div className="parse-detail">
-                  <div className="parse-summary">
-                    <span className="section-kicker">本资料总结</span>
-                    <h3>{source.summary?.summary || "尚未生成总结"}</h3>
-                    {!!source.summary?.keyPoints?.length && (
-                      <ul>{source.summary.keyPoints.map((point, index) => <li key={index}>{point}</li>)}</ul>
-                    )}
-                    <p className="verification-note">{source.summary?.verificationNote}</p>
-                  </div>
-                  <div className="parse-stats">
-                    <span>原生文本 <b>{report.nativeCharacters || 0}</b> 字</span>
-                    <span>OCR 文本 <b>{report.ocrCharacters || 0}</b> 字</span>
-                    <span>检测图片 <b>{report.imagesFound || 0}</b> 张</span>
-                    <span>已 OCR <b>{report.imagesOcrd || 0}</b> 张</span>
-                  </div>
-                  {!!report.warnings?.length && (
-                    <div className="parse-warning"><CircleAlert size={15} /><div>{report.warnings.map((warning) => <p key={warning}>{warning}</p>)}</div></div>
-                  )}
-                  <div className="parsed-preview">
-                    <span className="section-kicker">解析原文预览（用于核对）</span>
-                    <pre>{source.parsedPreview || "没有提取到可预览的文字。"}</pre>
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {sources.map(renderSource)}
         {!sources.length && <EmptyMini text="还没有已解析的资料。" />}
       </section>
     </>

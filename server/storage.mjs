@@ -193,6 +193,110 @@ export async function projectBelongsToUser(projectId, userId) {
   return result.rows.length > 0;
 }
 
+function rowToChapter(row) {
+  const state = safeJson(row.state, {});
+  return {
+    ...state,
+    id: row.id,
+    projectId: row.project_id,
+    userId: row.user_id,
+    title: row.title || state.title || "未命名章节",
+    sortOrder: Number(row.sort_order ?? state.sortOrder ?? 0),
+    createdAt: state.createdAt || new Date(row.created_at).getTime(),
+    updatedAt: new Date(row.updated_at).getTime()
+  };
+}
+
+export async function listChapters(projectId, userId) {
+  const db = await getDatabase();
+  const result = await db.query(
+    "SELECT * FROM chapters WHERE project_id = $1 AND user_id = $2 ORDER BY sort_order ASC, created_at ASC",
+    [projectId, userId]
+  );
+  return result.rows.map(rowToChapter);
+}
+
+export async function getChapter(chapterId, userId) {
+  const db = await getDatabase();
+  const result = await db.query("SELECT * FROM chapters WHERE id = $1 AND user_id = $2", [chapterId, userId]);
+  return result.rows[0] ? rowToChapter(result.rows[0]) : null;
+}
+
+export async function saveChapter(chapter) {
+  if (!chapter?.id) throw new Error("章节缺少 id");
+  if (!chapter?.projectId) throw new Error("章节缺少 projectId");
+  if (!chapter?.userId) throw new Error("章节缺少 userId");
+  const db = await getDatabase();
+  const payload = {
+    ...chapter,
+    id: chapter.id,
+    projectId: chapter.projectId,
+    userId: chapter.userId,
+    title: chapter.title || "未命名章节",
+    sortOrder: Number(chapter.sortOrder || 0),
+    updatedAt: Date.now()
+  };
+  const result = await db.query(
+    `INSERT INTO chapters(id, project_id, user_id, title, sort_order, state, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, TO_TIMESTAMP($7 / 1000.0), NOW())
+     ON CONFLICT(id) DO UPDATE SET
+       title = EXCLUDED.title,
+       sort_order = EXCLUDED.sort_order,
+       state = EXCLUDED.state,
+       updated_at = NOW()
+     WHERE chapters.user_id = EXCLUDED.user_id AND chapters.project_id = EXCLUDED.project_id
+     RETURNING id`,
+    [
+      payload.id,
+      payload.projectId,
+      payload.userId,
+      payload.title,
+      payload.sortOrder,
+      JSON.stringify(payload),
+      Number(payload.createdAt || Date.now())
+    ]
+  );
+  if (!result.rows.length) throw new Error("章节不存在或不属于当前用户");
+  return payload;
+}
+
+export async function deleteChapter(chapterId, userId) {
+  const db = await getDatabase();
+  await db.query("DELETE FROM chapters WHERE id = $1 AND user_id = $2", [chapterId, userId]);
+}
+
+export async function ensureDefaultChapter(projectId, userId) {
+  const existing = await listChapters(projectId, userId);
+  if (existing.length) {
+    return existing.find((item) => item.title === "默认章节") || existing[0];
+  }
+  if (!(await projectBelongsToUser(projectId, userId))) {
+    throw new Error("学习项目不存在或不属于当前用户");
+  }
+  const now = Date.now();
+  return saveChapter({
+    id: randomUUID(),
+    projectId,
+    userId,
+    title: "默认章节",
+    sortOrder: 0,
+    blindspots: [],
+    sessions: [],
+    onePager: null,
+    analysis: {},
+    createdAt: now
+  });
+}
+
+export async function resolveChapterId(projectId, userId, chapterId) {
+  if (chapterId) {
+    const chapter = await getChapter(chapterId, userId);
+    if (chapter && chapter.projectId === projectId) return chapter.id;
+  }
+  const fallback = await ensureDefaultChapter(projectId, userId);
+  return fallback.id;
+}
+
 function sanitizeFilename(filename) {
   const cleaned = Array.from(String(filename || "document"), (ch) => {
     const code = ch.charCodeAt(0);
@@ -220,7 +324,7 @@ function vectorLiteral(vectorValue) {
   return `[${vectorValue.map((value) => Number(value).toFixed(8)).join(",")}]`;
 }
 
-export async function saveDocument({ projectId, userId, source, file, chunks, embeddings, stored: existingStored }) {
+export async function saveDocument({ projectId, userId, chapterId = null, source, file, chunks, embeddings, stored: existingStored }) {
   const db = await getDatabase();
   const documentId = source.documentKey || randomUUID();
   const stored = existingStored || await persistOriginalFile(projectId, file);
@@ -228,10 +332,11 @@ export async function saveDocument({ projectId, userId, source, file, chunks, em
   await db.query("DELETE FROM document_chunks WHERE document_id = $1 AND project_id = $2", [documentId, projectId]);
   await db.query(
     `INSERT INTO documents(
-       id, user_id, project_id, filename, stored_name, storage_path, mime_type,
+       id, user_id, project_id, chapter_id, filename, stored_name, storage_path, mime_type,
        file_type, byte_size, page_count, chunk_count, summary, parse_report
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb)
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb)
      ON CONFLICT(id) DO UPDATE SET
+       chapter_id=EXCLUDED.chapter_id,
        filename=EXCLUDED.filename, stored_name=EXCLUDED.stored_name, storage_path=EXCLUDED.storage_path,
        mime_type=EXCLUDED.mime_type, file_type=EXCLUDED.file_type, byte_size=EXCLUDED.byte_size,
        page_count=EXCLUDED.page_count, chunk_count=EXCLUDED.chunk_count,
@@ -240,6 +345,7 @@ export async function saveDocument({ projectId, userId, source, file, chunks, em
       documentId,
       userId,
       projectId,
+      chapterId || null,
       source.filename,
       stored.storedName,
       stored.storagePath,
@@ -257,14 +363,15 @@ export async function saveDocument({ projectId, userId, source, file, chunks, em
     const chunk = chunks[index];
     await db.query(
       `INSERT INTO document_chunks(
-         id, user_id, document_id, project_id, page_number, page_end, chunk_index,
+         id, user_id, document_id, project_id, chapter_id, page_number, page_end, chunk_index,
          parent_id, parent_content, heading_path, content, search_tokens, embedding, metadata
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::vector,$14::jsonb)`,
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::vector,$15::jsonb)`,
       [
         randomUUID(),
         userId,
         documentId,
         projectId,
+        chapterId || null,
         chunk.page,
         chunk.pageEnd || chunk.page,
         chunk.chunkIndex,
@@ -287,6 +394,7 @@ export async function saveDocument({ projectId, userId, source, file, chunks, em
     chunks: chunks.length,
     size: Number(file.size || file.buffer.length),
     status: "ready",
+    chapterId: chapterId || null,
     downloadUrl: `/api/documents/${documentId}/file`,
     summary: source.summary || {},
     parseReport: source.parseReport || {},
@@ -325,16 +433,17 @@ export async function listDocumentsForProject(projectId, userId) {
 
 export async function replaceDocumentIndex({ projectId, userId, document, source, chunks, embeddings }) {
   const db = await getDatabase();
+  const chapterId = document.chapter_id || document.chapterId || null;
   await db.query("DELETE FROM document_chunks WHERE document_id = $1 AND project_id = $2", [document.id, projectId]);
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
     await db.query(
       `INSERT INTO document_chunks(
-         id, user_id, document_id, project_id, page_number, page_end, chunk_index,
+         id, user_id, document_id, project_id, chapter_id, page_number, page_end, chunk_index,
          parent_id, parent_content, heading_path, content, search_tokens, embedding, metadata
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::vector,$14::jsonb)`,
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::vector,$15::jsonb)`,
       [
-        randomUUID(), userId, document.id, projectId, chunk.page, chunk.pageEnd || chunk.page,
+        randomUUID(), userId, document.id, projectId, chapterId, chunk.page, chunk.pageEnd || chunk.page,
         chunk.chunkIndex, chunk.parentId, chunk.parentContent, chunk.headingPath,
         chunk.content, chunk.searchTokens, vectorLiteral(embeddings[index]),
         JSON.stringify({ filename: document.filename, type: source.type, chunking: "semantic-parent-child-v1" })
@@ -468,16 +577,34 @@ export async function saveUserAppSetting(userId, key, value) {
   return value;
 }
 
+function normalizeDocumentIds(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((id) => String(id || "").trim()).filter(Boolean))];
+}
+
+function documentIdsOverlap(left = [], right = []) {
+  if (!Array.isArray(left) || !Array.isArray(right) || !right.length) return false;
+  const selected = new Set(right.map(String));
+  return left.some((id) => selected.has(String(id)));
+}
+
 export async function saveCoachSession(session) {
   const db = await getDatabase();
   if (!session?.id || !session.projectId) throw new Error("会话缺少 id 或 projectId");
+  const documentIds = normalizeDocumentIds(session.documentIds);
+  const hasDocumentIds = Array.isArray(session.documentIds);
   const result = await db.query(
     `INSERT INTO coach_sessions(
-       id, user_id, project_id, concept_id, concept, question_id, question,
-       messages, evaluations, score, status, created_at, updated_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,TO_TIMESTAMP($12 / 1000.0),NOW())
+       id, user_id, project_id, chapter_id, document_ids, concept_id, concept, question_id, question,
+       messages, evaluations, score, status, meta, created_at, updated_at
+     ) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14::jsonb,TO_TIMESTAMP($15 / 1000.0),NOW())
      ON CONFLICT(id) DO UPDATE SET
        user_id = EXCLUDED.user_id,
+       chapter_id = COALESCE(EXCLUDED.chapter_id, coach_sessions.chapter_id),
+       document_ids = CASE
+         WHEN $16::boolean THEN EXCLUDED.document_ids
+         ELSE coach_sessions.document_ids
+       END,
        concept_id = EXCLUDED.concept_id,
        concept = EXCLUDED.concept,
        question_id = EXCLUDED.question_id,
@@ -486,6 +613,7 @@ export async function saveCoachSession(session) {
        evaluations = EXCLUDED.evaluations,
        score = EXCLUDED.score,
        status = EXCLUDED.status,
+       meta = EXCLUDED.meta,
        updated_at = NOW()
      WHERE coach_sessions.user_id = EXCLUDED.user_id
      RETURNING id`,
@@ -493,6 +621,8 @@ export async function saveCoachSession(session) {
       session.id,
       session.userId,
       session.projectId,
+      session.chapterId || null,
+      JSON.stringify(documentIds),
       session.conceptId || null,
       session.concept || null,
       session.questionId || null,
@@ -501,11 +631,13 @@ export async function saveCoachSession(session) {
       JSON.stringify(session.evaluations || []),
       session.score ?? null,
       session.status || null,
-      Number(session.createdAt || Date.now())
+      JSON.stringify(session.meta || {}),
+      Number(session.createdAt || Date.now()),
+      hasDocumentIds
     ]
   );
   if (!result.rows.length) throw new Error("会话不存在或不属于当前用户");
-  return session;
+  return { ...session, documentIds };
 }
 
 export async function getCoachSession(sessionId) {
@@ -515,13 +647,25 @@ export async function getCoachSession(sessionId) {
   return rowToCoachSession(result.rows[0]);
 }
 
-export async function listCoachSessions(projectId, userId) {
+export async function listCoachSessions(projectId, userId, { chapterId, documentIds } = {}) {
   const db = await getDatabase();
-  const result = await db.query(
-    "SELECT * FROM coach_sessions WHERE project_id = $1 AND user_id = $2 ORDER BY updated_at DESC",
-    [projectId, userId]
-  );
-  return result.rows.map(rowToCoachSession);
+  const result = chapterId
+    ? await db.query(
+        "SELECT * FROM coach_sessions WHERE project_id = $1 AND user_id = $2 AND chapter_id = $3 ORDER BY updated_at DESC",
+        [projectId, userId, chapterId]
+      )
+    : await db.query(
+        "SELECT * FROM coach_sessions WHERE project_id = $1 AND user_id = $2 ORDER BY updated_at DESC",
+        [projectId, userId]
+      );
+  const sessions = result.rows.map(rowToCoachSession);
+  const filterIds = normalizeDocumentIds(documentIds);
+  if (!filterIds.length) return sessions;
+  return sessions.filter((session) => {
+    const fromColumn = normalizeDocumentIds(session.documentIds);
+    const fromMeta = normalizeDocumentIds(session.meta?.practiceDocumentIds);
+    return documentIdsOverlap(fromColumn, filterIds) || documentIdsOverlap(fromMeta, filterIds);
+  });
 }
 
 function rowToCoachSession(row) {
@@ -529,6 +673,8 @@ function rowToCoachSession(row) {
     id: row.id,
     userId: row.user_id,
     projectId: row.project_id,
+    chapterId: row.chapter_id || null,
+    documentIds: normalizeDocumentIds(safeJson(row.document_ids, [])),
     conceptId: row.concept_id,
     concept: row.concept,
     questionId: row.question_id,
@@ -537,6 +683,7 @@ function rowToCoachSession(row) {
     evaluations: safeJson(row.evaluations, []),
     score: row.score,
     status: row.status,
+    meta: safeJson(row.meta, {}),
     createdAt: new Date(row.created_at).getTime(),
     updatedAt: new Date(row.updated_at).getTime()
   };

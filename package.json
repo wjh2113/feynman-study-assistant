@@ -14,7 +14,9 @@
     "test:integration": "node --test --test-concurrency=1 tests/*.integration.mjs",
     "check": "npm run lint && npm run test && npm run build",
     "start": "node server.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "config:export": "node scripts/export-model-config.mjs",
+    "config:import": "node scripts/import-model-config.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1106.0",

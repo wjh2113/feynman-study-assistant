@@ -17,10 +17,28 @@ import { rateLimit } from "../middleware/security.mjs";
 import { analyzeFiles, enqueueAnalysis } from "../services/analyze.mjs";
 import { reindexProject } from "../services/reindex.mjs";
 
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 30 * 1024 * 1024, files: 12 }
+  limits: { fileSize: MAX_UPLOAD_BYTES, files: 12 }
 });
+
+function uploadAnalyzeFiles(req, res, next) {
+  upload.array("files", 12)(req, res, (error) => {
+    if (!error) return next();
+    if (error instanceof multer.MulterError) {
+      if (error.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ error: "单个文件不能超过 100 MB，请压缩或拆分后再上传" });
+      }
+      if (error.code === "LIMIT_FILE_COUNT") {
+        return res.status(400).json({ error: "一次最多上传 12 个文件" });
+      }
+      return res.status(400).json({ error: `上传失败：${error.message}` });
+    }
+    return res.status(400).json({ error: error.message || "上传失败" });
+  });
+}
 
 const router = Router();
 
@@ -45,7 +63,7 @@ router.get("/api/tasks/:taskId", async (req, res) => {
   res.json({ task });
 });
 
-router.post("/api/analyze", rateLimit({ windowMs: 60_000, max: 12, keyPrefix: "analyze" }), upload.array("files", 12), async (req, res) => {
+router.post("/api/analyze", rateLimit({ windowMs: 60_000, max: 12, keyPrefix: "analyze" }), uploadAnalyzeFiles, async (req, res) => {
   try {
     const files = req.files || [];
     if (!files.length) return res.status(400).json({ error: "请至少上传一份学习资料" });
@@ -54,7 +72,8 @@ router.post("/api/analyze", rateLimit({ windowMs: 60_000, max: 12, keyPrefix: "a
       userId: req.userId,
       title: req.body.title || "新的学习项目",
       mode: req.body.mode || "course",
-      projectId: req.body.projectId || `project-${Date.now()}`
+      projectId: req.body.projectId || `project-${Date.now()}`,
+      chapterId: req.body.chapterId || null
     };
     if (req.query.background === "true") {
       const existingProject = await getProject(input.projectId, input.userId);
@@ -71,7 +90,15 @@ router.post("/api/analyze", rateLimit({ windowMs: 60_000, max: 12, keyPrefix: "a
         stored: persisted[index],
         documentKey: randomUUID()
       }));
-      const payload = { ingestionId, projectId: input.projectId, userId: input.userId, title: input.title, mode: input.mode, files: jobFiles };
+      const payload = {
+        ingestionId,
+        projectId: input.projectId,
+        userId: input.userId,
+        title: input.title,
+        mode: input.mode,
+        chapterId: input.chapterId,
+        files: jobFiles
+      };
       await createIngestionJob({ id: ingestionId, userId: input.userId, projectId: input.projectId, payload });
       const job = await enqueueAnalysis(payload);
       return res.status(202).json({ task: job, ingestionId });

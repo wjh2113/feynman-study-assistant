@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
@@ -41,12 +41,13 @@ async function createDatabase() {
       throw new Error("云模式生产环境禁止使用嵌入式 PGlite，请配置 DATABASE_URL；单机部署请设置 DEPLOY_MODE=standalone");
     }
     await mkdir(path.dirname(embeddedDbDir), { recursive: true });
+    // Stale lock left by a crashed Node process can block reopen.
+    await rm(path.join(embeddedDbDir, "postmaster.pid"), { force: true });
+    // Pass a real filesystem path (not file://). On Windows, path.resolve(fileURL)
+    // mangles drive letters and %20-encoded spaces.
     const embedded = process.env.PGLITE_MEMORY === "true"
       ? await PGlite.create({ extensions: { vector } })
-      : await PGlite.create(
-          `file://${path.relative(process.cwd(), embeddedDbDir).replace(/\\/g, "/")}`,
-          { extensions: { vector } }
-        );
+      : await PGlite.create(embeddedDbDir, { extensions: { vector } });
     db = adapterFor(embedded, "pglite");
   }
 

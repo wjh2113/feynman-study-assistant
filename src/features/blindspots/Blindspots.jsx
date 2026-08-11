@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { PageHeading } from "../../components/PageHeading.jsx";
 import { StatCard } from "../../components/StatCard.jsx";
 import { StatusTag } from "../../components/StatusTag.jsx";
+import { EmptyMini } from "../../components/EmptyMini.jsx";
 import {
   ArrowRight,
   Check,
@@ -13,14 +14,22 @@ import {
 } from "../../components/icons.jsx";
 import { variantQuestion } from "../../api/projects.js";
 
-export function Blindspots({ project, updateProject, showToast, navigate }) {
-  const blindspots = project.blindspots || [];
+function overlapsSelection(item, selectedDocumentIds = []) {
+  const ids = Array.isArray(item?.documentIds) ? item.documentIds : [];
+  if (!ids.length) return true;
+  return ids.some((id) => selectedDocumentIds.includes(id));
+}
+
+export function Blindspots({ project, selectedDocumentIds = [], updateProject, showToast, navigate }) {
+  const blindspots = (project.blindspots || []).filter((item) => overlapsSelection(item, selectedDocumentIds));
   const [filter, setFilter] = useState("all");
   const visible = blindspots.filter((item) => filter === "all" || item.status === filter);
 
+  if (!selectedDocumentIds.length) return <EmptyMini text="请先在上方勾选要练习的资料" />;
+
   const setStatus = (id, status) => {
     updateProject({
-      blindspots: blindspots.map((item) => item.id === id ? { ...item, status } : item)
+      blindspots: (project.blindspots || []).map((item) => item.id === id ? { ...item, status } : item)
     });
     showToast(status === "done" ? "盲区已通过复测" : "已加入复测队列");
   };
@@ -30,7 +39,7 @@ export function Blindspots({ project, updateProject, showToast, navigate }) {
       ?.flatMap((module) => module.concepts)
       .find((item) => item.title === blind.concept);
     try {
-      const data = await variantQuestion(project.id, blind.id);
+      const data = await variantQuestion(project.id, blind.id, { documentIds: selectedDocumentIds });
       sessionStorage.setItem("zhifan-selected-concept", JSON.stringify({
         isVariant: true,
         blindspotId: blind.id,
@@ -47,7 +56,11 @@ export function Blindspots({ project, updateProject, showToast, navigate }) {
 
   return (
     <>
-      <PageHeading eyebrow="第四步 · 哪里不会补哪里" title="盲区与复测" description="每个被问住的地方，都是下一次能力提升最短的路径。" />
+      <PageHeading
+        eyebrow="第四步 · 哪里不会补哪里"
+        title="盲区与复测"
+        description="基于已选练习资料：每个被问住的地方，都是下一次能力提升最短的路径。"
+      />
       <div className="blind-stats">
         <StatCard icon={CircleAlert} label="待补漏" value={blindspots.filter((x) => x.status === "open").length} tone="red" />
         <StatCard icon={RotateCcw} label="待复测" value={blindspots.filter((x) => x.status === "review").length} tone="amber" />

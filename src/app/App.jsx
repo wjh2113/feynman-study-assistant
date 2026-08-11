@@ -1,24 +1,30 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ConfirmDialog } from "../components/ConfirmDialog.jsx";
 import { CreateProjectModal } from "../components/CreateProjectModal.jsx";
+import { PracticeDocumentPicker } from "../components/PracticeDocumentPicker.jsx";
 import { Spinner } from "../components/Spinner.jsx";
 import {
+  Bell,
   BrainCircuit,
   Check,
   ChevronDown,
   ChevronRight,
-  CircleAlert,
+  LogOut,
   Menu,
   Plus,
   Search,
-  Settings,
   Sparkles,
   X
 } from "../components/icons.jsx";
 import { demoProject } from "../lib/demoProject.js";
 import { withCurrentDemoContent } from "../lib/demoHelpers.js";
-import { navItems } from "../lib/nav.js";
+import { subjectNavItems, practiceNavItems } from "../lib/nav.js";
 import { recalculateMasteryAndProgress } from "../lib/progress.mjs";
-import { getProject, listProjects, putProject } from "../api/projects.js";
+import {
+  getProject,
+  listProjects,
+  putProject
+} from "../api/projects.js";
 import { getIngestion, listIngestions, retryIngestion as retryIngestionApi } from "../api/ingest.js";
 import { useAuth } from "../features/auth/useAuth.js";
 import { AuthPage } from "../features/auth/AuthPage.jsx";
@@ -29,14 +35,30 @@ import { RagAssistant } from "../features/rag/RagAssistant.jsx";
 import { Coach } from "../features/coach/Coach.jsx";
 import { Blindspots } from "../features/blindspots/Blindspots.jsx";
 import { OutputStudio } from "../features/output/OutputStudio.jsx";
-import { ModelSettingsPage } from "../features/settings/ModelSettingsPage.jsx";
+import { PreferencesPage } from "../features/preferences/PreferencesPage.jsx";
+
+function sourceIdsFromProject(project) {
+  return (project?.analysis?.sources || []).map((source) => source.id).filter(Boolean);
+}
+
+function initialDocumentIds(project) {
+  if (!project) return [];
+  if (Array.isArray(project.practiceDocumentIds) && project.practiceDocumentIds.length) {
+    const available = new Set(sourceIdsFromProject(project));
+    const kept = project.practiceDocumentIds.filter((id) => available.has(id));
+    if (kept.length) return kept;
+  }
+  return sourceIdsFromProject(project);
+}
 
 export function App() {
   const { user, loading: authLoading, login, register, logout } = useAuth();
   const [projects, setProjects] = useState([]);
   const [activeProjectId, setActiveProjectId] = useState(null);
+  const [selectedDocumentIds, setSelectedDocumentIdsState] = useState([]);
   const [activeView, setActiveView] = useState("overview");
   const [createOpen, setCreateOpen] = useState(false);
+  const [logoutOpen, setLogoutOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [persistenceReady, setPersistenceReady] = useState(false);
@@ -55,6 +77,7 @@ export function App() {
   analysisTasksRef.current = analysisTasks;
 
   const project = projects.find((item) => item.id === activeProjectId) || projects[0];
+  const practiceViews = useMemo(() => new Set(["coach", "blindspots", "output"]), []);
 
   const showToast = useCallback((message) => {
     setToast(message);
@@ -78,6 +101,7 @@ export function App() {
     if (!user) {
       setProjects([]);
       setActiveProjectId(null);
+      setSelectedDocumentIdsState([]);
       setPersistenceReady(false);
       dirtyProjectIdsRef.current.clear();
       finalizedTaskIdsRef.current.clear();
@@ -112,6 +136,24 @@ export function App() {
   }, [user, showToast]);
 
   useEffect(() => {
+    setSelectedDocumentIdsState(initialDocumentIds(project));
+  }, [project?.id]);
+
+  useEffect(() => {
+    if (!project) return;
+    const available = new Set(sourceIdsFromProject(project));
+    setSelectedDocumentIdsState((current) => {
+      const kept = (current || []).filter((id) => available.has(id));
+      if (kept.length) return kept;
+      if (Array.isArray(project.practiceDocumentIds) && project.practiceDocumentIds.length) {
+        const fromProject = project.practiceDocumentIds.filter((id) => available.has(id));
+        if (fromProject.length) return fromProject;
+      }
+      return [...available];
+    });
+  }, [project?.analysis?.sources]);
+
+  useEffect(() => {
     if (!persistenceReady || !user) return undefined;
     const timer = window.setTimeout(() => {
       const dirtyIds = [...dirtyProjectIdsRef.current];
@@ -142,6 +184,12 @@ export function App() {
         return recalculateMasteryAndProgress(merged);
       })
     );
+  };
+
+  const setSelectedDocumentIds = (nextIds) => {
+    const normalized = Array.isArray(nextIds) ? [...new Set(nextIds.filter(Boolean))] : [];
+    setSelectedDocumentIdsState(normalized);
+    updateProject({ practiceDocumentIds: normalized });
   };
 
   const trackAnalysisTask = (task, projectId, filenames, ingestionId) => {
@@ -250,7 +298,7 @@ export function App() {
       return () => { cancelled = true; window.clearInterval(timer); };
     }
     return () => { cancelled = true; };
-  }, [analysisTasks.length, user, notify]);
+  }, [analysisTasks.length, user, notify, activeProjectId]);
 
   const retryIngestion = async (notification) => {
     const action = notification.action;
@@ -270,19 +318,32 @@ export function App() {
     setSidebarOpen(false);
   };
 
-  const handleCreate = (newProject) => {
-    markDirty(newProject.id);
-    setProjects((items) => [newProject, ...items]);
-    setActiveProjectId(newProject.id);
-    setActiveView("sources");
-    setCreateOpen(false);
-    showToast("学习项目已创建，上传资料开始第一步");
+  const handleCreate = async (newProject) => {
+    try {
+      await putProject(newProject.id, newProject);
+      setProjects((items) => [newProject, ...items]);
+      setActiveProjectId(newProject.id);
+      setSelectedDocumentIdsState([]);
+      setActiveView("sources");
+      setCreateOpen(false);
+      showToast("学科已创建");
+    } catch (error) {
+      showToast(error.message || "创建学科失败");
+    }
   };
 
   const handleLogout = async () => {
+    setLogoutOpen(false);
     await logout();
     showToast("已退出登录");
   };
+
+  const openBlindCount = (project?.blindspots || []).filter((item) => {
+    if (item.status === "done") return false;
+    const ids = Array.isArray(item.documentIds) ? item.documentIds : [];
+    if (!ids.length) return true;
+    return ids.some((id) => selectedDocumentIds.includes(id));
+  }).length;
 
   if (authLoading) {
     return (
@@ -315,10 +376,10 @@ export function App() {
         </div>
 
         <button className="new-project-btn" onClick={() => setCreateOpen(true)}>
-          <Plus size={17} /> 新建学习项目
+          <Plus size={17} /> 新建学科
         </button>
 
-        <div className="sidebar-label">当前项目</div>
+        <div className="sidebar-label">当前学科</div>
         <div className="project-switcher">
           <div className="project-glyph">{project?.title?.slice(0, 1) || "?"}</div>
           <div className="project-switcher-copy">
@@ -328,7 +389,7 @@ export function App() {
           <ChevronDown size={15} />
           <select
             className="project-native-select"
-            aria-label="切换学习项目"
+            aria-label="切换学科"
             value={activeProjectId || ""}
             onChange={(event) => {
               setActiveProjectId(event.target.value);
@@ -340,24 +401,35 @@ export function App() {
         </div>
 
         <nav className="main-nav">
-          {navItems.map(({ id, label, icon: Icon }) => (
+          <div className="nav-group-label">学科</div>
+          {subjectNavItems.map(({ id, label, icon: Icon }) => (
             <button key={id} className={activeView === id ? "active" : ""} onClick={() => changeView(id)}>
               <Icon size={18} strokeWidth={1.9} />
               <span>{label}</span>
-              {id === "blindspots" && project?.blindspots?.filter((x) => x.status !== "done").length > 0 && (
-                <em>{project.blindspots.filter((x) => x.status !== "done").length}</em>
-              )}
+            </button>
+          ))}
+          <div className="nav-group-label">练习（选资料后）</div>
+          {practiceNavItems.map(({ id, label, icon: Icon }) => (
+            <button key={id} className={activeView === id ? "active" : ""} onClick={() => changeView(id)}>
+              <Icon size={18} strokeWidth={1.9} />
+              <span>{label}</span>
+              {id === "blindspots" && openBlindCount > 0 && <em>{openBlindCount}</em>}
             </button>
           ))}
         </nav>
 
         <div className="sidebar-foot">
           <div className="model-chip"><Sparkles size={14} /> DeepSeek V4 Pro</div>
-          <button className={activeView === "settings" ? "active" : ""} onClick={() => changeView("settings")}><Settings size={17} /> 模型设置</button>
-          <div className="profile">
-            <div className="avatar">{user.username.slice(0, 1).toUpperCase()}</div>
-            <div><strong>{user.username}</strong><span>{user.id.slice(0, 8)}</span></div>
-            <button className="icon-btn" onClick={handleLogout} title="退出登录"><X size={17} /></button>
+          <div className={`profile ${activeView === "preferences" || activeView === "settings" ? "active" : ""}`}>
+            <button
+              type="button"
+              className="profile-main"
+              onClick={() => changeView("preferences")}
+              title="个人设置"
+            >
+              <div className="avatar">{user.username.slice(0, 1).toUpperCase()}</div>
+              <div><strong>{user.username}</strong><span>个人设置</span></div>
+            </button>
           </div>
         </div>
       </aside>
@@ -367,14 +439,23 @@ export function App() {
         <header className="topbar">
           <button className="icon-btn mobile-menu" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
           <div className="breadcrumbs">
-            <span>学习项目</span><ChevronRight size={14} /><strong>{project?.title || ""}</strong>
+            <span>学科</span>
+            <ChevronRight size={14} />
+            <strong>{project?.title || ""}</strong>
+            {practiceViews.has(activeView) && (
+              <>
+                <ChevronRight size={14} />
+                <span>练习资料</span>
+                <ChevronRight size={14} />
+                <strong>{selectedDocumentIds.length ? `${selectedDocumentIds.length} 份` : "未选择"}</strong>
+              </>
+            )}
           </div>
           <div className="topbar-actions">
             <button className="search-pill" onClick={() => changeView("rag")}><Search size={16} /><span>询问资料库</span><kbd>RAG</kbd></button>
-            <button className="model-settings-shortcut" onClick={() => changeView("settings")}><Settings size={16} /><span>模型配置</span></button>
             <div className="notification-shell">
               <button className="icon-btn notification-button" aria-label="任务通知" onClick={() => setNotificationsOpen((value) => !value)}>
-                <CircleAlert size={18} />
+                <Bell size={18} />
                 {!!notifications.length && <em>{Math.min(notifications.length, 9)}</em>}
               </button>
               {notificationsOpen && (
@@ -389,32 +470,107 @@ export function App() {
                 </div>
               )}
             </div>
+            <button className="icon-btn topbar-logout" onClick={() => setLogoutOpen(true)} title="退出登录" aria-label="退出登录">
+              <LogOut size={18} />
+            </button>
           </div>
         </header>
 
         <div className="page-wrap">
           {project ? (
             <>
-              {activeView === "overview" && <Overview project={project} navigate={changeView} />}
-              {activeView === "sources" && <Sources project={project} updateProject={updateProject} navigate={changeView} showToast={showToast} onTaskStarted={trackAnalysisTask} analysisTask={analysisTasks.find((task) => task.projectId === project.id)} />}
+              {practiceViews.has(activeView) && (
+                <PracticeDocumentPicker
+                  sources={project.analysis?.sources || []}
+                  selectedIds={selectedDocumentIds}
+                  onChange={setSelectedDocumentIds}
+                  label="选择练习资料"
+                />
+              )}
+              {activeView === "overview" && (
+                <Overview
+                  project={project}
+                  selectedDocumentIds={selectedDocumentIds}
+                  navigate={changeView}
+                />
+              )}
+              {activeView === "sources" && (
+                <Sources
+                  project={project}
+                  updateProject={updateProject}
+                  selectedDocumentIds={selectedDocumentIds}
+                  setSelectedDocumentIds={setSelectedDocumentIds}
+                  navigate={changeView}
+                  showToast={showToast}
+                  onTaskStarted={trackAnalysisTask}
+                  analysisTask={analysisTasks.find((task) => task.projectId === project.id)}
+                />
+              )}
               {activeView === "map" && <KnowledgeMap project={project} navigate={changeView} />}
               {activeView === "rag" && <RagAssistant project={project} navigate={changeView} showToast={showToast} />}
-              {activeView === "coach" && <Coach project={project} updateProject={updateProject} showToast={showToast} navigate={changeView} />}
-              {activeView === "blindspots" && <Blindspots project={project} updateProject={updateProject} showToast={showToast} navigate={changeView} />}
-              {activeView === "output" && <OutputStudio project={project} updateProject={updateProject} showToast={showToast} />}
-              {activeView === "settings" && <ModelSettingsPage showToast={showToast} />}
+              {activeView === "coach" && (
+                <Coach
+                  key={`${project.id}:${selectedDocumentIds.join(",")}`}
+                  project={project}
+                  selectedDocumentIds={selectedDocumentIds}
+                  updateProject={updateProject}
+                  showToast={showToast}
+                  navigate={changeView}
+                />
+              )}
+              {activeView === "blindspots" && (
+                <Blindspots
+                  project={project}
+                  selectedDocumentIds={selectedDocumentIds}
+                  updateProject={updateProject}
+                  showToast={showToast}
+                  navigate={changeView}
+                />
+              )}
+              {activeView === "output" && (
+                <OutputStudio
+                  key={`${project.id}:${selectedDocumentIds.join(",")}`}
+                  project={project}
+                  selectedDocumentIds={selectedDocumentIds}
+                  updateProject={updateProject}
+                  showToast={showToast}
+                />
+              )}
+              {(activeView === "preferences" || activeView === "settings") && (
+                <PreferencesPage
+                  showToast={showToast}
+                  user={user}
+                  initialTab={activeView === "settings" ? "models" : "learning"}
+                />
+              )}
             </>
+          ) : activeView === "preferences" || activeView === "settings" ? (
+            <PreferencesPage
+              showToast={showToast}
+              user={user}
+              initialTab={activeView === "settings" ? "models" : "learning"}
+            />
           ) : (
             <div className="empty-state large">
               <div><BrainCircuit size={32} /></div>
-              <h2>还没有学习项目</h2>
-              <p>点击左侧“新建学习项目”开始。</p>
+              <h2>还没有学科</h2>
+              <p>点击左侧“新建学科”开始。</p>
             </div>
           )}
         </div>
       </main>
 
       {createOpen && <CreateProjectModal onClose={() => setCreateOpen(false)} onCreate={handleCreate} />}
+      <ConfirmDialog
+        open={logoutOpen}
+        tone="danger"
+        title="退出当前账号？"
+        description="未保存的本地编辑会在退出前尽量同步。确认后将回到登录页。"
+        confirmLabel="退出登录"
+        cancelLabel="继续学习"
+        onCancel={() => setLogoutOpen(false)}
+        onConfirm={handleLogout}
+      />
       {toast && <div className="toast"><Check size={17} />{toast}</div>}
     </div>
   );

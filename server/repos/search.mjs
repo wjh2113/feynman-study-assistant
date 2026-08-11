@@ -17,19 +17,31 @@ function vectorLiteral(vectorValue) {
   return `[${vectorValue.map((value) => Number(value).toFixed(8)).join(",")}]`;
 }
 
-export async function hybridSearch(projectId, userId, query, queryEmbedding, limit = 6) {
+function normalizeDocumentIds(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((id) => String(id || "").trim()).filter(Boolean))];
+}
+
+export async function hybridSearch(projectId, userId, query, queryEmbedding, limit = 6, { documentIds } = {}) {
   const db = await getDatabase();
   const take = Math.max(1, Math.min(Number(limit) || 6, 50));
   const candidates = new Map();
+  const filterIds = normalizeDocumentIds(documentIds);
+  const documentFilter = filterIds.length ? " AND c.document_id = ANY($5::text[])" : "";
+  const vectorParams = filterIds.length
+    ? [projectId, userId, vectorLiteral(queryEmbedding), take * 3, filterIds]
+    : [projectId, userId, vectorLiteral(queryEmbedding), take * 3];
   const vectorResult = await db.query(
-    `SELECT id, document_id, page_number, page_end, content, search_tokens,
-            parent_id, parent_content, heading_path, metadata,
-            1 - (embedding <=> $3::vector) AS vector_score
-       FROM document_chunks
-      WHERE project_id = $1 AND user_id = $2 AND embedding IS NOT NULL
-      ORDER BY embedding <=> $3::vector
+    `SELECT c.id, c.document_id, c.page_number, c.page_end, c.content, c.search_tokens,
+            c.parent_id, c.parent_content, c.heading_path, c.metadata, c.chapter_id,
+            ch.title AS chapter_title,
+            1 - (c.embedding <=> $3::vector) AS vector_score
+       FROM document_chunks c
+       LEFT JOIN chapters ch ON ch.id = c.chapter_id
+      WHERE c.project_id = $1 AND c.user_id = $2 AND c.embedding IS NOT NULL${documentFilter}
+      ORDER BY c.embedding <=> $3::vector
       LIMIT $4`,
-    [projectId, userId, vectorLiteral(queryEmbedding), take * 3]
+    vectorParams
   );
 
   for (const [rank, row] of vectorResult.rows.entries()) {
@@ -45,17 +57,23 @@ export async function hybridSearch(projectId, userId, query, queryEmbedding, lim
   const tokens = keywordTokens(query).slice(0, 24);
   if (tokens.length) {
     const tsQuery = tokens.map((token) => token.replace(/[':&|!()]/g, "")).filter(Boolean).join(" | ");
+    const keywordFilter = filterIds.length ? " AND c.document_id = ANY($5::text[])" : "";
+    const keywordParams = filterIds.length
+      ? [projectId, userId, tsQuery, take * 3, filterIds]
+      : [projectId, userId, tsQuery, take * 3];
     const keywordResult = await db.query(
-      `SELECT id, document_id, page_number, page_end, content, search_tokens,
-              parent_id, parent_content, heading_path, metadata,
-              ts_rank_cd(to_tsvector('simple', search_tokens), to_tsquery('simple', $3)) AS keyword_score
-         FROM document_chunks
-        WHERE project_id = $1
-          AND user_id = $2
-          AND to_tsvector('simple', search_tokens) @@ to_tsquery('simple', $3)
+      `SELECT c.id, c.document_id, c.page_number, c.page_end, c.content, c.search_tokens,
+              c.parent_id, c.parent_content, c.heading_path, c.metadata, c.chapter_id,
+              ch.title AS chapter_title,
+              ts_rank_cd(to_tsvector('simple', c.search_tokens), to_tsquery('simple', $3)) AS keyword_score
+         FROM document_chunks c
+         LEFT JOIN chapters ch ON ch.id = c.chapter_id
+        WHERE c.project_id = $1
+          AND c.user_id = $2
+          AND to_tsvector('simple', c.search_tokens) @@ to_tsquery('simple', $3)${keywordFilter}
         ORDER BY keyword_score DESC
         LIMIT $4`,
-      [projectId, userId, tsQuery, take * 3]
+      keywordParams
     );
     for (const [rank, row] of keywordResult.rows.entries()) {
       const existing = candidates.get(row.id) || {
@@ -77,6 +95,8 @@ export async function hybridSearch(projectId, userId, query, queryEmbedding, lim
     .map((item) => ({
       id: item.id,
       documentId: item.document_id,
+      chapterId: item.chapter_id || null,
+      chapterTitle: item.chapter_title || null,
       filename: item.metadata?.filename || "学习资料",
       page: Number(item.page_number || 1),
       pageEnd: Number(item.page_end || item.page_number || 1),

@@ -1,14 +1,21 @@
 import { Router } from "express";
 import JSZip from "jszip";
+import { randomUUID } from "node:crypto";
 import { getObject } from "../object-storage.mjs";
 import {
+  deleteChapter,
   deleteDocument,
   deleteProject,
+  ensureDefaultChapter,
+  getChapter,
   getDocument,
   getProject,
+  listChapters,
   listDocumentsForProject,
   listProjects,
+  projectBelongsToUser,
   recordEvent,
+  saveChapter,
   saveProject
 } from "../storage.mjs";
 
@@ -52,6 +59,7 @@ router.put("/api/projects/:projectId", async (req, res) => {
   try {
     const project = { ...(req.body || {}), id: req.params.projectId, userId: req.userId };
     await saveProject(project);
+    await ensureDefaultChapter(req.params.projectId, req.userId);
     res.json({ project });
   } catch (error) {
     res.status(400).json({ error: error.message || "保存项目失败" });
@@ -64,6 +72,86 @@ router.delete("/api/projects/:projectId", async (req, res) => {
     res.status(204).end();
   } catch (error) {
     res.status(400).json({ error: error.message || "删除项目失败" });
+  }
+});
+
+router.get("/api/projects/:projectId/chapters", async (req, res) => {
+  try {
+    if (!(await projectBelongsToUser(req.params.projectId, req.userId))) {
+      return res.status(404).json({ error: "学习项目不存在" });
+    }
+    const chapters = await listChapters(req.params.projectId, req.userId);
+    res.json({ chapters });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "读取章节失败" });
+  }
+});
+
+router.post("/api/projects/:projectId/chapters", async (req, res) => {
+  try {
+    if (!(await projectBelongsToUser(req.params.projectId, req.userId))) {
+      return res.status(404).json({ error: "学习项目不存在" });
+    }
+    const title = String(req.body?.title || "").trim() || "未命名章节";
+    const existing = await listChapters(req.params.projectId, req.userId);
+    const sortOrder = existing.length
+      ? Math.max(...existing.map((item) => Number(item.sortOrder || 0))) + 1
+      : 0;
+    const now = Date.now();
+    const chapter = await saveChapter({
+      id: randomUUID(),
+      projectId: req.params.projectId,
+      userId: req.userId,
+      title,
+      sortOrder,
+      blindspots: [],
+      sessions: [],
+      onePager: null,
+      analysis: {},
+      createdAt: now
+    });
+    res.status(201).json({ chapter });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "创建章节失败" });
+  }
+});
+
+router.put("/api/projects/:projectId/chapters/:chapterId", async (req, res) => {
+  try {
+    const existing = await getChapter(req.params.chapterId, req.userId);
+    if (!existing || existing.projectId !== req.params.projectId) {
+      return res.status(404).json({ error: "章节不存在" });
+    }
+    const body = req.body || {};
+    const next = {
+      ...existing,
+      ...body,
+      id: existing.id,
+      projectId: existing.projectId,
+      userId: req.userId,
+      title: body.title !== undefined ? String(body.title || "").trim() || existing.title : existing.title,
+      sortOrder: body.sortOrder !== undefined ? Number(body.sortOrder) : existing.sortOrder
+    };
+    if (body.state && typeof body.state === "object") {
+      Object.assign(next, body.state);
+    }
+    const chapter = await saveChapter(next);
+    res.json({ chapter });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "保存章节失败" });
+  }
+});
+
+router.delete("/api/projects/:projectId/chapters/:chapterId", async (req, res) => {
+  try {
+    const existing = await getChapter(req.params.chapterId, req.userId);
+    if (!existing || existing.projectId !== req.params.projectId) {
+      return res.status(404).json({ error: "章节不存在" });
+    }
+    await deleteChapter(req.params.chapterId, req.userId);
+    res.status(204).end();
+  } catch (error) {
+    res.status(400).json({ error: error.message || "删除章节失败" });
   }
 });
 

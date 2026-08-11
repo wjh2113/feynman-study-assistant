@@ -4,13 +4,24 @@ import { EmptyMini } from "../../components/EmptyMini.jsx";
 import { ArrowRight, Check, ChevronRight, Clock3, Lightbulb, MessageCircleQuestion } from "../../components/icons.jsx";
 import { stageLabels } from "../../lib/nav.js";
 
-export function Overview({ project, navigate }) {
+function overlapsSelection(item, selectedDocumentIds = []) {
+  const ids = Array.isArray(item?.documentIds) ? item.documentIds : [];
+  if (!ids.length) return true;
+  if (!selectedDocumentIds.length) return false;
+  return ids.some((id) => selectedDocumentIds.includes(id));
+}
+
+export function Overview({ project, selectedDocumentIds = [], navigate }) {
   const concepts = project.analysis?.modules?.flatMap((module) => module.concepts) || [];
   const mastered = concepts.filter((item) => item.mastery >= 3).length;
   const inProgress = concepts.filter((item) => item.mastery === 2).length;
-  const blindCount = project.blindspots?.filter((item) => item.status !== "done").length || 0;
+  const sessions = (project.sessions || []).filter((item) => overlapsSelection(item, selectedDocumentIds));
+  const blindspots = (project.blindspots || []).filter((item) => overlapsSelection(item, selectedDocumentIds));
+  const blindCount = blindspots.filter((item) => item.status !== "done").length || 0;
   const currentStage = project.progress >= 80 ? 4 : project.progress >= 60 ? 3 : project.progress >= 35 ? 2 : project.progress >= 15 ? 1 : 0;
   const nextConcept = concepts.find((item) => item.mastery < 3) || concepts[0];
+  const sourceCount = project.analysis?.sources?.length || 0;
+  const selectedCount = selectedDocumentIds.length;
 
   return (
     <>
@@ -42,9 +53,19 @@ export function Overview({ project, navigate }) {
             <span className="soft-tag">为你推荐</span>
           </div>
           <div className="task-icon"><MessageCircleQuestion /></div>
-          <h2>用自己的话解释「{nextConcept?.title || "核心概念"}」</h2>
-          <p>关掉资料，向一个好奇的12岁小孩讲清楚它是什么、为什么重要，以及什么时候会失效。</p>
-          <button className="primary-btn" onClick={() => navigate("coach")}>开始费曼对练 <ArrowRight size={17} /></button>
+          <h2>
+            {sourceCount
+              ? `勾选练习资料后，用自己的话解释「${nextConcept?.title || "核心概念"}」`
+              : "先上传学习资料，再勾选要练习的材料"}
+          </h2>
+          <p>
+            {selectedCount
+              ? `当前已选 ${selectedCount} 份资料。关掉原文，向一个好奇的12岁小孩讲清楚它是什么、为什么重要，以及什么时候会失效。`
+              : "学科资料用于知识地图与问答；费曼对练、盲区与成果需要先在上方勾选一份或多份资料。"}
+          </p>
+          <button className="primary-btn" onClick={() => navigate(sourceCount ? "coach" : "sources")}>
+            {sourceCount ? "开始费曼对练" : "去上传资料"} <ArrowRight size={17} />
+          </button>
         </section>
 
         <section className="mastery-card">
@@ -68,14 +89,14 @@ export function Overview({ project, navigate }) {
       <div className="overview-grid lower">
         <section className="panel recent-learning">
           <div className="panel-head"><div><span className="section-kicker">最近学习</span><h3>让每次输出都有迹可循</h3></div></div>
-          {(project.sessions || []).map((session) => (
+          {sessions.map((session) => (
             <div className="session-row" key={session.id}>
               <div className={`session-score ${session.score >= 75 ? "good" : "warn"}`}>{session.score}</div>
               <div><strong>{session.concept}</strong><span>{session.date} · 费曼解释</span></div>
               <span className={`status-text ${session.score >= 75 ? "good" : "warn"}`}>{session.status}</span>
             </div>
           ))}
-          {!project.sessions?.length && <EmptyMini text="完成第一次费曼对练后，这里会出现学习记录。" />}
+          {!sessions.length && <EmptyMini text="完成第一次费曼对练后，这里会出现学习记录。" />}
         </section>
 
         <section className="panel blind-preview">
@@ -83,7 +104,7 @@ export function Overview({ project, navigate }) {
             <div><span className="section-kicker">需要留意</span><h3>{blindCount} 个认知盲区</h3></div>
             <button className="text-btn" onClick={() => navigate("blindspots")}>全部 <ChevronRight size={15} /></button>
           </div>
-          {project.blindspots?.slice(0, 2).map((blind) => (
+          {blindspots.slice(0, 2).map((blind) => (
             <button className="blind-mini" key={blind.id} onClick={() => navigate("blindspots")}>
               <div className="blind-bullet"><Lightbulb size={17} /></div>
               <div><strong>{blind.title}</strong><span>{blind.problem}</span></div>
