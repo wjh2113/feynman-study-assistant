@@ -13,11 +13,18 @@ import {
   Send,
   Sparkles
 } from "../../components/icons.jsx";
-import { askCoach } from "../../api/coach.js";
+import { askCoach, diagnoseCoach } from "../../api/coach.js";
 import { createSession, listSessions, updateSession } from "../../api/projects.js";
 import { getPreferences } from "../../api/settings.js";
 import { questionsForProject } from "../../lib/questions.js";
 import { ScoreBar } from "./ScoreBar.jsx";
+
+const SCORE_LABELS = {
+  clarity: "说人话",
+  logic: "逻辑闭环",
+  example: "举例能力",
+  boundary: "边界意识"
+};
 
 function readStoredConcept() {
   try {
@@ -91,6 +98,8 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
   const [evaluationNotes, setEvaluationNotes] = useState(null);
   const [evidence, setEvidence] = useState([]);
   const [latestBlindspot, setLatestBlindspot] = useState(null);
+  const [diagnosis, setDiagnosis] = useState(null);
+  const [diagnosisLoading, setDiagnosisLoading] = useState(false);
   const [messages, setMessages] = useState(() => [
     { from: "ai", text: bootQuestion?.question || "请先上传资料，让AI根据资料生成问题。" }
   ]);
@@ -127,6 +136,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
           setTurn(userTurns + 1);
           setCompleted(userTurns >= sessionMax || Boolean(existing.status));
           setEvaluation(existing.evaluations.at(-1) || null);
+          setDiagnosis(existing.meta?.diagnosis || null);
           setRole(userTurns + 1 >= Math.max(2, sessionMax - 1) ? "expert" : "child");
         } else {
           const createdData = await createSession(project.id, {
@@ -170,7 +180,12 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
       const index = list.findIndex((item) => item.id === sessionPatch.id);
       if (index < 0) return [sessionPatch, ...list];
       const next = [...list];
-      next[index] = { ...next[index], ...sessionPatch };
+      const current = next[index] || {};
+      next[index] = {
+        ...current,
+        ...sessionPatch,
+        meta: { ...(current.meta || {}), ...(sessionPatch.meta || {}) }
+      };
       return next;
     });
   };
@@ -186,6 +201,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
     setEvaluationNotes(null);
     setEvidence([]);
     setLatestBlindspot(null);
+    setDiagnosis(null);
     setMessages([{ from: "ai", text: next.question }]);
     const targetConcept = concepts.find((item) => item.id === next?.conceptId || item.title === next?.concept);
     const existing = (sessionsCache || []).find((item) =>
@@ -251,6 +267,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
       setRole(data.phase || role);
       setTurn((value) => value + 1);
       setCompleted(Boolean(data.completed));
+      if (data.diagnosis) setDiagnosis(data.diagnosis);
       if (data.session) syncSessionCache(data.session);
       if (data.blindspot) {
         setLatestBlindspot(data.blindspot);
@@ -272,6 +289,9 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
           showToast("发现一个新的认知盲区，已加入补漏清单");
         }
       }
+      if (data.completed) {
+        showToast("本轮对练已结束，请查看学习诊断");
+      }
     } catch (error) {
       setAnswer(userText);
       setMessages(messages);
@@ -282,11 +302,39 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
     }
   };
 
+  const ensureDiagnosis = async () => {
+    if (diagnosis || !sessionId) return diagnosis;
+    setDiagnosisLoading(true);
+    try {
+      const data = await diagnoseCoach({
+        projectId: project.id,
+        sessionId,
+        question,
+        concept,
+        documentIds: selectedDocumentIds
+      });
+      if (data.diagnosis) {
+        setDiagnosis(data.diagnosis);
+        syncSessionCache({
+          id: sessionId,
+          meta: { diagnosis: data.diagnosis }
+        });
+        return data.diagnosis;
+      }
+    } catch (error) {
+      showToast(error.message || "生成诊断失败");
+    } finally {
+      setDiagnosisLoading(false);
+    }
+    return null;
+  };
+
   const finish = async () => {
     if (!evaluation) {
       showToast("请至少完成一轮解释和追问后再保存");
       return;
     }
+    const finalDiagnosis = diagnosis || await ensureDiagnosis();
     const avg = Math.round(Object.values(evaluation).reduce((a, b) => a + b, 0) / 4);
     const passScore = Number(prefs.coachPassScore) || 75;
     const passed = avg >= passScore;
@@ -296,7 +344,14 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
           documentIds: selectedDocumentIds,
           score: avg,
           status: passed ? "passed" : "needs_review",
-          meta: { maxTurns, isVariant, blindspotId, blindspotTitle, practiceDocumentIds: selectedDocumentIds }
+          meta: {
+            maxTurns,
+            isVariant,
+            blindspotId,
+            blindspotTitle,
+            practiceDocumentIds: selectedDocumentIds,
+            ...(finalDiagnosis ? { diagnosis: finalDiagnosis } : {})
+          }
         });
       } catch (error) {
         showToast(error.message);
@@ -326,7 +381,8 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
         return item;
       })
     });
-    showToast(passed ? "对练已通过，相关待复测盲区已标记为掌握" : "对练已保存，相关盲区仍需继续练习");
+    setCompleted(true);
+    showToast(passed ? "对练已通过，诊断已保存" : "对练已保存，请根据诊断补漏后再复测");
   };
 
   const currentTurn = Math.min(turn, maxTurns);
@@ -413,6 +469,88 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
               </div>
             )}
           </div>
+
+          {(completed || diagnosis || diagnosisLoading) && (
+            <section className="coach-diagnosis" aria-live="polite">
+              <div className="coach-diagnosis-head">
+                <span className="section-kicker">学习诊断</span>
+                <h3>{diagnosis?.summary || (diagnosisLoading ? "正在生成诊断…" : "本轮对练已结束")}</h3>
+                {!diagnosis && !diagnosisLoading && (
+                  <button type="button" className="secondary-btn" onClick={() => ensureDiagnosis()} disabled={!sessionId}>
+                    生成诊断
+                  </button>
+                )}
+              </div>
+
+              {diagnosisLoading && !diagnosis && (
+                <p className="coach-diagnosis-loading">正在对照资料分析你的薄弱点与应掌握知识…</p>
+              )}
+
+              {diagnosis && (
+                <div className="coach-diagnosis-grid">
+                  <article>
+                    <h4>薄弱方面</h4>
+                    {diagnosis.weakAspects?.length ? (
+                      <ul className="coach-diagnosis-weak">
+                        {diagnosis.weakAspects.map((item) => (
+                          <li key={item.key || item.label}>
+                            <strong>{item.label || SCORE_LABELS[item.key] || "薄弱点"}</strong>
+                            {item.score != null ? <em>{item.score} 分</em> : null}
+                            {item.note ? <p>{item.note}</p> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>本轮四维表现较均衡，暂无明显短板。</p>
+                    )}
+                  </article>
+
+                  <article>
+                    <h4>你的问题</h4>
+                    <p>{diagnosis.userProblem || question.question}</p>
+                  </article>
+
+                  <article>
+                    <h4>你的回答</h4>
+                    <p>{diagnosis.userAnswer || "（未记录到有效回答）"}</p>
+                  </article>
+
+                  <article>
+                    <h4>领域正确说法</h4>
+                    <p>{diagnosis.expertFraming || concept.explanation || "请回到资料核对标准表述。"}</p>
+                  </article>
+
+                  <article>
+                    <h4>需要补的知识</h4>
+                    {diagnosis.knowledgeGaps?.length ? (
+                      <ul>
+                        {diagnosis.knowledgeGaps.map((gap) => <li key={gap}>{gap}</li>)}
+                      </ul>
+                    ) : (
+                      <p>继续巩固本题对应概念即可。</p>
+                    )}
+                  </article>
+
+                  <article className="coach-diagnosis-master">
+                    <h4>需要掌握的知识</h4>
+                    {diagnosis.knowledgeToMaster?.length ? (
+                      <ul>
+                        {diagnosis.knowledgeToMaster.map((item, index) => (
+                          <li key={`${item.title}-${index}`}>
+                            <strong>{item.title}</strong>
+                            {item.detail ? <p>{item.detail}</p> : null}
+                            {item.source ? <span>{item.source}</span> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>优先掌握：{concept.title}</p>
+                    )}
+                  </article>
+                </div>
+              )}
+            </section>
+          )}
 
           {requestError && (
             <div className="request-error coach-request-error" role="alert">

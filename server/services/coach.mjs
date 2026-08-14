@@ -14,6 +14,13 @@ import { deepseek } from "./llm.mjs";
 
 const SCORE_KEYS = ["clarity", "logic", "example", "boundary"];
 
+const SCORE_LABELS = {
+  clarity: "说人话",
+  logic: "逻辑闭环",
+  example: "举例能力",
+  boundary: "边界意识"
+};
+
 function normalizeEvaluation(raw = {}) {
   const evaluation = {};
   for (const key of SCORE_KEYS) {
@@ -21,6 +28,170 @@ function normalizeEvaluation(raw = {}) {
     evaluation[key] = Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : 0;
   }
   return evaluation;
+}
+
+function weakAspectsFromEvaluation(evaluation = {}, evaluationNotes = null, threshold = 75) {
+  return SCORE_KEYS
+    .filter((key) => Number(evaluation[key]) < threshold)
+    .map((key) => ({
+      key,
+      label: SCORE_LABELS[key] || key,
+      score: Number(evaluation[key]) || 0,
+      note: evaluationNotes?.[key] ? String(evaluationNotes[key]) : ""
+    }));
+}
+
+function lastUserAnswer(messages = [], fallback = "") {
+  for (let i = (messages || []).length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.from === "user" && String(messages[i].text || "").trim()) {
+      return String(messages[i].text).trim();
+    }
+  }
+  return String(fallback || "").trim();
+}
+
+function normalizeDiagnosis(raw = {}, context = {}) {
+  const {
+    evaluation = {},
+    evaluationNotes = null,
+    threshold = 75,
+    question = null,
+    concept = null,
+    userAnswer = "",
+    evidence = [],
+    blindspot = null
+  } = context;
+
+  const weakAspects = Array.isArray(raw.weakAspects) && raw.weakAspects.length
+    ? raw.weakAspects.map((item) => ({
+        key: item.key || "",
+        label: item.label || SCORE_LABELS[item.key] || item.key || "薄弱点",
+        score: Number.isFinite(Number(item.score)) ? Number(item.score) : null,
+        note: String(item.note || "")
+      }))
+    : weakAspectsFromEvaluation(evaluation, evaluationNotes, threshold);
+
+  const knowledgeToMaster = Array.isArray(raw.knowledgeToMaster)
+    ? raw.knowledgeToMaster
+      .map((item) => {
+        if (typeof item === "string") return { title: item, detail: "", source: "" };
+        return {
+          title: String(item?.title || "").trim(),
+          detail: String(item?.detail || "").trim(),
+          source: String(item?.source || "").trim()
+        };
+      })
+      .filter((item) => item.title)
+      .slice(0, 6)
+    : [];
+
+  const knowledgeGaps = Array.isArray(raw.knowledgeGaps)
+    ? raw.knowledgeGaps.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 6)
+    : [];
+
+  return {
+    summary: String(raw.summary || "").trim()
+      || (weakAspects.length
+        ? `本轮在「${weakAspects.map((item) => item.label).join("、")}」上偏弱，需要补齐关键知识后再复测。`
+        : "本轮整体理解较稳，仍建议对照资料把关键表述说得更准。"),
+    weakAspects,
+    userProblem: String(raw.userProblem || question?.question || "").trim(),
+    userAnswer: String(raw.userAnswer || userAnswer || "").trim(),
+    expertFraming: String(raw.expertFraming || concept?.explanation || "").trim(),
+    knowledgeGaps: knowledgeGaps.length
+      ? knowledgeGaps
+      : [
+          ...(blindspot?.problem ? [String(blindspot.problem)] : []),
+          ...weakAspects.map((item) => item.note || `加强「${item.label}」`).filter(Boolean)
+        ].filter(Boolean).slice(0, 6),
+    knowledgeToMaster: knowledgeToMaster.length
+      ? knowledgeToMaster
+      : [
+          concept?.title
+            ? {
+                title: concept.title,
+                detail: concept.explanation || "回到资料，用自己的话重讲定义、例子和边界。",
+                source: concept.sourceRefs?.[0]?.file || ""
+              }
+            : null,
+          ...(evidence || []).slice(0, 3).map((item) => ({
+            title: item.filename ? `${item.filename}${item.page ? ` · p.${item.page}` : ""}` : "资料要点",
+            detail: item.quote || "",
+            source: item.filename || ""
+          }))
+        ].filter(Boolean).slice(0, 6),
+    evidence: Array.isArray(raw.evidence) ? raw.evidence : (evidence || []).slice(0, 4)
+  };
+}
+
+function buildFallbackDiagnosis(context = {}) {
+  return normalizeDiagnosis({}, context);
+}
+
+async function generateSessionDiagnosis({
+  userId,
+  question,
+  concept,
+  answer,
+  evaluation,
+  evaluationNotes,
+  blindspot,
+  evidence,
+  messages = [],
+  threshold
+}) {
+  const userAnswer = lastUserAnswer(messages, answer);
+  const context = {
+    evaluation,
+    evaluationNotes,
+    threshold,
+    question,
+    concept,
+    userAnswer,
+    evidence,
+    blindspot
+  };
+  const modelConfigured = Boolean((await getModelConfig(userId)).apiKey);
+  if (!modelConfigured) return buildFallbackDiagnosis(context);
+
+  try {
+    const weak = weakAspectsFromEvaluation(evaluation, evaluationNotes, threshold);
+    const result = await deepseek([
+      {
+        role: "system",
+        content:
+          "你是费曼学习诊断教练。根据用户对练表现，给出可执行的学习诊断。必须严格依据资料片段与评分，不编造原文没有的事实。只输出合法JSON。"
+      },
+      {
+        role: "user",
+        content: `题目：${question?.question || ""}
+概念：${concept?.title || ""}
+概念说明：${concept?.explanation || ""}
+用户最终解释：${userAnswer}
+四维评分：${JSON.stringify(evaluation)}
+评分短评：${JSON.stringify(evaluationNotes || {})}
+已识别盲区：${JSON.stringify(blindspot || null)}
+偏低维度：${JSON.stringify(weak)}
+资料片段：${JSON.stringify(evidence || [])}
+
+返回：
+{
+  "summary":"一句话总诊断",
+  "weakAspects":[{"key":"clarity|logic|example|boundary","label":"中文名","score":0,"note":"为何弱"}],
+  "userProblem":"本题真正要检验的问题（可复述题目并点出卡点）",
+  "userAnswer":"概括用户实际答了什么（保留原意，可压缩）",
+  "expertFraming":"该领域合格说法应如何表述（基于资料，用人话）",
+  "knowledgeGaps":["缺了哪块知识1","缺了哪块知识2"],
+  "knowledgeToMaster":[{"title":"要掌握的知识点","detail":"需要记住/理解到什么程度","source":"资料名或页码"}]
+}`
+      }
+    ], 0.35, userId, Number(process.env.GENERATION_TIMEOUT_MS || 90_000));
+
+    if (!result || typeof result !== "object") return buildFallbackDiagnosis(context);
+    return normalizeDiagnosis(result, context);
+  } catch {
+    return buildFallbackDiagnosis(context);
+  }
 }
 
 function historyForPrompt(messages = [], limit = 8) {
@@ -115,6 +286,12 @@ async function persistCoachTurn(sessionId, userId, projectId, answer, payload, c
     session.meta = {
       ...(session.meta || {}),
       practiceDocumentIds: documentIds
+    };
+  }
+  if (payload.diagnosis) {
+    session.meta = {
+      ...(session.meta || {}),
+      diagnosis: payload.diagnosis
     };
   }
   await saveCoachSession(session);
@@ -256,9 +433,28 @@ export async function runCoachTurn({
         threshold: preferences.coachBlindspotThreshold,
         force: finalTurn
       });
+      const diagnosis = finalTurn
+        ? await generateSessionDiagnosis({
+            userId,
+            question,
+            concept,
+            answer,
+            evaluation,
+            evaluationNotes: {
+              clarity: usesJargon ? "术语偏多，需要用人话重述。" : "表达基本清楚。",
+              logic: answer.length > 80 ? "因果链条较完整。" : "因果还可以再展开。",
+              example: hasExample ? "已给出例子。" : "缺少具体例子。",
+              boundary: turnNumber >= Math.max(2, maxTurns - 1) ? "开始触及边界。" : "边界意识尚未体现。"
+            },
+            blindspot,
+            evidence: evidencePayload,
+            messages: [...priorMessages, { from: "user", text: answer }],
+            threshold: preferences.coachBlindspotThreshold
+          })
+        : null;
       const payload = {
         reply: finalTurn
-          ? `本轮 ${maxTurns} 问已完成。你对“${concept?.title || "这个概念"}”的解释已经覆盖了核心含义；接下来请根据评分和盲区提示复习，结束本轮后可选择其他问题继续练习。`
+          ? `本轮 ${maxTurns} 问已完成。你对“${concept?.title || "这个概念"}”的解释已经覆盖了核心含义；请查看下方诊断：哪些地方偏弱、你的回答、领域正确说法，以及需要补上的知识。`
           : usesJargon
             ? `你刚才用了“${jargonMatch?.[0]}”这个词。如果不能使用这个词，你会怎样向一个完全不懂的人解释？`
             : hasExample
@@ -275,6 +471,7 @@ export async function runCoachTurn({
           boundary: turnNumber >= Math.max(2, maxTurns - 1) ? "开始触及边界。" : "边界意识尚未体现。"
         },
         blindspot,
+        diagnosis,
         evidence: evidencePayload,
         demo: true,
         chapterId: resolvedChapterId,
@@ -352,6 +549,23 @@ export async function runCoachTurn({
       threshold: preferences.coachBlindspotThreshold,
       force: finalTurn
     });
+    const evaluationNotes = result.evaluationNotes && typeof result.evaluationNotes === "object"
+      ? result.evaluationNotes
+      : null;
+    const diagnosis = finalTurn
+      ? await generateSessionDiagnosis({
+          userId,
+          question,
+          concept,
+          answer,
+          evaluation,
+          evaluationNotes,
+          blindspot,
+          evidence: evidencePayload,
+          messages: [...priorMessages, { from: "user", text: answer }],
+          threshold: preferences.coachBlindspotThreshold
+        })
+      : null;
 
     const payload = {
       reply: result.reply,
@@ -359,10 +573,9 @@ export async function runCoachTurn({
       completed: finalTurn,
       maxTurns,
       evaluation,
-      evaluationNotes: result.evaluationNotes && typeof result.evaluationNotes === "object"
-        ? result.evaluationNotes
-        : null,
+      evaluationNotes,
       blindspot,
+      diagnosis,
       evidence: evidencePayload,
       demo: false,
       chapterId: resolvedChapterId,
@@ -399,6 +612,58 @@ export async function runCoachTurn({
     return { body: { ...payload, session } };
   } catch (error) {
     return { status: 500, body: { error: `${stage}失败：${error.message || "教练暂时无法回应"}`, stage } };
+  }
+}
+
+export async function diagnoseCoachSession({
+  userId,
+  projectId,
+  sessionId,
+  question,
+  concept,
+  documentIds = []
+}) {
+  try {
+    if (!sessionId) return { status: 400, body: { error: "缺少对练会话" } };
+    const session = await getCoachSession(sessionId);
+    if (!session || session.projectId !== projectId || session.userId !== userId) {
+      return { status: 404, body: { error: "对练会话不存在" } };
+    }
+    if (session.meta?.diagnosis) {
+      return { body: { diagnosis: session.meta.diagnosis, cached: true } };
+    }
+
+    const preferences = await getUserPreferences(userId);
+    const evaluations = session.evaluations || [];
+    const evaluation = normalizeEvaluation(evaluations[evaluations.length - 1] || {});
+    const answer = lastUserAnswer(session.messages);
+    const evidence = mapEvidence(
+      await retrieveCoachEvidence(userId, projectId, question, concept, answer, documentIds)
+    );
+    const blindspot = ensureBlindspot({
+      evaluation,
+      blindspot: null,
+      concept,
+      threshold: preferences.coachBlindspotThreshold,
+      force: true
+    });
+    const diagnosis = await generateSessionDiagnosis({
+      userId,
+      question,
+      concept,
+      answer,
+      evaluation,
+      evaluationNotes: null,
+      blindspot,
+      evidence,
+      messages: session.messages,
+      threshold: preferences.coachBlindspotThreshold
+    });
+    session.meta = { ...(session.meta || {}), diagnosis };
+    await saveCoachSession(session);
+    return { body: { diagnosis, cached: false } };
+  } catch (error) {
+    return { status: 500, body: { error: error.message || "生成诊断失败" } };
   }
 }
 

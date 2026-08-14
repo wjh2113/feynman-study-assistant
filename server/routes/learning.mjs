@@ -13,7 +13,7 @@ import {
   saveCoachSession
 } from "../storage.mjs";
 import { rateLimit } from "../middleware/security.mjs";
-import { generateOnePager, generateVariantQuestion, runCoachTurn } from "../services/coach.mjs";
+import { generateOnePager, generateVariantQuestion, diagnoseCoachSession, runCoachTurn } from "../services/coach.mjs";
 import { generateLearningPlan } from "../services/learning-plan.mjs";
 
 const router = Router();
@@ -56,6 +56,25 @@ router.post("/api/coach", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "coa
     answer,
     role,
     turn
+  });
+  res.status(result.status || 200).json(result.body);
+});
+
+router.post("/api/coach/diagnosis", rateLimit({ windowMs: 60_000, max: 20, keyPrefix: "coach-diagnosis" }), async (req, res) => {
+  const {
+    projectId,
+    sessionId,
+    question,
+    concept,
+    documentIds
+  } = req.body || {};
+  const result = await diagnoseCoachSession({
+    userId: req.userId,
+    projectId,
+    sessionId,
+    question,
+    concept,
+    documentIds: normalizeDocumentIds(documentIds)
   });
   res.status(result.status || 200).json(result.body);
 });

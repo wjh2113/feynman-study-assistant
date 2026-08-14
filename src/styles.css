@@ -582,6 +582,90 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 .coach-blindspot-card { border-color: #e4c4b4; background: #fff8f3; }
 .coach-blindspot-action { margin: 8px 0 0 !important; }
 .coach-blindspot-action strong { display: block; margin-bottom: 3px; font-size: 11px; color: #8a5a45; }
+
+.coach-diagnosis {
+  margin-top: 16px;
+  padding: 18px 18px 16px;
+  border: 1px solid #d9e5dc;
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 80% at 100% 0%, rgba(14, 116, 144, 0.08), transparent 46%),
+    linear-gradient(180deg, #f8fbf9 0%, #ffffff 100%);
+}
+.coach-diagnosis-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-bottom: 14px;
+}
+.coach-diagnosis-head h3 {
+  margin: 0;
+  flex: 1 1 220px;
+  font-family: var(--serif);
+  font-size: 18px;
+  line-height: 1.35;
+  color: #24312b;
+}
+.coach-diagnosis-loading {
+  margin: 0;
+  color: #5f6b63;
+  font-size: 13px;
+}
+.coach-diagnosis-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.coach-diagnosis-grid article {
+  padding: 12px 14px;
+  border: 1px solid #e4ebe5;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.88);
+}
+.coach-diagnosis-grid h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #0e7490;
+}
+.coach-diagnosis-grid p,
+.coach-diagnosis-grid li {
+  margin: 0;
+  color: #3d4741;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.coach-diagnosis-grid ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+.coach-diagnosis-weak {
+  list-style: none;
+  padding-left: 0 !important;
+}
+.coach-diagnosis-weak li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  padding: 8px 0;
+  border-top: 1px solid #edf1ee;
+}
+.coach-diagnosis-weak li:first-child { border-top: 0; padding-top: 0; }
+.coach-diagnosis-weak strong { font-size: 13px; color: #24312b; }
+.coach-diagnosis-weak em { font-style: normal; color: #b45309; font-weight: 700; font-size: 12px; }
+.coach-diagnosis-weak p { grid-column: 1 / -1; color: #66726b; font-size: 12px; }
+.coach-diagnosis-master li { display: grid; gap: 4px; }
+.coach-diagnosis-master span {
+  color: #7a867e;
+  font-size: 11px;
+}
+@media (max-width: 900px) {
+  .coach-diagnosis-grid { grid-template-columns: 1fr; }
+}
 .live-score > .section-kicker { display: block; margin-bottom: 18px; }
 .score-notes { margin: 10px 0 0; padding-left: 16px; color: #6f766c; font-size: 11px; line-height: 1.55; }
 .settings-fields label.settings-checkbox,
