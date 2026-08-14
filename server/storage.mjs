@@ -173,7 +173,7 @@ export async function saveProject(project) {
       project.id,
       project.userId,
       project.title || "新的学习项目",
-      project.mode || "course",
+      project.mode || "subject",
       JSON.stringify(project),
       Number(project.createdAt || Date.now())
     ]
@@ -457,6 +457,22 @@ export async function replaceDocumentIndex({ projectId, userId, document, source
   return { documentId: document.id, chunks: chunks.length };
 }
 
+export async function countDocumentChunks(projectId, { documentId = null } = {}) {
+  const db = await getDatabase();
+  if (documentId) {
+    const result = await db.query(
+      "SELECT COUNT(*)::int AS count FROM document_chunks WHERE project_id = $1 AND document_id = $2",
+      [projectId, documentId]
+    );
+    return Number(result.rows[0]?.count || 0);
+  }
+  const result = await db.query(
+    "SELECT COUNT(*)::int AS count FROM document_chunks WHERE project_id = $1",
+    [projectId]
+  );
+  return Number(result.rows[0]?.count || 0);
+}
+
 export async function deleteDocument(projectId, documentId) {
   const db = await getDatabase();
   const result = await db.query(
@@ -464,21 +480,34 @@ export async function deleteDocument(projectId, documentId) {
     [documentId, projectId]
   );
   const document = result.rows[0];
-  if (!document) return false;
+  if (!document) return { deleted: false, chunksDeleted: 0 };
 
   if (!String(document.storage_path).startsWith("oss://")) {
     const resolvedUploadDir = path.resolve(uploadDir);
     const resolvedStoragePath = path.resolve(document.storage_path);
     const relativeStoragePath = path.relative(resolvedUploadDir, resolvedStoragePath);
-    if (relativeStoragePath.startsWith("..") || path.isAbsolute(relativeStoragePath)) throw new Error("资料文件路径不在允许的存储目录内");
+    if (relativeStoragePath.startsWith("..") || path.isAbsolute(relativeStoragePath)) {
+      throw new Error("资料文件路径不在允许的存储目录内");
+    }
   }
   await deleteObject({ key: document.stored_name, storagePath: document.storage_path });
 
+  // Explicitly remove vector chunks first (do not rely only on FK CASCADE).
+  const deletedChunks = await db.query(
+    "DELETE FROM document_chunks WHERE document_id = $1 AND project_id = $2",
+    [documentId, projectId]
+  );
   await db.query(
     "DELETE FROM documents WHERE id = $1 AND project_id = $2",
     [documentId, projectId]
   );
-  return true;
+  // Safety: remove any orphans that still point at this document id
+  await db.query("DELETE FROM document_chunks WHERE document_id = $1", [documentId]);
+
+  return {
+    deleted: true,
+    chunksDeleted: Number(deletedChunks.rowCount || 0)
+  };
 }
 
 export async function recordEvent(userId, projectId, eventType, payload) {

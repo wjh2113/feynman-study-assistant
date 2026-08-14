@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { PageHeading } from "../../components/PageHeading.jsx";
 import { EmptyMini } from "../../components/EmptyMini.jsx";
 import { Spinner } from "../../components/Spinner.jsx";
@@ -16,8 +16,9 @@ import {
   Zap
 } from "../../components/icons.jsx";
 import { formatSize } from "../../lib/format.js";
+import { outlineForSource } from "../../lib/documentOutline.js";
 import { analyzeBackground } from "../../api/ingest.js";
-import { deleteDocument, reindexProject } from "../../api/projects.js";
+import { deleteDocument, reindexProject, resummarizeProject } from "../../api/projects.js";
 import { FileTypeIcon } from "./FileTypeIcon.jsx";
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -36,9 +37,20 @@ export function Sources({
   const [deleteSourceId, setDeleteSourceId] = useState(null);
   const [deletingSourceId, setDeletingSourceId] = useState(null);
   const [reindexing, setReindexing] = useState(false);
+  const [resummarizing, setResummarizing] = useState(false);
   const fileInput = useRef();
+  const prevSourceCountRef = useRef(0);
   const sources = project.analysis?.sources || [];
   const hasPersistedSources = Number(project.documentCount || 0) > 0 || sources.some((source) => source.downloadUrl);
+
+  useEffect(() => {
+    const count = sources.length;
+    if (count > prevSourceCountRef.current && count > 0) {
+      const newest = sources[sources.length - 1];
+      if (newest?.id) setOpenSource(newest.id);
+    }
+    prevSourceCountRef.current = count;
+  }, [sources]);
 
   const addFiles = (list) => {
     const incoming = Array.from(list || []);
@@ -95,16 +107,6 @@ export function Sources({
     }
   };
 
-  const importSampleMaterials = () => {
-    const samples = [
-      new File([`# AI 产品方法论\n\nAI 产品不是给旧功能增加聊天框，而是从模型能力出发重构用户任务链路。\n\n## 能力边界\n高风险回答必须设置人工确认条件，并向用户展示模型的不确定性。\n\n## 数据飞轮\n产品使用产生反馈，反馈改善模型，模型改进后带来更多有效使用。`], "AI产品方法论示例.md", { type: "text/markdown" }),
-      new File([`# 课堂经验\n\n不要掩盖模型的不确定性，要设计处理不确定性的体验。上线前先明确错误成本和人工介入阈值。\n\n点赞点踩不一定是高质量反馈，用户如何修改模型输出往往更能反映真实偏好。`], "课堂经验示例.md", { type: "text/markdown" }),
-      new File([`# 个人学习笔记\n\n先验证最危险的假设，再增加投入。产品进展应以关键不确定性是否减少来判断。\n\n价值指标必须对应用户任务的最终结果，每次真实使用都应产生可学习的反馈信号。`], "个人学习笔记示例.md", { type: "text/markdown" })
-    ];
-    setFiles(samples);
-    analyze(samples);
-  };
-
   const deleteSource = async (source) => {
     setDeletingSourceId(source.id);
     try {
@@ -112,7 +114,15 @@ export function Sources({
       updateProject(data.project);
       if (openSource === source.id) setOpenSource(null);
       setDeleteSourceId(null);
-      showToast(`已删除“${source.name}”及其检索分块`);
+      if (data.resummarize?.resummarized) {
+        showToast(`已删除“${source.name}”，向量分块已清理，知识地图已按剩余资料重新总结`);
+      } else if (data.mapCleared && data.needsResummarize) {
+        showToast(`已删除“${source.name}”及向量分块，知识地图已清空，请重新总结剩余资料`);
+      } else if (data.mapCleared) {
+        showToast(`已删除“${source.name}”及向量分块，知识地图已清空`);
+      } else {
+        showToast(`已删除“${source.name}”及其检索分块`);
+      }
     } catch (error) {
       showToast(error.message);
     } finally {
@@ -133,13 +143,37 @@ export function Sources({
     }
   };
 
+  const resummarizeSources = async () => {
+    setResummarizing(true);
+    try {
+      const data = await resummarizeProject(project.id);
+      updateProject(data.project);
+      showToast(
+        data.demo
+          ? `已根据 ${data.documents} 份资料重新生成知识地图（演示模式）`
+          : `已根据 ${data.documents} 份资料重新总结知识地图`
+      );
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      setResummarizing(false);
+    }
+  };
+
   const renderSource = (source) => {
     const expanded = openSource === source.id;
     const report = source.parseReport || {};
+    const outline = outlineForSource(source);
+    const stats = outline.stats || {};
     const ocrLabel =
-      report.ocrStatus === "ready" ? `OCR ${report.imagesOcrd || 0} 张`
+      report.ocrStatus === "ready" ? `OCR ${report.imagesOcrd || 0}/${report.imagesFound || report.imagesOcrd || 0} 张`
         : report.ocrStatus === "not_configured" ? "OCR 待配置"
-          : report.ocrStatus === "partial" ? "OCR 部分完成" : "无需 OCR";
+          : report.ocrStatus === "partial" ? `OCR 部分完成 ${report.imagesOcrd || 0}/${report.imagesFound || "?"}`
+            : "无需 OCR";
+    const completenessLabel =
+      outline.completeness === "complete" ? "解析较完整"
+        : outline.completeness === "empty" ? "未提取到文本"
+          : "解析可能不完整";
     return (
       <div className={`source-item ${expanded ? "expanded" : ""}`} key={source.id}>
         <div className="file-row">
@@ -147,7 +181,7 @@ export function Sources({
           <div className="file-copy"><strong>{source.name}</strong><span>{source.type} · {source.pages || 1} 页 {source.chunks ? `· ${source.chunks} 个检索分块` : ""} · {ocrLabel}</span></div>
           <button className="parse-toggle" onClick={() => setOpenSource(expanded ? null : source.id)}>
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-            {expanded ? "收起解析" : "查看解析"}
+            {expanded ? "收起解析" : "查看大纲"}
           </button>
           {source.downloadUrl ? (
             <a className="icon-btn" href={source.downloadUrl} title="下载原始资料"><Download size={17} /></a>
@@ -165,6 +199,7 @@ export function Sources({
           <div className="source-delete-confirm" role="alert">
             <div>
               <strong>确认删除“{source.name}”？</strong>
+              <span>将删除原文件、向量分块与检索索引，并清空学科知识地图；若还有其他资料，会尝试重新总结。</span>
               <span>原始文件、资料记录和对应的向量检索分块都会删除，此操作无法撤销。</span>
             </div>
             <button className="secondary-btn" onClick={() => setDeleteSourceId(null)} disabled={deletingSourceId === source.id}>取消</button>
@@ -176,6 +211,33 @@ export function Sources({
         )}
         {expanded && (
           <div className="parse-detail">
+            <div className="parse-outline">
+              <div className="parse-outline-head">
+                <span className="section-kicker">资料大纲</span>
+                <b className={`parse-completeness ${outline.completeness || "partial"}`}>{completenessLabel}</b>
+              </div>
+              <p className="parse-outline-tip">用大纲核对是否解析完整：标题是否齐全、字数与图片 OCR 是否合理。</p>
+              <div className="parse-stats">
+                <span>原生文本 <b>{stats.nativeCharacters || 0}</b> 字</span>
+                <span>OCR 文本 <b>{stats.ocrCharacters || 0}</b> 字</span>
+                <span>入库分块 <b>{stats.chunkCount || source.chunks || 0}</b> 个</span>
+                <span>检测图片 <b>{stats.imagesFound || 0}</b> 张</span>
+                <span>已 OCR <b>{stats.imagesOcrd || 0}</b> 张</span>
+                {stats.imagesSkipped > 0 && <span>未 OCR <b>{stats.imagesSkipped}</b> 张</span>}
+                {stats.indexedCharacters > 0 && <span>索引字符 <b>{stats.indexedCharacters}</b></span>}
+              </div>
+              {!!outline.sections?.length ? (
+                <ol className="parse-outline-list">
+                  {outline.sections.map((section, index) => (
+                    <li key={`${section.title}-${index}`} style={{ paddingLeft: `${Math.max(0, (section.level || 1) - 1) * 12}px` }}>
+                      <span>{section.title}</span>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="parse-outline-empty">暂未识别出清晰章节标题，请向下查看原文预览。</p>
+              )}
+            </div>
             <div className="parse-summary">
               <span className="section-kicker">本资料总结</span>
               <h3>{source.summary?.summary || "尚未生成总结"}</h3>
@@ -184,14 +246,8 @@ export function Sources({
               )}
               <p className="verification-note">{source.summary?.verificationNote}</p>
             </div>
-            <div className="parse-stats">
-              <span>原生文本 <b>{report.nativeCharacters || 0}</b> 字</span>
-              <span>OCR 文本 <b>{report.ocrCharacters || 0}</b> 字</span>
-              <span>检测图片 <b>{report.imagesFound || 0}</b> 张</span>
-              <span>已 OCR <b>{report.imagesOcrd || 0}</b> 张</span>
-            </div>
-            {!!report.warnings?.length && (
-              <div className="parse-warning"><CircleAlert size={15} /><div>{report.warnings.map((warning) => <p key={warning}>{warning}</p>)}</div></div>
+            {(!!report.warnings?.length || !!outline.notes?.length) && (
+              <div className="parse-warning"><CircleAlert size={15} /><div>{[...(report.warnings || []), ...(outline.notes || []).filter((note) => !(report.warnings || []).includes(note))].map((warning) => <p key={warning}>{warning}</p>)}</div></div>
             )}
             <div className="parsed-preview">
               <span className="section-kicker">解析原文预览（用于核对）</span>
@@ -208,7 +264,7 @@ export function Sources({
       <PageHeading
         eyebrow="第一步 · 构建专属语料库"
         title="学科资料"
-        description="上传课件与笔记。解析完成后先核对每份资料的总结、关键点和原文预览，再进入知识地图；练习时再勾选要使用的资料。"
+        description="上传课件与笔记。解析完成后会展示资料大纲，便于核对是否解析完整；再进入知识地图。练习时再勾选要使用的资料。"
         action={<button className="primary-btn" onClick={analyze} disabled={loading}>{loading ? <Spinner /> : <Sparkles size={17} />}{loading ? "正在提炼…" : files.length ? `分析 ${files.length} 份新资料` : "查看知识地图"}</button>}
       />
 
@@ -239,12 +295,12 @@ export function Sources({
         </div>
       )}
 
-      {!hasPersistedSources && sources.length > 0 && (
+      {project.analysis?.needsResummarize && sources.length > 0 && (
         <div className="request-warning">
           <CircleAlert size={16} />
-          <span>下方内容是产品演示，不是已上传资料，暂不能参与检索。</span>
-          <button className="secondary-btn" onClick={importSampleMaterials} disabled={loading}>
-            {loading ? <Spinner /> : <UploadCloud size={15} />} 导入可检索示例资料
+          <span>资料已变更，知识地图已清空，请重新总结剩余资料。</span>
+          <button className="secondary-btn" onClick={resummarizeSources} disabled={resummarizing || loading}>
+            {resummarizing ? <Spinner /> : <Sparkles size={15} />} 重新总结知识地图
           </button>
         </div>
       )}
@@ -265,9 +321,20 @@ export function Sources({
 
       <section className="panel file-panel">
         <div className="panel-head">
-          <div><span className="section-kicker">{hasPersistedSources ? "已入库" : "产品演示"}</span><h3>{sources.length} 份资料</h3></div>
+          <div><span className="section-kicker">{hasPersistedSources ? "已入库" : "资料列表"}</span><h3>{sources.length} 份资料</h3></div>
           <div className="source-panel-actions">
-            {hasPersistedSources && !!sources.length && <button className="secondary-btn" onClick={reindexSources} disabled={reindexing}>{reindexing ? <Spinner /> : <RotateCcw size={14} />}{reindexing ? "正在重建索引…" : "重建检索索引"}</button>}
+            {hasPersistedSources && !!sources.length && (
+              <button className="secondary-btn" onClick={resummarizeSources} disabled={resummarizing || loading}>
+                {resummarizing ? <Spinner /> : <Sparkles size={14} />}
+                {resummarizing ? "正在重新总结…" : "重新总结"}
+              </button>
+            )}
+            {hasPersistedSources && !!sources.length && (
+              <button className="secondary-btn" onClick={reindexSources} disabled={reindexing}>
+                {reindexing ? <Spinner /> : <RotateCcw size={14} />}
+                {reindexing ? "正在重建索引…" : "重建检索索引"}
+              </button>
+            )}
             <button className="filter-btn">全部类型 <ChevronDown size={14} /></button>
           </div>
         </div>

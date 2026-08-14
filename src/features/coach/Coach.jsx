@@ -224,7 +224,8 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
   };
 
   const submit = async (overrideText) => {
-    const userText = String(overrideText ?? answer).trim();
+    const raw = typeof overrideText === "string" ? overrideText : answer;
+    const userText = String(raw || "").trim();
     if (!userText || loading || completed) return;
     setAnswer("");
     setRequestError("");
@@ -417,7 +418,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
             <div className="request-error coach-request-error" role="alert">
               <CircleAlert size={17} />
               <div><strong>发送失败</strong><p>{requestError}</p></div>
-              <button className="secondary-btn" onClick={submit} disabled={!answer.trim() || loading}><RotateCcw size={15} /> 重试</button>
+              <button className="secondary-btn" onClick={() => submit()} disabled={!answer.trim() || loading}><RotateCcw size={15} /> 重试</button>
             </div>
           )}
 
@@ -437,7 +438,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
                 <VoiceInputButton
                   disabled={loading || completed}
                   showToast={showToast}
-                  title="语音输入解释"
+                  title="语音输入"
                   tip="录音时实时显示浏览器转写，结束后自动交给 AI 修正"
                   placeholder="用人话解释概念… 识别结果会出现在这里"
                   confirmLabel="确认"

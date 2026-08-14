@@ -26,6 +26,10 @@ export function reindexProject(projectId) {
   return apiFetch(`/api/projects/${encodeURIComponent(projectId)}/reindex`, { method: "POST" });
 }
 
+export function resummarizeProject(projectId) {
+  return apiFetch(`/api/projects/${encodeURIComponent(projectId)}/resummarize`, { method: "POST" });
+}
+
 export function listChapters(projectId) {
   return apiFetch(`/api/projects/${encodeURIComponent(projectId)}/chapters`);
 }
@@ -100,5 +104,13 @@ export function generateOnePager(project, { chapter, documentIds, practiceDocume
       practiceDocumentIds,
       practiceDocs
     })
+  });
+}
+
+export function generateLearningPlan({ title, goal, level }) {
+  return apiFetch("/api/learning-plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, goal, level })
   });
 }

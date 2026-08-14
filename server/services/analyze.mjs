@@ -3,6 +3,7 @@ import { chunkSources } from "../chunking.mjs";
 import { embedTexts, embeddingStatus } from "../embedding.mjs";
 import { getEmbeddingConfig, getModelConfig } from "../model-config.mjs";
 import { parseFile } from "../document-parser.mjs";
+import { buildDocumentOutline } from "../document-outline.mjs";
 import { getObject } from "../object-storage.mjs";
 import { enqueueTask } from "../task-queue.mjs";
 import {
@@ -143,7 +144,7 @@ export function normalizeDocumentSummaries(input, sources) {
   });
 }
 
-export function demoAnalysis(title, mode, sources) {
+export function demoAnalysis(title, sources) {
   const sourceNames = sources.map((item) => item.filename);
   const fallback = sourceNames[0] || "产品学习资料.pdf";
   const second = sourceNames[1] || fallback;
@@ -217,23 +218,20 @@ export function demoAnalysis(title, mode, sources) {
         ]
       }
     ],
-    tacitKnowledge:
-      mode === "course"
-        ? [
-            {
-              title: "先验证最危险的假设",
-              type: "实战经验",
-              detail: "讲师强调，项目失败往往不是执行不够完整，而是最关键的前提从未被验证。",
-              sourceRef: { file: second, page: 9 }
-            },
-            {
-              title: "不要用功能数量衡量进展",
-              type: "反直觉观点",
-              detail: "真正的进展是关键不确定性减少，而不是产出的页面或文档变多。",
-              sourceRef: { file: second, page: 13 }
-            }
-          ]
-        : [],
+    tacitKnowledge: [
+      {
+        title: "先验证最危险的假设",
+        type: "实战经验",
+        detail: "讲师强调，项目失败往往不是执行不够完整，而是最关键的前提从未被验证。",
+        sourceRef: { file: second, page: 9 }
+      },
+      {
+        title: "不要用功能数量衡量进展",
+        type: "反直觉观点",
+        detail: "真正的进展是关键不确定性减少，而不是产出的页面或文档变多。",
+        sourceRef: { file: second, page: 13 }
+      }
+    ],
     scenarios: [
       {
         id: "s1",
@@ -312,9 +310,10 @@ export async function analyzeFiles({ files, userId, title, mode, projectId, chap
         source.documentKey = storedFiles[fileIndex]?.documentKey || randomUUID();
         source.summary = buildSourceSummary(source);
         source.parsedPreview = source.pages
-          .map((page) => `第 ${page.page} 页：${page.text}`)
+          .map((page) => `第 ${page.page} 页\n${page.text}`)
           .join("\n\n")
-          .slice(0, 1600);
+          .slice(0, 30000);
+        source.outline = buildDocumentOutline(source);
         sources.push(source);
         await onProgress({ percent: 5 + Math.round(((fileIndex + 1) / files.length) * 35), stage: "ocr", label: "文档解析与 OCR 已完成" });
       }
@@ -370,13 +369,25 @@ export async function analyzeFiles({ files, userId, title, mode, projectId, chap
           chunks: sourceChunks,
           embeddings: sourceEmbeddings,
           stored: storedFiles[sourceIndex]
+        }).then((stored) => {
+          const outline = buildDocumentOutline(source, {
+            chunkCount: sourceChunks.length,
+            indexedCharacters: sourceChunks.reduce((sum, chunk) => sum + String(chunk.content || "").length, 0)
+          });
+          source.outline = outline;
+          return {
+            ...stored,
+            outline,
+            parseReport: source.parseReport,
+            parsedPreview: source.parsedPreview
+          };
         })
       );
     }
     if (!checkpoint.storedSources) await onCheckpoint({ storedSources });
     await onProgress({ percent: 75, stage: "content", label: "正在生成内容分析" });
 
-    const demo = demoAnalysis(title, mode, sources);
+    const demo = demoAnalysis(title, sources);
     const modelConfig = await getModelConfig(userId);
     const modelConfigured = Boolean(modelConfig.apiKey);
     let result = checkpoint.contentAnalysis || {};
@@ -390,7 +401,7 @@ export async function analyzeFiles({ files, userId, title, mode, projectId, chap
         },
         {
           role: "user",
-          content: `请分析学习项目《${title}》。模式：${mode === "course" ? "榨干一门课程" : "快速了解一个主题"}。
+          content: `请分析学习项目《${title}》。
 返回 JSON，结构严格为：
 {
  "summary": "一句话总结",
@@ -407,7 +418,7 @@ export async function analyzeFiles({ files, userId, title, mode, projectId, chap
  "questions":[{"id":"q1","question":"基于资料、能检验真实理解的完整问题","conceptId":"c1","concept":"对应概念","why":"考察意图",
    "sourceRefs":[{"file":"原文件名","page":1,"quote":"出题依据"}]}]
 }
-要求：为每个原文件单独生成一份 documentSummaries，不能把不同文件的内容混成一份；3-5个模块，每模块1-4个概念；5个左右核心概念；3条高价值知识；课程模式重点交叉对比课件与转写；生成2个真实场景题；再生成5-8个费曼问题，覆盖通俗解释、举例、边界、比较和真实应用，问题必须来自资料而不是通用题库。若资料没有依据，明确写“资料未覆盖”，不要虚构引用。
+要求：为每个原文件单独生成一份 documentSummaries，不能把不同文件的内容混成一份；3-5个模块，每模块1-4个概念；5个左右核心概念；3条高价值知识；综合课件、教材、转写与笔记建立知识骨架，并提炼可迁移的隐性经验；生成2个真实场景题；再生成5-8个费曼问题，覆盖通俗解释、举例、边界、比较和真实应用，问题必须来自资料而不是通用题库。若资料没有依据，明确写“资料未覆盖”，不要虚构引用。
 
 资料如下：
 ${corpus}`
@@ -420,11 +431,18 @@ ${corpus}`
     await onProgress({ percent: 90, stage: "storage", label: "正在写入资料与索引" });
     const enrichedSources = storedSources.map((stored, index) => {
       const summary = documentSummaries[index];
+      const outline =
+        sources[index]?.outline ||
+        buildDocumentOutline(sources[index] || stored, {
+          chunkCount: stored.chunks || sources[index]?.outline?.stats?.chunkCount || 0,
+          indexedCharacters: sources[index]?.outline?.stats?.indexedCharacters || 0
+        });
       return {
         ...stored,
         summary,
         parseReport: sources[index].parseReport,
-        parsedPreview: sources[index].parsedPreview
+        parsedPreview: sources[index].parsedPreview,
+        outline
       };
     });
     await Promise.all(
@@ -433,13 +451,17 @@ ${corpus}`
       )
     );
     const existingAnalysis = existingProject?.analysis || {};
+    const replaceMap = Boolean(existingAnalysis.needsResummarize) || !(existingAnalysis.modules || []).length;
     const mergedAnalysis = {
       ...demo,
       ...result,
       documentSummaries,
       sources: mergeAnalysisSources(existingAnalysis.sources, enrichedSources),
-      modules: mergeAnalysisModules(existingAnalysis.modules, result.modules || demo.modules || []),
+      modules: replaceMap
+        ? (result.modules || demo.modules || [])
+        : mergeAnalysisModules(existingAnalysis.modules, result.modules || demo.modules || []),
       projectId,
+      needsResummarize: false,
       retrieval: {
         chunks: allChunks.length,
         parents: hierarchy.parents.length,
@@ -450,10 +472,12 @@ ${corpus}`
     };
     const analysis = {
       ...mergedAnalysis,
-      questions: mergeChapterQuestions(
-        existingAnalysis.questions,
-        normalizeQuestions(result.questions, mergedAnalysis)
-      )
+      questions: replaceMap
+        ? normalizeQuestions(result.questions, mergedAnalysis)
+        : mergeChapterQuestions(
+          existingAnalysis.questions,
+          normalizeQuestions(result.questions, mergedAnalysis)
+        )
     };
     await saveProject({
       ...(existingProject || {}),
@@ -467,7 +491,10 @@ ${corpus}`
       analysis,
       blindspots: existingProject?.blindspots || [],
       sessions: existingProject?.sessions || [],
-      onePager: existingProject?.onePager || null
+      onePager: existingProject?.onePager || null,
+      learningPlan: existingProject?.learningPlan || null,
+      goal: existingProject?.goal,
+      level: existingProject?.level
     });
     if (resolvedChapterId) {
       const chapter = await getChapter(resolvedChapterId, userId);

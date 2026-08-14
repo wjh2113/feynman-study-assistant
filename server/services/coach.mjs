@@ -440,6 +440,9 @@ export async function generateVariantQuestion(project, blindspot, concept, userI
 
 export async function generateOnePager({ userId, project, chapter = null, documentIds = [], practiceDocs = null }) {
   try {
+    if (!project || typeof project !== "object") {
+      return { status: 400, body: { error: "缺少学科数据，请刷新页面后重试" } };
+    }
     const practice = {
       blindspots: Array.isArray(project?.blindspots) && project.blindspots.length
         ? project.blindspots
@@ -539,7 +542,7 @@ export async function generateOnePager({ userId, project, chapter = null, docume
       {
         role: "user",
         content: `根据以下项目数据生成“一页纸学习卡 + 深度复盘/项目拆解文章大纲”：
-${JSON.stringify(project).slice(0, 120000)}
+${JSON.stringify(project ?? {}).slice(0, 120000)}
 返回：
 {"title":"","thesis":"","takeaways":["","",""],"action":"","reflection":"",
 "outline":{"title":"","format":"深度复盘 / 项目拆解文章","audience":"","coreArgument":"",

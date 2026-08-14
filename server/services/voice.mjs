@@ -3,18 +3,29 @@ import { deepseek } from "./llm.mjs";
 
 const DEFAULT_ASR_MODEL = process.env.QWEN_ASR_MODEL || "qwen3-asr-flash";
 
-function messageText(data) {
-  const content = data?.choices?.[0]?.message?.content;
-  if (typeof content === "string") return content;
+export function messageText(data) {
+  const message = data?.choices?.[0]?.message;
+  const content = message?.content;
+  if (typeof content === "string") return content.trim();
   if (Array.isArray(content)) {
-    return content.map((item) => item?.text || item?.transcript || "").join("");
+    return content
+      .map((item) => {
+        if (typeof item === "string") return item;
+        return item?.text || item?.transcript || item?.output_text || "";
+      })
+      .join("")
+      .trim();
   }
-  return "";
+  if (content && typeof content === "object") {
+    return String(content.text || content.transcript || "").trim();
+  }
+  return String(message?.text || data?.text || data?.output?.text || "").trim();
 }
 
 async function resolveAsrConfig(userId) {
   const vision = await getVisionConfig(userId);
-  if (vision.apiKey) {
+  // Qwen ASR needs a DashScope-compatible key; Baidu OCR AK/SK cannot call it.
+  if (vision.provider !== "baidu" && vision.apiKey) {
     return {
       baseUrl: vision.baseUrl.replace(/\/$/, ""),
       apiKey: vision.apiKey,
@@ -24,12 +35,15 @@ async function resolveAsrConfig(userId) {
   }
   const embedding = await getEmbeddingConfig(userId);
   if (embedding?.embedding?.apiKey && embedding.embedding.provider !== "local") {
-    return {
-      baseUrl: String(embedding.embedding.baseUrl || "").replace(/\/$/, ""),
-      apiKey: embedding.embedding.apiKey,
-      model: DEFAULT_ASR_MODEL,
-      source: "embedding"
-    };
+    const baseUrl = String(embedding.embedding.baseUrl || "").replace(/\/$/, "");
+    if (baseUrl.includes("dashscope") || baseUrl.includes("aliyuncs")) {
+      return {
+        baseUrl,
+        apiKey: embedding.embedding.apiKey,
+        model: DEFAULT_ASR_MODEL,
+        source: "embedding"
+      };
+    }
   }
   const envKey = process.env.VISION_API_KEY || process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY || "";
   if (envKey) {
@@ -40,7 +54,10 @@ async function resolveAsrConfig(userId) {
       source: "env"
     };
   }
-  throw new Error("未配置语音识别密钥。请先在「个人设置 → 模型服务」中配置 OCR（百炼）API Key");
+  if (vision.provider === "baidu") {
+    throw new Error("当前 OCR 使用的是百度密钥，无法做语音识别。请在「模型服务」中额外配置百炼 API Key，或先使用浏览器实时转写结果");
+  }
+  throw new Error("未配置语音识别密钥。请先在「个人设置 → 模型服务」中配置百炼 API Key（OCR/Qwen）");
 }
 
 async function callAsr({ baseUrl, apiKey, model }, audioDataUrl) {
@@ -68,7 +85,11 @@ async function callAsr({ baseUrl, apiKey, model }, audioDataUrl) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(data?.error?.message || data?.message || `语音识别失败（HTTP ${response.status}）`);
+      const raw = data?.error?.message || data?.message || `语音识别失败（HTTP ${response.status}）`;
+      if (/audio is empty|InvalidParameter/i.test(raw)) {
+        throw new Error("录音内容无效或过短，请靠近麦克风多说几秒后再结束");
+      }
+      throw new Error(raw);
     }
     return messageText(data).trim();
   } catch (error) {

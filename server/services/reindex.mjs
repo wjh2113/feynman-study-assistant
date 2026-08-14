@@ -2,6 +2,7 @@ import { chunkSources } from "../chunking.mjs";
 import { embedTexts, embeddingStatus } from "../embedding.mjs";
 import { getEmbeddingConfig } from "../model-config.mjs";
 import { parseFile } from "../document-parser.mjs";
+import { buildDocumentOutline } from "../document-outline.mjs";
 import { getObject } from "../object-storage.mjs";
 import {
   getProject,
@@ -42,11 +43,16 @@ export async function reindexProject(projectId, userId, onProgress = () => {}) {
       });
       totalChunks += hierarchy.chunks.length;
       totalParents += hierarchy.parents.length;
+      const outline = buildDocumentOutline(source, {
+        chunkCount: hierarchy.chunks.length,
+        indexedCharacters: hierarchy.chunks.reduce((sum, chunk) => sum + String(chunk.content || "").length, 0)
+      });
       updatedSources.set(document.id, {
         chunks: hierarchy.chunks.length,
         pages: source.pages.length,
         parseReport: source.parseReport,
-        parsedPreview: source.parsedPreview
+        parsedPreview: source.parsedPreview,
+        outline
       });
     }
 

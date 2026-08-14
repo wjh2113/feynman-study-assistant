@@ -5,7 +5,7 @@ export const cleanJson = (value) => {
   return JSON.parse(text);
 };
 
-export async function deepseek(messages, temperature = 0.35, userId, timeoutMs = Number(process.env.GENERATION_TIMEOUT_MS || 45_000)) {
+export async function deepseek(messages, temperature = 0.35, userId, timeoutMs = Number(process.env.GENERATION_TIMEOUT_MS || 90_000)) {
   const config = await getModelConfig(userId);
   if (!config.apiKey) return null;
   const controller = new AbortController();

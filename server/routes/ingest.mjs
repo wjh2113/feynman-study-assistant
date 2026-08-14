@@ -16,6 +16,7 @@ import {
 import { rateLimit } from "../middleware/security.mjs";
 import { analyzeFiles, enqueueAnalysis } from "../services/analyze.mjs";
 import { reindexProject } from "../services/reindex.mjs";
+import { resummarizeProject } from "../services/resummarize.mjs";
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
@@ -56,6 +57,26 @@ router.post("/api/projects/:projectId/reindex", async (req, res) => {
   }
 });
 
+router.post("/api/projects/:projectId/resummarize", async (req, res) => {
+  try {
+    if (!(await projectBelongsToUser(req.params.projectId, req.userId))) {
+      return res.status(404).json({ error: "学习项目不存在" });
+    }
+    if (req.query.background === "true") {
+      const job = await enqueueTask(
+        "resummarize",
+        { projectId: req.params.projectId, userId: req.userId },
+        ({ projectId, userId }, progress) => resummarizeProject(projectId, userId, progress)
+      );
+      return res.status(202).json({ job });
+    }
+    res.json(await resummarizeProject(req.params.projectId, req.userId));
+  } catch (error) {
+    logError(error, { requestId: req.requestId, route: "project_resummarize", projectId: req.params.projectId, userId: req.userId });
+    res.status(400).json({ error: error.message || "重新总结失败" });
+  }
+});
+
 router.get("/api/tasks/:taskId", async (req, res) => {
   const task = await getTask(req.params.taskId);
   if (!task) return res.status(404).json({ error: "任务不存在" });
@@ -71,7 +92,7 @@ router.post("/api/analyze", rateLimit({ windowMs: 60_000, max: 12, keyPrefix: "a
       files,
       userId: req.userId,
       title: req.body.title || "新的学习项目",
-      mode: req.body.mode || "course",
+      mode: req.body.mode || "subject",
       projectId: req.body.projectId || `project-${Date.now()}`,
       chapterId: req.body.chapterId || null
     };

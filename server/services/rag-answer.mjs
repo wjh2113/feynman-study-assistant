@@ -3,6 +3,41 @@ import { getEmbeddingConfig, getModelConfig } from "../model-config.mjs";
 import { hybridSearch, recordEvent } from "../storage.mjs";
 import { deepseek } from "./llm.mjs";
 
+const NO_EVIDENCE = "资料中没有找到相关内容。";
+
+function toCitation(source, index) {
+  const content = String(source.content || source.quote || "").trim();
+  return {
+    id: source.id,
+    index: index + 1,
+    documentId: source.documentId || null,
+    filename: source.filename || "未命名资料",
+    page: source.page,
+    pageEnd: source.pageEnd,
+    headingPath: source.headingPath || "",
+    quote: content,
+    content,
+    parentContent: source.parentContent && source.parentContent !== content ? source.parentContent : null,
+    score: source.rerankScore,
+    matchedKeywords: source.matchedKeywords || []
+  };
+}
+
+function citedIndexes(answer, max) {
+  const found = new Set();
+  const text = String(answer || "");
+  for (const match of text.matchAll(/\[(\d+)\]/g)) {
+    const n = Number(match[1]);
+    if (n >= 1 && n <= max) found.add(n);
+  }
+  return [...found].sort((a, b) => a - b);
+}
+
+function isRefusal(answer) {
+  const text = String(answer || "").trim();
+  return !text || /资料中没有找到/.test(text);
+}
+
 /**
  * Answer a RAG query. Returns either `{ status, body }` for HTTP response
  * or throws. status defaults to 200 when omitted by caller convention —
@@ -21,8 +56,9 @@ export async function answerRagQuery({ userId, projectId, query }) {
     if (!candidates.length) {
       return {
         body: {
-          answer: "资料中没有找到相关内容。",
+          answer: NO_EVIDENCE,
           sources: [],
+          citations: [],
           debug: { candidateCount: 0, threshold: relevanceThreshold, candidates: [] },
           demo: !(await getModelConfig(userId)).apiKey
         }
@@ -47,8 +83,6 @@ export async function answerRagQuery({ userId, projectId, query }) {
         rank: index + 1,
         id: item.id,
         documentId: item.documentId,
-        chapterId: item.chapterId || null,
-        chapterTitle: item.chapterTitle || null,
         filename: item.filename,
         page: item.page,
         pageEnd: item.pageEnd,
@@ -68,6 +102,7 @@ export async function answerRagQuery({ userId, projectId, query }) {
         body: {
           answer: "资料中没有找到足够相关的内容。你可以换一种问法，或检查资料是否已经重新建立索引。",
           sources: [],
+          citations: [],
           debug,
           retrieval: "bge-m3-hybrid-rerank",
           insufficient: true,
@@ -75,6 +110,11 @@ export async function answerRagQuery({ userId, projectId, query }) {
         }
       };
     }
+
+    const evidenceBlock = sources.map((source, index) => `[${index + 1}] 资料文件名：${source.filename}
+页码：第${source.page}${source.pageEnd > source.page ? `-${source.pageEnd}` : ""}页
+位置：${source.headingPath || "未识别小节"}
+引用原文：${source.content}${source.parentContent && source.parentContent !== source.content ? `\n上下文：${source.parentContent}` : ""}`).join("\n\n");
 
     let answer;
     const modelConfigured = Boolean((await getModelConfig(userId)).apiKey);
@@ -84,48 +124,52 @@ export async function answerRagQuery({ userId, projectId, query }) {
         {
           role: "system",
           content:
-            "你是严格的资料问答助手。只能依据下方检索到的原文证据回答用户问题。禁止使用资料外知识、禁止补充资料未写明的内容、禁止答非所问、禁止自由发挥。若证据不足以直接回答，必须回答「资料中没有找到相关内容」。每条结论后用[1][2]标注对应证据编号。只输出合法 JSON。"
+            "你是严格的资料问答助手。规则：1) 只能依据用户消息中的「引用原文」作答；2) 禁止使用资料外知识、禁止补充、禁止举例发挥、禁止答非所问；3) 问题与原文无关或证据不足时，answer 必须恰好为「资料中没有找到相关内容。」；4) 有依据时，每个关键句末标注 [编号]，编号必须对应证据列表；5) 不要复述与问题无关的原文。只输出合法 JSON：{\"answer\":\"...\"}"
         },
         {
           role: "user",
-          content: `问题：${query}
+          content: `用户问题：${query}
 
-以下是唯一允许使用的证据（按文件名与页码标注）：
-${sources.map((source, index) => `[${index + 1}] 文件名：${source.filename}
-页码：第${source.page}${source.pageEnd > source.page ? `-${source.pageEnd}` : ""}页
-位置：${source.headingPath || "未识别小节"}
-原文：${source.content}${source.parentContent && source.parentContent !== source.content ? `\n上下文：${source.parentContent}` : ""}`).join("\n\n")}
+===== 唯一允许使用的证据（共 ${sources.length} 条）=====
+${evidenceBlock}
+===== 证据结束 =====
 
-返回 JSON：{"answer":"只根据上述原文作答；句子后标注[n]；无法作答时写「资料中没有找到相关内容」"}`
+请只根据上述证据回答用户问题。`
         }
-      ], 0.1, userId);
+      ], 0.05, userId);
       if (!result?.answer) throw new Error("文本模型没有返回有效的资料回答");
-      answer = result.answer;
+      answer = String(result.answer).trim();
+
+      // 模型若给出回答却未标注引用，且不是拒答，则强制改为拒答，避免无依据扩展
+      if (!isRefusal(answer) && citedIndexes(answer, sources.length).length === 0) {
+        answer = NO_EVIDENCE;
+      }
     } else {
-      answer = `（演示模式）资料《${sources[0].filename}》第 ${sources[0].page} 页原文：\n\n“${sources[0].content.slice(0, 400)}${sources[0].content.length > 400 ? "……" : ""}”\n\n配置 API Key 后，将严格依据检索原文回答，不会扩展资料外内容。`;
+      answer = `（演示模式）以下为检索到的原文，未调用模型扩展：\n\n来自《${sources[0].filename}》第 ${sources[0].page} 页：\n“${sources[0].content.slice(0, 500)}${sources[0].content.length > 500 ? "……" : ""}”`;
     }
+
+    const citations = sources.map((source, index) => toCitation(source, index));
+    const used = citedIndexes(answer, sources.length);
+    let visible;
+    if (used.length) {
+      visible = used.map((n) => citations[n - 1]).filter(Boolean);
+    } else if (!isRefusal(answer)) {
+      // 演示模式或未标号但未拒答：展示全部用于生成的证据
+      visible = citations;
+    } else {
+      visible = [];
+    }
+
     await recordEvent(userId, projectId, "rag_query", { query, sourceIds: sources.map((source) => source.id) });
     return {
       body: {
         answer,
-        sources: sources.map(({ id, documentId, chapterId, chapterTitle, filename, page, pageEnd, headingPath, content, parentContent, rerankScore, matchedKeywords }) => ({
-          id,
-          documentId,
-          chapterId: chapterId || null,
-          chapterTitle: chapterTitle || null,
-          filename,
-          page,
-          pageEnd,
-          headingPath,
-          quote: content,
-          content,
-          parentContent: parentContent && parentContent !== content ? parentContent : null,
-          score: rerankScore,
-          matchedKeywords
-        })),
+        sources: visible,
+        citations: visible,
         debug,
         retrieval: "bge-m3-hybrid-rerank",
         insufficient: false,
+        grounded: !isRefusal(answer),
         warning: degraded,
         demo: !modelConfigured
       }

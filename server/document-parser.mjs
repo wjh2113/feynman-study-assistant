@@ -4,10 +4,29 @@ import JSZip from "jszip";
 import { getDocument, OPS } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { getVisionConfig } from "./model-config.mjs";
 import { recognizeImage } from "./ocr.mjs";
+import { getUserPreferences } from "./user-preferences.mjs";
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
-const MAX_OCR_IMAGES_PER_FILE = 20;
+const ENV_OCR_MAX_IMAGES = Math.max(
+  1,
+  Math.min(200, Number(process.env.OCR_MAX_IMAGES || 40))
+);
+const MIN_OCR_IMAGE_BYTES = Math.max(1024, Number(process.env.OCR_MIN_IMAGE_BYTES || 4096));
 const OCR_CONCURRENCY = Math.max(1, Math.min(6, Number(process.env.OCR_CONCURRENCY || 3)));
+
+async function resolveOcrPolicy(userId) {
+  const prefs = await getUserPreferences(userId);
+  return {
+    enabled: prefs.ocrEnabled !== false,
+    maxImages: Math.max(1, Math.min(200, Number(prefs.ocrMaxImages) || ENV_OCR_MAX_IMAGES))
+  };
+}
+
+function isVisionReady(vision) {
+  return vision.provider === "baidu"
+    ? Boolean(vision.apiKey && vision.secretKey)
+    : Boolean(vision.apiKey);
+}
 
 async function mapWithConcurrency(items, concurrency, worker) {
   const results = new Array(items.length);
@@ -24,7 +43,12 @@ async function mapWithConcurrency(items, concurrency, worker) {
 }
 
 function cleanText(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
+  // Keep line breaks so Markdown / 章节标题仍可被大纲识别
+  return String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function imageMime(filename, fallback = "image/png") {
@@ -97,6 +121,7 @@ async function parsePdf(buffer, filename, userId) {
     disableFontFace: true
   }).promise;
   const report = createReport("PDF");
+  const ocrPolicy = await resolveOcrPolicy(userId);
   const vision = await getVisionConfig(userId);
   const pages = [];
   let ocrCandidates = 0;
@@ -119,19 +144,29 @@ async function parsePdf(buffer, filename, userId) {
 
     let ocrText = "";
     const shouldOcr = imageCount > 0 || nativeText.length < 80;
-    if (shouldOcr && ocrCandidates < MAX_OCR_IMAGES_PER_FILE) {
+    if (shouldOcr) {
       ocrCandidates += 1;
-      if (vision.apiKey) {
-        try {
-          const rendered = await renderPdfPage(page);
-          ocrText = await runOcr(rendered, "image/jpeg", `${filename} 第 ${index} 页`, report, userId);
-        } catch (error) {
-          report.ocrStatus = "partial";
-          appendWarning(report, `第 ${index} 页渲染失败，未能 OCR：${error.message}`);
+      if (!ocrPolicy.enabled) {
+        if (report.ocrStatus === "not_needed") report.ocrStatus = "disabled";
+        appendWarning(report, "已在个人设置中关闭图片 OCR，仅保留可提取的正文文字");
+      } else if (ocrCandidates <= ocrPolicy.maxImages) {
+        if (isVisionReady(vision)) {
+          try {
+            const rendered = await renderPdfPage(page);
+            ocrText = await runOcr(rendered, "image/jpeg", `${filename} 第 ${index} 页`, report, userId);
+          } catch (error) {
+            report.ocrStatus = "partial";
+            appendWarning(report, `第 ${index} 页渲染失败，未能 OCR：${error.message}`);
+          }
+        } else {
+          report.ocrStatus = "not_configured";
+          appendWarning(
+            report,
+            vision.provider === "baidu"
+              ? "检测到图片或扫描页，但未配置百度 OCR（需要 API Key 与 Secret Key）"
+              : "检测到图片或扫描页，但未配置 OCR 视觉模型"
+          );
         }
-      } else {
-        report.ocrStatus = "not_configured";
-        appendWarning(report, "检测到图片或扫描页，但未配置 OCR 视觉模型");
       }
     }
 
@@ -139,9 +174,13 @@ async function parsePdf(buffer, filename, userId) {
     if (text) pages.push({ page: index, text, nativeText, ocrText });
   }
 
-  if (ocrCandidates > MAX_OCR_IMAGES_PER_FILE) {
-    appendWarning(report, `OCR 最多处理前 ${MAX_OCR_IMAGES_PER_FILE} 个候选页面`);
-    report.ocrStatus = "partial";
+  if (ocrPolicy.enabled && ocrCandidates > ocrPolicy.maxImages) {
+    appendWarning(
+      report,
+      `OCR 最多处理前 ${ocrPolicy.maxImages} 个候选页面（可在个人设置中调整识别张数）`
+    );
+    report.ocrStatus = report.ocrStatus === "ready" ? "partial" : report.ocrStatus;
+    if (report.ocrStatus === "not_needed") report.ocrStatus = "partial";
   }
   if (!pages.length) {
     pages.push({ page: 1, text: "", nativeText: "", ocrText: "" });
@@ -155,23 +194,65 @@ async function parseDocx(buffer, filename, userId) {
   const nativeText = cleanText(raw.value);
   const report = createReport("DOCX");
   report.nativeCharacters = nativeText.length;
+  const ocrPolicy = await resolveOcrPolicy(userId);
   const zip = await JSZip.loadAsync(buffer);
-  const media = Object.values(zip.files)
-    .filter((entry) => !entry.dir && /^word\/media\//i.test(entry.name))
-    .slice(0, MAX_OCR_IMAGES_PER_FILE);
-  report.imagesFound = media.length;
-  const ocrSections = await mapWithConcurrency(media, OCR_CONCURRENCY, async (entry, index) => {
+  const allMedia = Object.values(zip.files).filter(
+    (entry) => !entry.dir && /^word\/media\//i.test(entry.name)
+  );
+  report.imagesFound = allMedia.length;
+
+  if (!ocrPolicy.enabled) {
+    if (allMedia.length > 0) {
+      report.imagesSkipped = allMedia.length;
+      report.ocrStatus = "disabled";
+      appendWarning(report, "已在个人设置中关闭图片 OCR，仅保留可提取的正文文字");
+    }
+    return {
+      filename,
+      type: "DOCX",
+      pages: [{ page: 1, text: nativeText, nativeText, ocrText: "" }],
+      parseReport: report
+    };
+  }
+
+  const eligible = [];
+  let tinySkipped = 0;
+  for (const entry of allMedia) {
     const imageBuffer = await entry.async("nodebuffer");
+    if (imageBuffer.length < MIN_OCR_IMAGE_BYTES) {
+      tinySkipped += 1;
+      continue;
+    }
+    eligible.push({ entry, imageBuffer });
+  }
+  report.imagesTinySkipped = tinySkipped;
+  report.imagesEligible = eligible.length;
+
+  const selected = eligible.slice(0, ocrPolicy.maxImages);
+  const cappedSkipped = Math.max(0, eligible.length - selected.length);
+  report.imagesSkipped = tinySkipped + cappedSkipped;
+
+  if (cappedSkipped > 0) {
+    appendWarning(
+      report,
+      `文档含 ${allMedia.length} 张图片（其中 ${tinySkipped} 张过小已跳过），本次仅 OCR 前 ${selected.length} 张较大图片，另有 ${cappedSkipped} 张因上限未处理。可在个人设置中调整「识别张数」后重新解析。`
+    );
+    report.ocrStatus = "partial";
+  } else if (tinySkipped > 0 && eligible.length === 0 && allMedia.length > 0) {
+    appendWarning(report, `文档含 ${allMedia.length} 张图片，但均为过小图，已跳过 OCR`);
+  }
+
+  const ocrSections = await mapWithConcurrency(selected, OCR_CONCURRENCY, async (item, index) => {
     const ocrText = await runOcr(
-      imageBuffer,
-      imageMime(entry.name),
+      item.imageBuffer,
+      imageMime(item.entry.name),
       `${filename} 内嵌图片 ${index + 1}`,
       report,
       userId
     );
     return ocrText ? `图片 ${index + 1}：${ocrText}` : "";
   });
-  if (media.length && report.ocrStatus === "not_configured") {
+  if (selected.length && report.ocrStatus === "not_configured") {
     appendWarning(report, "检测到 DOCX 内嵌图片，但未配置 OCR 视觉模型");
   }
   const joinedOcr = ocrSections.filter(Boolean).join("\n\n");
@@ -187,6 +268,18 @@ async function parseDocx(buffer, filename, userId) {
 async function parseImage(file, filename, ext, userId) {
   const report = createReport(ext.slice(1).toUpperCase());
   report.imagesFound = 1;
+  const ocrPolicy = await resolveOcrPolicy(userId);
+  if (!ocrPolicy.enabled) {
+    report.imagesSkipped = 1;
+    report.ocrStatus = "disabled";
+    appendWarning(report, "已在个人设置中关闭图片 OCR");
+    return {
+      filename,
+      type: ext.slice(1).toUpperCase(),
+      pages: [{ page: 1, text: "", nativeText: "", ocrText: "" }],
+      parseReport: report
+    };
+  }
   const ocrText = await runOcr(
     file.buffer,
     file.mimetype || imageMime(filename),

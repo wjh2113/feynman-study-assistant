@@ -32,8 +32,8 @@ export function AuthPage({ onLogin }) {
         <div className="auth-brand">
           <div className="brand-mark"><span>知</span></div>
           <div>
-            <strong>知返</strong>
-            <small>费曼学习助手</small>
+            <strong>知练</strong>
+            <small>费曼型学习助手</small>
           </div>
         </div>
         <h1>{mode === "login" ? "登录" : "注册账号"}</h1>

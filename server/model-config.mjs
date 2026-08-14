@@ -93,46 +93,106 @@ export async function testModelConfig(userId, input = {}) {
   });
 }
 
+const VISION_PROVIDERS = new Set(["qwen", "baidu"]);
+const BAIDU_LANGUAGE_TYPES = new Set(["CHN_ENG", "JAP", "ENG", "KOR"]);
+
+function normalizeVisionProvider(value, fallback = "qwen") {
+  const provider = String(value || fallback).trim().toLowerCase();
+  return VISION_PROVIDERS.has(provider) ? provider : fallback;
+}
+
+function visionProviderLabel(provider) {
+  if (provider === "baidu") return "百度智能云 OCR";
+  return "阿里云百炼 Qwen OCR";
+}
+
 export async function getVisionConfig(userId) {
   const stored = (await getUserAppSetting(userId, "vision")) || {};
+  const provider = normalizeVisionProvider(
+    stored.provider || process.env.VISION_PROVIDER || "qwen"
+  );
+  const languageType = BAIDU_LANGUAGE_TYPES.has(String(stored.languageType || "").toUpperCase())
+    ? String(stored.languageType).toUpperCase()
+    : "CHN_ENG";
   return {
+    provider,
     baseUrl: normalizeBaseUrl(
       stored.baseUrl || process.env.VISION_BASE_URL || DEFAULT_VISION_BASE_URL,
       DEFAULT_VISION_BASE_URL
     ),
     model: String(stored.model || process.env.VISION_MODEL || DEFAULT_VISION_MODEL).trim(),
-    apiKey: String(decryptSecret(stored.apiKey) || process.env.VISION_API_KEY || "").trim()
+    apiKey: String(
+      decryptSecret(stored.apiKey) ||
+        (provider === "baidu" ? process.env.BAIDU_OCR_API_KEY : "") ||
+        process.env.VISION_API_KEY ||
+        ""
+    ).trim(),
+    secretKey: String(
+      decryptSecret(stored.secretKey) ||
+        (provider === "baidu" ? (process.env.BAIDU_OCR_SECRET_KEY || process.env.VISION_SECRET_KEY || "") : "") ||
+        ""
+    ).trim(),
+    languageType
   };
 }
 
 export async function getPublicVisionConfig(userId) {
   const config = await getVisionConfig(userId);
+  const configured = config.provider === "baidu"
+    ? Boolean(config.apiKey && config.secretKey)
+    : Boolean(config.apiKey);
   return {
-    provider: "阿里云百炼 Qwen OCR",
+    provider: config.provider,
+    providerLabel: visionProviderLabel(config.provider),
     baseUrl: config.baseUrl,
     model: config.model,
-    configured: Boolean(config.apiKey),
-    apiKeyMasked: maskKey(config.apiKey)
+    languageType: config.languageType,
+    configured,
+    apiKeyMasked: maskKey(config.apiKey),
+    secretKeyMasked: maskKey(config.secretKey)
   };
 }
 
 export async function updateVisionConfig(userId, input = {}) {
   const current = await getVisionConfig(userId);
+  const provider = normalizeVisionProvider(input.provider || current.provider, current.provider);
+  const languageType = BAIDU_LANGUAGE_TYPES.has(String(input.languageType || current.languageType || "").toUpperCase())
+    ? String(input.languageType || current.languageType || "CHN_ENG").toUpperCase()
+    : "CHN_ENG";
   const next = {
+    provider,
     baseUrl: normalizeBaseUrl(
       input.baseUrl || current.baseUrl,
       DEFAULT_VISION_BASE_URL
     ),
-    model: String(input.model || current.model || DEFAULT_VISION_MODEL).trim(),
-    apiKey: input.clearApiKey ? "" : String(input.apiKey || current.apiKey || "").trim()
+    model: String(input.model || current.model || DEFAULT_VISION_MODEL).trim() || DEFAULT_VISION_MODEL,
+    apiKey: input.clearApiKey ? "" : String(input.apiKey || current.apiKey || "").trim(),
+    secretKey: input.clearApiKey ? "" : String(input.secretKey || current.secretKey || "").trim(),
+    languageType
   };
-  if (!next.model) throw new Error("视觉模型名称不能为空");
-  await saveUserAppSetting(userId, "vision", { ...next, apiKey: encryptSecret(next.apiKey) });
+  if (provider === "qwen" && !next.model) throw new Error("视觉模型名称不能为空");
+  if (provider === "baidu" && !next.apiKey && !input.clearApiKey && !current.apiKey) {
+    // allow saving provider switch with existing keys
+  }
+  await saveUserAppSetting(userId, "vision", {
+    ...next,
+    apiKey: encryptSecret(next.apiKey),
+    secretKey: encryptSecret(next.secretKey)
+  });
   return getPublicVisionConfig(userId);
 }
 
 export async function testVisionConfig(userId, input = {}) {
   const current = await getVisionConfig(userId);
+  const provider = normalizeVisionProvider(input.provider || current.provider, current.provider);
+  if (provider === "baidu") {
+    const { testBaiduOcrCredentials } = await import("./baidu-ocr.mjs");
+    const apiKey = String(input.apiKey || current.apiKey || "").trim();
+    const secretKey = String(input.secretKey || current.secretKey || "").trim();
+    if (!apiKey || !secretKey) throw new Error("请填写百度 API Key 与 Secret Key");
+    await testBaiduOcrCredentials(apiKey, secretKey);
+    return { ok: true, provider: "baidu", modelAvailable: true };
+  }
   return testOpenAiCompatibleConfig({
     baseUrl: normalizeBaseUrl(
       input.baseUrl || current.baseUrl,

@@ -1,11 +1,18 @@
 import { getUserAppSetting, saveUserAppSetting } from "./storage.mjs";
 
+const DEFAULT_OCR_MAX_IMAGES = Math.max(
+  1,
+  Math.min(200, Number(process.env.OCR_MAX_IMAGES || 40))
+);
+
 export const PREFERENCE_DEFAULTS = {
   coachMaxTurns: 3,
   coachPassScore: 75,
   coachRoleMode: "auto",
   coachShowEvidence: true,
-  coachBlindspotThreshold: 60
+  coachBlindspotThreshold: 60,
+  ocrEnabled: true,
+  ocrMaxImages: DEFAULT_OCR_MAX_IMAGES
 };
 
 function clampInt(value, min, max, fallback) {
@@ -28,7 +35,9 @@ export function normalizePreferences(raw = {}) {
       40,
       80,
       PREFERENCE_DEFAULTS.coachBlindspotThreshold
-    )
+    ),
+    ocrEnabled: raw.ocrEnabled !== false,
+    ocrMaxImages: clampInt(raw.ocrMaxImages, 1, 200, PREFERENCE_DEFAULTS.ocrMaxImages)
   };
 }
 

@@ -29,7 +29,7 @@ router.post("/api/auth/forgot-password", rateLimit({ windowMs: 15 * 60_000, max:
     const reset = await createPasswordReset(req.body?.email);
     if (reset) {
       const baseUrl = process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
-      await sendMail({ to: reset.user.email, subject: "知返密码重置", text: `请在 30 分钟内打开：${baseUrl}/reset-password?token=${reset.token}` });
+      await sendMail({ to: reset.user.email, subject: "知练密码重置", text: `请在 30 分钟内打开：${baseUrl}/reset-password?token=${reset.token}` });
     }
     res.json({ ok: true, message: "如果邮箱存在，重置邮件已经发送", ...(process.env.NODE_ENV !== "production" && reset ? { developmentToken: reset.token } : {}) });
   } catch (error) { res.status(400).json({ error: error.message }); }

@@ -33,7 +33,9 @@ export function KnowledgeMap({ project, navigate }) {
     });
   };
 
-  if (!modules.length) return <NoAnalysis navigate={navigate} />;
+  if (!modules.length) {
+    return <NoAnalysis navigate={navigate} needsResummarize={Boolean(project.analysis?.needsResummarize)} />;
+  }
 
   return (
     <>

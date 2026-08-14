@@ -41,9 +41,12 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
   const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [visionForm, setVisionForm] = useState({
+    provider: "qwen",
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     model: "qwen3.5-ocr",
-    apiKey: ""
+    languageType: "CHN_ENG",
+    apiKey: "",
+    secretKey: ""
   });
   const [visionSaved, setVisionSaved] = useState(null);
   const [visionLoading, setVisionLoading] = useState(true);
@@ -91,11 +94,14 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
     setVisionSaved(data);
     setVisionForm((current) => ({
       ...current,
+      provider: data.provider || "qwen",
       baseUrl: data.baseUrl === "https://api.openai.com/v1"
         ? "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        : data.baseUrl,
-      model: "qwen3.5-ocr",
-      apiKey: ""
+        : (data.baseUrl || current.baseUrl),
+      model: data.provider === "baidu" ? "general_basic" : "qwen3.5-ocr",
+      languageType: data.languageType || "CHN_ENG",
+      apiKey: "",
+      secretKey: ""
     }));
   };
 
@@ -264,9 +270,11 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
       const data = await testVisionSettings(visionForm);
       setVisionTest({
         ok: true,
-        message: data.modelAvailable === false
-          ? `接口已连接，但模型列表中没有 ${visionForm.model}`
-          : `接口已连接，${visionForm.model} 可用于 OCR`
+        message: visionForm.provider === "baidu"
+          ? "百度 OCR 鉴权成功，已获取 access_token"
+          : (data.modelAvailable === false
+            ? `接口已连接，但模型列表中没有 ${visionForm.model}`
+            : `接口已连接，${visionForm.model} 可用于 OCR`)
       });
     } catch (error) {
       setVisionTest({ ok: false, message: error.message });
@@ -280,9 +288,9 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
     try {
       const data = await putVisionSettings({ ...visionForm, clearApiKey });
       setVisionSaved(data);
-      setVisionForm((current) => ({ ...current, apiKey: "" }));
+      setVisionForm((current) => ({ ...current, apiKey: "", secretKey: "" }));
       if (clearApiKey) setVisionTest(null);
-      showToast(clearApiKey ? "已清除 OCR 视觉模型密钥" : "OCR 视觉模型配置已保存");
+      showToast(clearApiKey ? "已清除 OCR 密钥" : "OCR 配置已保存");
     } catch (error) {
       showToast(error.message);
     } finally {
@@ -451,7 +459,13 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
 
           <section className="panel settings-form">
             <div className="settings-head">
-              <div className="settings-provider"><FileText size={20} /><div><strong>Qwen3.5-OCR</strong><span>阿里云百炼 · 图片与扫描资料识别</span></div></div>
+              <div className="settings-provider">
+                <FileText size={20} />
+                <div>
+                  <strong>{visionSaved?.providerLabel || (visionForm.provider === "baidu" ? "百度智能云 OCR" : "Qwen3.5-OCR")}</strong>
+                  <span>图片与扫描资料识别 · 可切换提供商</span>
+                </div>
+              </div>
               <span className={`config-status ${visionSaved?.configured ? "ready" : ""}`}>
                 {visionSaved?.configured ? <><Check size={13} /> 已配置</> : <><CircleAlert size={13} /> 未配置</>}
               </span>
@@ -460,26 +474,89 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
             {visionLoading ? <div className="settings-loading"><Spinner /> 正在读取 OCR 配置…</div> : (
               <div className="settings-fields">
                 <label>
-                  <span>API 地址</span>
-                  <input value={visionForm.baseUrl} onChange={(event) => setVisionForm({ ...visionForm, baseUrl: event.target.value })} placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
-                  <small>默认使用阿里云百炼中国北京地址；使用专属工作空间时可以替换为对应地址。</small>
+                  <span>OCR 提供商</span>
+                  <select
+                    value={visionForm.provider}
+                    onChange={(event) => {
+                      const provider = event.target.value;
+                      setVisionForm((current) => ({
+                        ...current,
+                        provider,
+                        model: provider === "baidu" ? "general_basic" : "qwen3.5-ocr"
+                      }));
+                    }}
+                  >
+                    <option value="baidu">百度智能云 · 通用文字识别（有免费额度）</option>
+                    <option value="qwen">阿里云百炼 · Qwen3.5-OCR</option>
+                  </select>
+                  <small>日语课件建议选百度并在下方将语言设为「日语」；中文为主可选「中英文」。</small>
                 </label>
-                <label>
-                  <span>OCR 模型</span>
-                  <input value="qwen3.5-ocr" readOnly aria-readonly="true" />
-                  <small>当前版本固定使用 Qwen3.5-OCR，模型名称无需修改。</small>
-                </label>
-                <label>
-                  <span>API Key</span>
-                  <input
-                    type="password"
-                    autoComplete="off"
-                    value={visionForm.apiKey}
-                    onChange={(event) => setVisionForm({ ...visionForm, apiKey: event.target.value })}
-                    placeholder={visionSaved?.configured ? `已保存：${visionSaved.apiKeyMasked}` : "输入阿里云百炼 API Key"}
-                  />
-                  <small>{visionSaved?.configured ? "留空会继续使用已保存的密钥。" : "API Key 仅保存在本机后端，不会返回浏览器或写入上传资料。"}</small>
-                </label>
+
+                {visionForm.provider === "qwen" ? (
+                  <>
+                    <label>
+                      <span>API 地址</span>
+                      <input value={visionForm.baseUrl} onChange={(event) => setVisionForm({ ...visionForm, baseUrl: event.target.value })} placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
+                    </label>
+                    <label>
+                      <span>OCR 模型</span>
+                      <input value="qwen3.5-ocr" readOnly aria-readonly="true" />
+                    </label>
+                    <label>
+                      <span>API Key</span>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={visionForm.apiKey}
+                        onChange={(event) => setVisionForm({ ...visionForm, apiKey: event.target.value })}
+                        placeholder={visionSaved?.configured && visionSaved?.provider === "qwen" ? `已保存：${visionSaved.apiKeyMasked}` : "输入阿里云百炼 API Key"}
+                      />
+                    </label>
+                  </>
+                ) : (
+                  <>
+                    <label>
+                      <span>识别语言</span>
+                      <select
+                        value={visionForm.languageType}
+                        onChange={(event) => setVisionForm({ ...visionForm, languageType: event.target.value })}
+                      >
+                        <option value="CHN_ENG">中英文混合</option>
+                        <option value="JAP">日语</option>
+                        <option value="ENG">英文</option>
+                        <option value="KOR">韩语</option>
+                      </select>
+                      <small>调用百度「通用文字识别（标准版）」接口，个人认证通常有约 1000 次/月免费额度。</small>
+                    </label>
+                    <label>
+                      <span>API Key（AK）</span>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={visionForm.apiKey}
+                        onChange={(event) => setVisionForm({ ...visionForm, apiKey: event.target.value })}
+                        placeholder={visionSaved?.configured && visionSaved?.provider === "baidu" ? `已保存：${visionSaved.apiKeyMasked}` : "百度智能云应用 API Key"}
+                      />
+                    </label>
+                    <label>
+                      <span>Secret Key（SK）</span>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={visionForm.secretKey}
+                        onChange={(event) => setVisionForm({ ...visionForm, secretKey: event.target.value })}
+                        placeholder={visionSaved?.configured && visionSaved?.provider === "baidu" ? `已保存：${visionSaved.secretKeyMasked}` : "百度智能云应用 Secret Key"}
+                      />
+                      <small>
+                        在{" "}
+                        <a href="https://console.bce.baidu.com/ai/#/ai/ocr/overview/index" target="_blank" rel="noreferrer">
+                          百度智能云 OCR 控制台
+                        </a>
+                        {" "}创建应用后获取 AK/SK；密钥仅保存在本机后端。
+                      </small>
+                    </label>
+                  </>
+                )}
               </div>
             )}
 
@@ -494,7 +571,17 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
               <button className="secondary-btn" onClick={testVision} disabled={visionBusy || visionLoading}>
                 {visionBusy ? <Spinner /> : <Zap size={16} />} 测试连接
               </button>
-              <button className="primary-btn" onClick={() => saveVision(false)} disabled={visionBusy || visionLoading || (!visionForm.apiKey && !visionSaved?.configured)}>
+              <button
+                className="primary-btn"
+                onClick={() => saveVision(false)}
+                disabled={
+                  visionBusy ||
+                  visionLoading ||
+                  (visionForm.provider === "baidu"
+                    ? (!visionForm.apiKey && !visionForm.secretKey && !visionSaved?.configured)
+                    : (!visionForm.apiKey && !visionSaved?.configured))
+                }
+              >
                 {visionBusy ? <Spinner /> : <Check size={16} />} 保存 OCR 配置
               </button>
             </div>

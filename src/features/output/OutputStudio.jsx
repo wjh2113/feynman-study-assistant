@@ -168,7 +168,7 @@ ${(section.evidence || []).length ? section.evidence.map((item) => `- ${item}`).
               <section><div className="pager-section-number">01</div><div><span className="section-kicker">关键收获</span>{(pager.takeaways || []).map((item, index) => <div className="takeaway" key={index}><b>0{index + 1}</b><p contentEditable suppressContentEditableWarning onInput={(event) => updateTakeaway(index, event.currentTarget.textContent)}>{item}</p></div>)}</div></section>
               <section><div className="pager-section-number">02</div><div><span className="section-kicker">立即行动</span><p className="pager-big-copy" contentEditable suppressContentEditableWarning onInput={(event) => updateAction(event.currentTarget.textContent)}>{pager.action}</p></div></section>
               <section><div className="pager-section-number">03</div><div><span className="section-kicker">我的复盘</span><p className="pager-big-copy" contentEditable suppressContentEditableWarning onInput={(event) => updateReflection(event.currentTarget.textContent)}>{pager.reflection}</p></div></section>
-              <footer><span>知返 · 费曼学习助手</span><span>资料 → 骨架 → 输出 → 能力</span></footer>
+              <footer><span>知练 · 费曼型学习助手</span><span>资料 → 骨架 → 输出 → 能力</span></footer>
             </article>
 
             <MindMap project={project} />

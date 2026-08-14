@@ -14,6 +14,7 @@ import {
 } from "../storage.mjs";
 import { rateLimit } from "../middleware/security.mjs";
 import { generateOnePager, generateVariantQuestion, runCoachTurn } from "../services/coach.mjs";
+import { generateLearningPlan } from "../services/learning-plan.mjs";
 
 const router = Router();
 
@@ -180,6 +181,20 @@ router.post("/api/one-pager", async (req, res) => {
     chapter,
     documentIds: normalizeDocumentIds(documentIds || practiceDocumentIds),
     practiceDocs
+  });
+  res.status(result.status || 200).json(result.body);
+});
+
+router.post("/api/learning-plan", rateLimit({ windowMs: 60_000, max: 20, keyPrefix: "learning-plan" }), async (req, res) => {
+  const { title, goal, level } = req.body || {};
+  if (!String(title || "").trim()) {
+    return res.status(400).json({ error: "请先填写学科名称" });
+  }
+  const result = await generateLearningPlan({
+    userId: req.userId,
+    title,
+    goal,
+    level
   });
   res.status(result.status || 200).json(result.body);
 });

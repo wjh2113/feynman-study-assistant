@@ -5,17 +5,22 @@ import { getUserById, saveUserAppSetting } from "./storage.mjs";
 export const MODEL_CONFIG_FORMAT = "zhifan-model-config/v1";
 export const SETTING_KEYS = ["deepseek", "vision", "embedding"];
 
-export function decryptSettingValue(value) {
-  if (!value || typeof value !== "object") return value || {};
-  const next = { ...value };
-  if (typeof next.apiKey === "string" && next.apiKey) {
+function decryptSecretField(next, field) {
+  if (typeof next[field] === "string" && next[field]) {
     try {
-      next.apiKey = decryptSecret(next.apiKey);
+      next[field] = decryptSecret(next[field]);
     } catch (error) {
-      next.apiKey = "";
+      next[field] = "";
       next._decryptError = error.message;
     }
   }
+}
+
+export function decryptSettingValue(value) {
+  if (!value || typeof value !== "object") return value || {};
+  const next = { ...value };
+  decryptSecretField(next, "apiKey");
+  decryptSecretField(next, "secretKey");
   if (next.embedding && typeof next.embedding === "object") {
     next.embedding = decryptSettingValue(next.embedding);
   }
@@ -31,6 +36,9 @@ export function encryptSettingValue(value) {
   delete next._decryptError;
   if (typeof next.apiKey === "string" && next.apiKey) {
     next.apiKey = encryptSecret(next.apiKey);
+  }
+  if (typeof next.secretKey === "string" && next.secretKey) {
+    next.secretKey = encryptSecret(next.secretKey);
   }
   if (next.embedding && typeof next.embedding === "object") {
     next.embedding = encryptSettingValue(next.embedding);

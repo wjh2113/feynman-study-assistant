@@ -1,8 +1,10 @@
-import React from "react";
+import React, { useState } from "react";
 import { PageHeading } from "../../components/PageHeading.jsx";
 import { EmptyMini } from "../../components/EmptyMini.jsx";
-import { ArrowRight, Check, ChevronRight, Clock3, Lightbulb, MessageCircleQuestion } from "../../components/icons.jsx";
+import { Spinner } from "../../components/Spinner.jsx";
+import { ArrowRight, Check, ChevronRight, Clock3, Lightbulb, MessageCircleQuestion, RotateCcw } from "../../components/icons.jsx";
 import { stageLabels } from "../../lib/nav.js";
+import { generateLearningPlan } from "../../api/projects.js";
 
 function overlapsSelection(item, selectedDocumentIds = []) {
   const ids = Array.isArray(item?.documentIds) ? item.documentIds : [];
@@ -11,7 +13,9 @@ function overlapsSelection(item, selectedDocumentIds = []) {
   return ids.some((id) => selectedDocumentIds.includes(id));
 }
 
-export function Overview({ project, selectedDocumentIds = [], navigate }) {
+export function Overview({ project, selectedDocumentIds = [], navigate, updateProject, showToast }) {
+  const [planBusy, setPlanBusy] = useState(false);
+  const plan = project.learningPlan;
   const concepts = project.analysis?.modules?.flatMap((module) => module.concepts) || [];
   const mastered = concepts.filter((item) => item.mastery >= 3).length;
   const inProgress = concepts.filter((item) => item.mastery === 2).length;
@@ -23,17 +27,100 @@ export function Overview({ project, selectedDocumentIds = [], navigate }) {
   const sourceCount = project.analysis?.sources?.length || 0;
   const selectedCount = selectedDocumentIds.length;
 
+  const refreshPlan = async () => {
+    if (planBusy) return;
+    setPlanBusy(true);
+    try {
+      const data = await generateLearningPlan({
+        title: project.title,
+        goal: project.goal,
+        level: project.level
+      });
+      updateProject?.({
+        learningPlan: data.plan,
+        description: data.plan?.summary || project.description
+      });
+      showToast?.(data.demo ? "已更新学习规划（演示模式）" : "学习规划已更新");
+    } catch (error) {
+      showToast?.(error.message || "更新规划失败");
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
   return (
     <>
-      <PageHeading eyebrow="下午好，继续保持思考" title={project.title} description={project.description} demo={project.analysis?.demo} />
+      <PageHeading
+        eyebrow={[project.goal, project.level].filter(Boolean).join(" · ") || "学习概览"}
+        title={project.title}
+        description={project.description}
+        demo={project.analysis?.demo || plan?.demo}
+      />
+
+      {plan && (
+        <section className="panel learning-plan-card">
+          <div className="panel-head">
+            <div>
+              <span className="section-kicker">AI 学习规划</span>
+              <h3>
+                {plan.suggestedHorizon || "建议周期"}
+                {plan.weeklyCadence ? ` · ${plan.weeklyCadence}` : ""}
+              </h3>
+            </div>
+            <button className="secondary-btn" type="button" onClick={refreshPlan} disabled={planBusy}>
+              {planBusy ? <Spinner /> : <RotateCcw size={14} />}
+              {planBusy ? "生成中…" : "重新规划"}
+            </button>
+          </div>
+          <p className="learning-plan-summary">{plan.summary}</p>
+          <div className="learning-plan-phases">
+            {(plan.phases || []).map((phase) => (
+              <div className="learning-plan-phase" key={`${phase.title}-${phase.duration}`}>
+                <div>
+                  <strong>{phase.title}</strong>
+                  {phase.duration ? <span>{phase.duration}</span> : null}
+                </div>
+                {phase.focus ? <p>{phase.focus}</p> : null}
+                <ul>
+                  {(phase.actions || []).map((action) => <li key={action}>{action}</li>)}
+                </ul>
+              </div>
+            ))}
+          </div>
+          <div className="learning-plan-columns">
+            <div>
+              <span className="section-kicker">资料建议</span>
+              <ul>{(plan.materialAdvice || []).map((item) => <li key={item}>{item}</li>)}</ul>
+            </div>
+            <div>
+              <span className="section-kicker">练习建议</span>
+              <ul>{(plan.practiceAdvice || []).map((item) => <li key={item}>{item}</li>)}</ul>
+            </div>
+            <div>
+              <span className="section-kicker">里程碑</span>
+              <ul>{(plan.milestones || []).map((item) => <li key={item}>{item}</li>)}</ul>
+            </div>
+          </div>
+          {(plan.warnings || []).length > 0 && (
+            <div className="learning-plan-warnings">
+              {(plan.warnings || []).map((item) => (
+                <span key={item}><Lightbulb size={14} /> {item}</span>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="journey-card">
         <div className="journey-top">
           <div>
             <span className="section-kicker">学习旅程</span>
-            <h2>从资料到能力，你已走了 <b>{project.progress || 8}%</b></h2>
+            <h2>从资料到能力，你已走了 <b>{project.progress || 0}%</b></h2>
           </div>
-          <span className="time-est"><Clock3 size={15} /> 预计还需 42 分钟</span>
+          <span className="time-est">
+            <Clock3 size={15} />
+            {plan?.suggestedHorizon ? `建议周期 ${plan.suggestedHorizon}` : "上传资料后开始推进"}
+          </span>
         </div>
         <div className="stage-track">
           {stageLabels.map((label, index) => (
@@ -49,7 +136,7 @@ export function Overview({ project, selectedDocumentIds = [], navigate }) {
       <div className="overview-grid">
         <section className="next-task-card">
           <div className="card-topline">
-            <span className="section-kicker">下一步 · 约 8 分钟</span>
+            <span className="section-kicker">下一步</span>
             <span className="soft-tag">为你推荐</span>
           </div>
           <div className="task-icon"><MessageCircleQuestion /></div>
@@ -61,7 +148,8 @@ export function Overview({ project, selectedDocumentIds = [], navigate }) {
           <p>
             {selectedCount
               ? `当前已选 ${selectedCount} 份资料。关掉原文，向一个好奇的12岁小孩讲清楚它是什么、为什么重要，以及什么时候会失效。`
-              : "学科资料用于知识地图与问答；费曼对练、盲区与成果需要先在上方勾选一份或多份资料。"}
+              : (plan?.materialAdvice?.[0]
+                || "学科资料用于知识地图与问答；费曼对练、盲区与成果需要先在上方勾选一份或多份资料。")}
           </p>
           <button className="primary-btn" onClick={() => navigate(sourceCount ? "coach" : "sources")}>
             {sourceCount ? "开始费曼对练" : "去上传资料"} <ArrowRight size={17} />

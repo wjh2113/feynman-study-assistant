@@ -24,21 +24,28 @@ export function RagAssistant({ project, navigate, showToast }) {
     let cancelled = false;
     getRagHistory(project.id, 50)
       .then((data) => {
-        if (!cancelled) setHistory((data.records || []).map((record) => ({ question: record.query, ...record })));
+        if (!cancelled) {
+          setHistory((data.records || []).map((record) => {
+            const raw = String(record.query || record.question || "").trim();
+            const question = !raw || raw === "[object Object]" ? "（历史异常记录）" : raw;
+            return { ...record, question };
+          }));
+        }
       })
       .catch((error) => showToast(`读取问答历史失败：${error.message}`));
     return () => { cancelled = true; };
   }, [project.id]);
 
   const ask = async (overrideText) => {
-    const question = String(overrideText ?? query).trim();
+    const raw = typeof overrideText === "string" ? overrideText : query;
+    const question = String(raw || "").trim();
     if (!question || loading) return;
     setQuery("");
     setRequestError("");
     setLoading(true);
     try {
       const data = await askRag({ projectId: project.id, query: question });
-      const record = { question, ...data };
+      const record = { ...data, question };
       setHistory((items) => [record, ...items]);
       await saveRagHistory(project.id, {
         query: question,
@@ -60,17 +67,17 @@ export function RagAssistant({ project, navigate, showToast }) {
   return (
     <>
       <PageHeading
-        eyebrow="严格据资料 · 原文引用"
+        eyebrow="严格据资料 · 禁止扩展"
         title="资料问答"
-        description="只根据你上传的资料回答，不扩展、不答非所问；每条回答都会列出引用的文件名与原文。"
+        description="只根据你上传的资料原文回答，不补充资料外知识、不答非所问；每条回答下方都会标明资料文件名与引用原文。"
         action={<button className="secondary-btn" onClick={() => navigate("sources")}><UploadCloud size={16} /> 管理资料</button>}
         demo={project.analysis?.demo}
       />
       <section className="panel rag-ask-panel">
         <div className="rag-status">
-          <span><BrainCircuit size={16} /> PostgreSQL + pgvector</span>
-          <span><Search size={16} /> 向量与关键词混合检索</span>
-          <span><FileText size={16} /> 回答附原文引用</span>
+          <span><BrainCircuit size={16} /> 仅用上传资料</span>
+          <span><Search size={16} /> 混合检索原文</span>
+          <span><FileText size={16} /> 显示文件名与引用</span>
         </div>
         <div className="rag-input-row">
           <div className="rag-textarea-shell">
@@ -95,7 +102,7 @@ export function RagAssistant({ project, navigate, showToast }) {
               onTranscript={(text) => setQuery((current) => `${current}${current.trim() ? " " : ""}${text}`)}
             />
           </div>
-          <button className="primary-btn" onClick={ask} disabled={!hasSources || !query.trim() || loading}>
+          <button className="primary-btn" onClick={() => ask()} disabled={!hasSources || !query.trim() || loading}>
             {loading ? <Spinner /> : <Search size={17} />} 检索并回答
           </button>
         </div>
@@ -104,43 +111,51 @@ export function RagAssistant({ project, navigate, showToast }) {
           <div className="request-error" role="alert">
             <CircleAlert size={17} />
             <div><strong>资料问答未完成</strong><p>{requestError}</p></div>
-            <button className="secondary-btn" onClick={ask} disabled={!query.trim() || loading}><RotateCcw size={15} /> 重试</button>
+            <button className="secondary-btn" onClick={() => ask()} disabled={!query.trim() || loading}><RotateCcw size={15} /> 重试</button>
           </div>
         )}
       </section>
 
       <div className="rag-history">
         {history.map((item, index) => (
-          <article className="panel rag-answer-card" key={`${item.question}-${index}`}>
-            <div className="rag-question"><span>问</span><h3>{item.question}</h3></div>
+          <article className="panel rag-answer-card" key={`${String(item.question)}-${index}`}>
+            <div className="rag-question"><span>问</span><h3>{String(item.question || "（无问题）")}</h3></div>
             <div className="rag-answer"><Sparkles size={18} /><p>{item.answer}</p></div>
             {item.warning && <div className="request-warning"><CircleAlert size={15} /><span>{item.warning}</span></div>}
-            {item.sources?.length > 0 && (
+            {(item.citations || item.sources)?.length > 0 && (
               <div className="rag-sources">
-                <span className="section-kicker">引用资料 · {item.sources.length} 处原文</span>
-                {item.sources.map((source, sourceIndex) => (
-                  <div className="rag-source" key={source.id}>
-                    <div className="rag-source-file">
-                      <FileText size={15} />
-                      <strong>[{sourceIndex + 1}] {source.filename || "未命名资料"}</strong>
-                      <span>第 {source.page}{source.pageEnd > source.page ? `-${source.pageEnd}` : ""} 页</span>
+                <span className="section-kicker">引用依据 · {(item.citations || item.sources).length} 处</span>
+                {(item.citations || item.sources).map((source, sourceIndex) => {
+                  const label = source.filename || "未命名资料";
+                  const excerpt = source.content || source.quote || "";
+                  const num = source.index || sourceIndex + 1;
+                  return (
+                    <div className="rag-source" key={source.id || `${label}-${num}`}>
+                      <div className="rag-source-file">
+                        <FileText size={15} />
+                        <div>
+                          <div className="rag-source-label">资料文件名</div>
+                          <strong>[{num}] {label}</strong>
+                        </div>
+                        <span>第 {source.page}{source.pageEnd > source.page ? `-${source.pageEnd}` : ""} 页</span>
+                      </div>
+                      {source.headingPath && <span className="rag-heading-path">{source.headingPath}</span>}
+                      <div className="rag-source-label">引用原文</div>
+                      <blockquote className="rag-quote">{excerpt || "（无原文片段）"}</blockquote>
+                      {source.parentContent && source.parentContent !== excerpt && (
+                        <details className="rag-quote-context">
+                          <summary>更多上下文</summary>
+                          <pre>{source.parentContent}</pre>
+                        </details>
+                      )}
+                      {source.documentId && <a href={`/api/documents/${source.documentId}/file`}>打开原始资料</a>}
                     </div>
-                    {source.headingPath && <span className="rag-heading-path">{source.headingPath}</span>}
-                    <blockquote className="rag-quote">{source.content || source.quote}</blockquote>
-                    {source.parentContent && source.parentContent !== (source.content || source.quote) && (
-                      <details className="rag-quote-context">
-                        <summary>上下文</summary>
-                        <pre>{source.parentContent}</pre>
-                      </details>
-                    )}
-                    {!!source.matchedKeywords?.length && <div className="rag-keywords">{source.matchedKeywords.map((word) => <span key={word}>{word}</span>)}</div>}
-                    {source.documentId && <a href={`/api/documents/${source.documentId}/file`}>打开原始资料</a>}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
-            {!item.insufficient && !item.sources?.length && item.answer && (
-              <div className="rag-sources-empty">本次回答未附带可展示的原文引用。</div>
+            {!item.insufficient && !(item.citations || item.sources)?.length && item.answer && (
+              <div className="rag-sources-empty">本次未引用具体资料原文（可能资料中没有相关内容）。</div>
             )}
             {item.debug && (
               <details className="rag-debug">

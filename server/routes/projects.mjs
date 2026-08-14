@@ -3,6 +3,7 @@ import JSZip from "jszip";
 import { randomUUID } from "node:crypto";
 import { getObject } from "../object-storage.mjs";
 import {
+  countDocumentChunks,
   deleteChapter,
   deleteDocument,
   deleteProject,
@@ -18,6 +19,7 @@ import {
   saveChapter,
   saveProject
 } from "../storage.mjs";
+import { resummarizeProject } from "../services/resummarize.mjs";
 
 const router = Router();
 
@@ -164,53 +166,87 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
     const source = sources.find((item) => item.id === req.params.documentId);
     if (!source) return res.status(404).json({ error: "资料不存在或不属于当前项目" });
 
-    await deleteDocument(req.params.projectId, req.params.documentId);
+    const removal = await deleteDocument(req.params.projectId, req.params.documentId);
     const remainingSources = sources.filter((item) => item.id !== req.params.documentId);
-    const removeRefs = (refs) =>
-      (refs || []).filter((ref) => String(ref.file || "") !== String(source.name || ""));
+    const deletedName = String(source.name || "");
+    const practiceDocumentIds = (project.practiceDocumentIds || []).filter(
+      (id) => id !== req.params.documentId
+    );
+    const remainingChunks = await countDocumentChunks(req.params.projectId);
+
+    // Subject knowledge map is derived from all materials together — clear it so
+    // remaining files can be re-summarized without stale modules/concepts.
     const analysis = {
       ...(project.analysis || {}),
       sources: remainingSources,
-      modules: (project.analysis?.modules || []).map((module) => ({
-        ...module,
-        concepts: (module.concepts || []).map((concept) => ({
-          ...concept,
-          sourceRefs: removeRefs(concept.sourceRefs)
-        }))
-      })),
-      questions: (project.analysis?.questions || []).map((question) => ({
-        ...question,
-        sourceRefs: removeRefs(question.sourceRefs)
-      })),
-      tacitKnowledge: (project.analysis?.tacitKnowledge || []).map((item) => ({
-        ...item,
-        sourceRef: item.sourceRef?.file === source.name ? null : item.sourceRef
-      })),
+      summary: "",
+      highValue: [],
+      modules: [],
+      tacitKnowledge: [],
+      scenarios: [],
+      questions: [],
       documentSummaries: (project.analysis?.documentSummaries || []).filter(
-        (item) => String(item.filename || item.name || "") !== String(source.name || "")
+        (item) => String(item.filename || item.name || "") !== deletedName
       ),
+      needsResummarize: remainingSources.length > 0,
       retrieval: {
         ...(project.analysis?.retrieval || {}),
-        chunks: Math.max(
-          0,
-          Number(project.analysis?.retrieval?.chunks || 0) - Number(source.chunks || 0)
-        )
+        chunks: remainingChunks
       }
     };
-    const nextProject = {
+
+    let nextProject = {
       ...project,
       userId: req.userId,
       analysis,
-      blindspots: (project.blindspots || []).filter(
-        (item) => !String(item.source || "").startsWith(String(source.name || ""))
-      )
+      practiceDocumentIds,
+      onePager: null,
+      description: remainingSources.length
+        ? "资料已变更，知识地图已清空，请重新总结剩余资料。"
+        : (project.learningPlan?.summary || "上传学习资料后，AI 将生成学科知识地图。"),
+      progress: remainingSources.length ? Math.min(Number(project.progress || 0), 15) : 0,
+      blindspots: (project.blindspots || []).filter((item) => {
+        const ids = Array.isArray(item.documentIds) ? item.documentIds : [];
+        if (ids.length) return !ids.includes(req.params.documentId);
+        return !String(item.source || "").startsWith(deletedName);
+      }),
+      sessions: (project.sessions || []).filter((item) => {
+        const ids = Array.isArray(item.documentIds) ? item.documentIds : [];
+        if (!ids.length) return true;
+        return !ids.includes(req.params.documentId);
+      })
     };
     await saveProject(nextProject);
     await recordEvent(req.userId, req.params.projectId, "document_deleted", {
       documentId: req.params.documentId,
-      filename: source.name
+      filename: source.name,
+      mapCleared: true,
+      needsResummarize: analysis.needsResummarize,
+      chunksDeleted: removal.chunksDeleted || 0
     });
-    res.json({ project: nextProject, deleted: { id: source.id, name: source.name } });
+
+    let resummarize = null;
+    if (remainingSources.length) {
+      try {
+        resummarize = await resummarizeProject(req.params.projectId, req.userId);
+        nextProject = resummarize.project;
+      } catch (error) {
+        // Keep cleared map; client can retry via /resummarize
+        resummarize = { error: error.message || "重新总结失败", resummarized: false };
+      }
+    }
+
+    res.json({
+      project: nextProject,
+      deleted: {
+        id: source.id,
+        name: source.name,
+        chunksDeleted: removal.chunksDeleted || 0
+      },
+      mapCleared: true,
+      needsResummarize: Boolean(nextProject.analysis?.needsResummarize),
+      resummarize
+    });
   } catch (error) {
     res.status(400).json({ error: error.message || "删除资料失败" });
   }

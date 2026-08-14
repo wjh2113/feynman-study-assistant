@@ -16,8 +16,6 @@ import {
   Sparkles,
   X
 } from "../components/icons.jsx";
-import { demoProject } from "../lib/demoProject.js";
-import { withCurrentDemoContent } from "../lib/demoHelpers.js";
 import { subjectNavItems, practiceNavItems } from "../lib/nav.js";
 import { recalculateMasteryAndProgress } from "../lib/progress.mjs";
 import {
@@ -113,17 +111,13 @@ export function App() {
         const data = await listProjects();
         if (cancelled) return;
         if (data.projects?.length) {
-          setProjects(data.projects.map(withCurrentDemoContent));
+          setProjects(data.projects);
           setActiveProjectId((current) =>
             data.projects.some((item) => item.id === current) ? current : data.projects[0].id
           );
         } else {
-          const demo = { ...demoProject, id: `demo-${user.id}` };
-          await putProject(demo.id, demo);
-          if (!cancelled) {
-            setProjects([demo]);
-            setActiveProjectId(demo.id);
-          }
+          setProjects([]);
+          setActiveProjectId(null);
         }
         dirtyProjectIdsRef.current.clear();
         if (!cancelled) setPersistenceReady(true);
@@ -252,7 +246,7 @@ export function App() {
                 if (data.project) {
                   dirtyProjectIdsRef.current.delete(tracked.projectId);
                   setProjects((items) => items.map((item) => (
-                    item.id === tracked.projectId ? withCurrentDemoContent(data.project) : item
+                    item.id === tracked.projectId ? data.project : item
                   )));
                 }
               } catch {
@@ -324,9 +318,9 @@ export function App() {
       setProjects((items) => [newProject, ...items]);
       setActiveProjectId(newProject.id);
       setSelectedDocumentIdsState([]);
-      setActiveView("sources");
+      setActiveView("overview");
       setCreateOpen(false);
-      showToast("学科已创建");
+      showToast(newProject.learningPlan?.demo ? "学科已创建（演示规划）" : "学科已创建，已生成学习规划");
     } catch (error) {
       showToast(error.message || "创建学科失败");
     }
@@ -351,7 +345,7 @@ export function App() {
         <div className="auth-card">
           <div className="auth-brand">
             <div className="brand-mark"><span>知</span></div>
-            <div><strong>知返</strong><small>费曼学习助手</small></div>
+            <div><strong>知练</strong><small>费曼型学习助手</small></div>
           </div>
           <div className="settings-loading"><Spinner /> 正在检查登录状态…</div>
         </div>
@@ -369,8 +363,8 @@ export function App() {
         <div className="brand">
           <div className="brand-mark"><span>知</span></div>
           <div>
-            <strong>知返</strong>
-            <small>费曼学习助手</small>
+            <strong>知练</strong>
+            <small>费曼型学习助手</small>
           </div>
           <button className="icon-btn sidebar-close" onClick={() => setSidebarOpen(false)} aria-label="关闭菜单"><X size={19} /></button>
         </div>
@@ -383,19 +377,25 @@ export function App() {
         <div className="project-switcher">
           <div className="project-glyph">{project?.title?.slice(0, 1) || "?"}</div>
           <div className="project-switcher-copy">
-            <strong>{project?.title || "加载中…"}</strong>
-            <span>{project?.mode === "course" ? "课程精学" : "主题速学"} · {project?.progress || 8}%</span>
+            <strong>{project?.title || "暂无学科"}</strong>
+            <span>
+              {project
+                ? `学习进度 · ${project.progress || 0}%`
+                : "点击上方新建学科"}
+            </span>
           </div>
           <ChevronDown size={15} />
           <select
             className="project-native-select"
             aria-label="切换学科"
             value={activeProjectId || ""}
+            disabled={!projects.length}
             onChange={(event) => {
               setActiveProjectId(event.target.value);
               setActiveView("overview");
             }}
           >
+            {!projects.length && <option value="">暂无学科</option>}
             {projects.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}
           </select>
         </div>
@@ -492,6 +492,8 @@ export function App() {
                   project={project}
                   selectedDocumentIds={selectedDocumentIds}
                   navigate={changeView}
+                  updateProject={updateProject}
+                  showToast={showToast}
                 />
               )}
               {activeView === "sources" && (
@@ -560,7 +562,7 @@ export function App() {
         </div>
       </main>
 
-      {createOpen && <CreateProjectModal onClose={() => setCreateOpen(false)} onCreate={handleCreate} />}
+      {createOpen && <CreateProjectModal onClose={() => setCreateOpen(false)} onCreate={handleCreate} showToast={showToast} />}
       <ConfirmDialog
         open={logoutOpen}
         tone="danger"

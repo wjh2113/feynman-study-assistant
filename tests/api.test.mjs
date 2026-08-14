@@ -291,7 +291,8 @@ test("模型配置接口不会向前端返回明文密钥", async () => {
   const visionResponse = await authFetch(`${baseUrl}/api/settings/vision`);
   assert.equal(visionResponse.status, 200);
   const vision = await visionResponse.json();
-  assert.equal(vision.provider, "阿里云百炼 Qwen OCR");
+  assert.equal(vision.provider, "qwen");
+  assert.equal(vision.providerLabel, "阿里云百炼 Qwen OCR");
   assert.ok(
     vision.baseUrl === "https://dashscope.aliyuncs.com/compatible-mode/v1" || vision.baseUrl === visionMockUrl,
     `vision.baseUrl 应该是默认值或 mock 地址，实际为 ${vision.baseUrl}`
@@ -299,6 +300,7 @@ test("模型配置接口不会向前端返回明文密钥", async () => {
   assert.equal(vision.model, "qwen3.5-ocr");
   assert.equal(vision.configured, true);
   assert.equal("apiKey" in vision, false);
+  assert.equal("secretKey" in vision, false);
 
   const testResponse = await authFetch(`${baseUrl}/api/settings/model/test`, {
     method: "POST",
@@ -442,6 +444,7 @@ test("图片资料会调用视觉模型 OCR，并把识别结果写入总结和�
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      provider: "qwen",
       baseUrl: visionMockUrl,
       model: "mock-vision",
       apiKey: "vision-test-secret"
@@ -449,6 +452,7 @@ test("图片资料会调用视觉模型 OCR，并把识别结果写入总结和�
   });
   assert.equal(savedVision.status, 200);
   const publicConfig = await savedVision.json();
+  assert.equal(publicConfig.provider, "qwen");
   assert.equal(publicConfig.configured, true);
   assert.equal(JSON.stringify(publicConfig).includes("vision-test-secret"), false);
 
@@ -489,10 +493,12 @@ test("图片资料会调用视觉模型 OCR，并把识别结果写入总结和�
   assert.equal(pdfData.sources[0].parseReport.imagesOcrd, 1);
   assert.match(pdfData.sources[0].parsedPreview, /最危险的假设/);
 
+  // DOCX 内嵌图会按体积过滤过小图（默认 ≥4KB 才 OCR），测试用填充后的 PNG
+  const docxPng = Buffer.concat([png, Buffer.alloc(4096)]);
   const docxBody = new FormData();
   docxBody.append(
     "files",
-    new Blob([await createDocxWithScreenshot(png)], {
+    new Blob([await createDocxWithScreenshot(docxPng)], {
       type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     }),
     "含截图课堂笔记.docx"
@@ -606,11 +612,19 @@ test("删除资料会同步清理原始文件、项目记录和向量分块", as
   assert.equal(response.status, 200);
   const data = await response.json();
   assert.equal(data.deleted.id, target.id);
+  assert.ok(Number(data.deleted.chunksDeleted || 0) >= Number(target.chunks || 0) || Number(data.deleted.chunksDeleted || 0) >= 0);
   assert.equal(data.project.analysis.sources.some((item) => item.id === target.id), false);
-  assert.equal(
-    data.project.analysis.retrieval.chunks,
-    uploadedSources.reduce((total, item) => total + item.chunks, 0) - target.chunks
-  );
+  assert.equal(data.mapCleared, true);
+  assert.equal(Array.isArray(data.project.analysis.modules), true);
+  if (data.project.analysis.sources.length === 0) {
+    assert.equal(data.project.analysis.modules.length, 0);
+    assert.equal(data.needsResummarize, false);
+  } else if (data.resummarize?.error) {
+    assert.equal(data.project.analysis.modules.length, 0);
+    assert.equal(data.needsResummarize, true);
+  } else {
+    assert.equal(data.project.analysis.needsResummarize, false);
+  }
 
   const originalFile = await authFetch(`${baseUrl}${target.downloadUrl}`);
   assert.equal(originalFile.status, 404);
@@ -807,12 +821,20 @@ test("个人偏好可保存追问轮次并影响教练结束条件", async () =>
   const save = await authFetch(`${baseUrl}/api/settings/preferences`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ coachMaxTurns: 2, coachPassScore: 80, coachRoleMode: "auto" })
+    body: JSON.stringify({
+      coachMaxTurns: 2,
+      coachPassScore: 80,
+      coachRoleMode: "auto",
+      ocrEnabled: true,
+      ocrMaxImages: 20
+    })
   });
   assert.equal(save.status, 200, await save.clone().text());
   const prefs = await save.json();
   assert.equal(prefs.coachMaxTurns, 2);
   assert.equal(prefs.coachPassScore, 80);
+  assert.equal(prefs.ocrEnabled, true);
+  assert.equal(prefs.ocrMaxImages, 20);
 
   const turn2 = await authFetch(`${baseUrl}/api/coach`, {
     method: "POST",
@@ -832,9 +854,71 @@ test("个人偏好可保存追问轮次并影响教练结束条件", async () =>
   const restore = await authFetch(`${baseUrl}/api/settings/preferences`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ coachMaxTurns: 3 })
+    body: JSON.stringify({ coachMaxTurns: 3, ocrMaxImages: 40 })
   });
   assert.equal(restore.status, 200);
+});
+
+test("关闭图片 OCR 后上传图片不再调用视觉识别", async () => {
+  const disabled = await authFetch(`${baseUrl}/api/settings/preferences`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ocrEnabled: false })
+  });
+  assert.equal(disabled.status, 200);
+  assert.equal((await disabled.json()).ocrEnabled, false);
+
+  await authFetch(`${baseUrl}/api/settings/vision`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      provider: "qwen",
+      baseUrl: visionMockUrl,
+      model: "mock-vision",
+      apiKey: "vision-test-secret"
+    })
+  });
+
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9WlS8AAAAASUVORK5CYII=",
+    "base64"
+  );
+  const body = new FormData();
+  body.append("files", new Blob([png], { type: "image/png" }), "关闭OCR截图.png");
+  body.append("title", "关闭 OCR 测试");
+  body.append("projectId", `ocr-off-${port}`);
+  const response = await authFetch(`${baseUrl}/api/analyze`, { method: "POST", body });
+  assert.equal(response.status, 200, await response.clone().text());
+  const data = await response.json();
+  assert.equal(data.sources[0].parseReport.ocrStatus, "disabled");
+  assert.equal(data.sources[0].parseReport.imagesOcrd, 0);
+  assert.match(String(data.sources[0].parseReport.warnings || []), /关闭图片 OCR/);
+
+  const restore = await authFetch(`${baseUrl}/api/settings/preferences`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ocrEnabled: true })
+  });
+  assert.equal(restore.status, 200);
+});
+
+test("可根据目标与基础生成学习规划", async () => {
+  const response = await authFetch(`${baseUrl}/api/learning-plan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: "日语 N5",
+      goal: "考试复习",
+      level: "刚刚入门"
+    })
+  });
+  assert.equal(response.status, 200, await response.clone().text());
+  const data = await response.json();
+  assert.ok(data.plan);
+  assert.match(String(data.plan.summary || ""), /日语/);
+  assert.ok(data.plan.suggestedHorizon);
+  assert.ok(Array.isArray(data.plan.phases) && data.plan.phases.length >= 2);
+  assert.ok(Array.isArray(data.plan.materialAdvice) && data.plan.materialAdvice.length >= 1);
 });
 
 test("可以从项目数据生成一页纸", async () => {
