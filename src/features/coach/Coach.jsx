@@ -88,6 +88,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
     coachRoleMode: "auto",
     coachShowEvidence: true
   });
+  const [prefsReady, setPrefsReady] = useState(false);
   const [role, setRole] = useState("child");
   const [answer, setAnswer] = useState("");
   const [turn, setTurn] = useState(1);
@@ -112,11 +113,12 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
   useEffect(() => {
     getPreferences()
       .then((data) => setPrefs((current) => ({ ...current, ...data })))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setPrefsReady(true));
   }, []);
 
   useEffect(() => {
-    if (!selectedDocumentIds.length) return undefined;
+    if (!prefsReady || !selectedDocumentIds.length) return undefined;
     let cancelled = false;
     const load = async () => {
       try {
@@ -138,6 +140,9 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
           setEvaluation(existing.evaluations.at(-1) || null);
           setDiagnosis(existing.meta?.diagnosis || null);
           setRole(userTurns + 1 >= Math.max(2, sessionMax - 1) ? "expert" : "child");
+          if (Number(existing.meta?.maxTurns) > 0) {
+            setPrefs((current) => ({ ...current, coachMaxTurns: Number(existing.meta.maxTurns) }));
+          }
         } else {
           const createdData = await createSession(project.id, {
             documentIds: selectedDocumentIds,
@@ -164,13 +169,14 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
     };
     load();
     return () => { cancelled = true; };
-  }, [project.id, selectionKey, bootQuestion?.id, showToast]);
+  }, [prefsReady, project.id, selectionKey, bootQuestion?.id, showToast]);
 
   useEffect(() => {
     sessionStorage.removeItem("zhifan-selected-concept");
   }, []);
 
   if (!selectedDocumentIds.length) return <EmptyMini text="请先在上方勾选要练习的资料" />;
+  if (!prefsReady) return <EmptyMini text="正在读取对练偏好…" />;
   if (!question || !concept) return <NoAnalysis navigate={navigate} />;
 
   const syncSessionCache = (sessionPatch) => {
@@ -268,6 +274,9 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
       setTurn((value) => value + 1);
       setCompleted(Boolean(data.completed));
       if (data.diagnosis) setDiagnosis(data.diagnosis);
+      if (Number(data.maxTurns) > 0) {
+        setPrefs((current) => ({ ...current, coachMaxTurns: Number(data.maxTurns) }));
+      }
       if (data.session) syncSessionCache(data.session);
       if (data.blindspot) {
         setLatestBlindspot(data.blindspot);

@@ -90,6 +90,17 @@ const sessionCleanupTimer = setInterval(() => {
   deleteExpiredUserSessions().catch((error) => console.error("[auth] 清理过期会话失败", error));
 }, 6 * 60 * 60 * 1000);
 sessionCleanupTimer.unref();
+// Keep the process alive when stdin closes (e.g. backgrounded `npm run dev`).
+if (!process.stdin.isTTY) {
+  process.stdin.on("end", () => {});
+  process.stdin.resume();
+}
+process.on("uncaughtException", (error) => {
+  console.error("[fatal] uncaughtException", error);
+});
+process.on("unhandledRejection", (error) => {
+  console.error("[fatal] unhandledRejection", error);
+});
 app.listen(port, "0.0.0.0", () => {
   console.log(`Feynman Study API listening on http://127.0.0.1:${port}`);
   getPublicModelConfig().then((config) =>

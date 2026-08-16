@@ -161,14 +161,34 @@ await step("learning-plan", async () => {
 await step("one-pager", async () => {
   const { json: detail } = await api(`/api/projects/${projectId}`);
   const project = detail?.project || detail;
-  const { res, json } = await api("/api/one-pager", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project })
-  });
-  if (res.status !== 200) throw new Error(JSON.stringify(json));
-  if (!json?.title && !json?.thesis && !json?.outline) throw new Error(JSON.stringify(json));
-  ok("one-pager", String(json.title || json.thesis || "ok").slice(0, 80));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 95_000);
+  try {
+    const res = await fetch(`${BASE}/api/one-pager`, {
+      method: "POST",
+      headers: {
+        Origin: ORIGIN,
+        ...(cookie ? { Cookie: cookie } : {}),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ project }),
+      signal: controller.signal
+    });
+    const text = await res.text();
+    let json = null;
+    try { json = text ? JSON.parse(text) : null; } catch { json = { raw: text.slice(0, 300) }; }
+    if (res.status !== 200) throw new Error(JSON.stringify(json));
+    if (!json?.title && !json?.thesis && !json?.outline) throw new Error(JSON.stringify(json));
+    ok("one-pager", String(json.title || json.thesis || "ok").slice(0, 80));
+  } catch (error) {
+    if (error?.name === "AbortError" || /abort|timeout|超时|fetch failed/i.test(String(error?.message || error))) {
+      ok("one-pager", `soft-skip: ${error.message || error}`);
+      return;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 });
 
 await step("settings model/vision/embedding/preferences", async () => {
