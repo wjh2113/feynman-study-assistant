@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import pg from "pg";
 import IORedis from "ioredis";
 
 test("标准 PostgreSQL/pgvector 迁移和 Redis 可用", { skip: !process.env.TEST_DATABASE_URL }, async () => {

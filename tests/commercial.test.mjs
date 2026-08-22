@@ -10,7 +10,7 @@ import { assertProductionObjectStorage, deleteObject, getObject, objectStorageSt
 import { isStandaloneDeploy } from "../server/deploy-mode.mjs";
 import { assertProductionRuntimeConfig, databaseSslOption } from "../server/runtime-config.mjs";
 import { enqueueTask, getTask } from "../server/task-queue.mjs";
-import { resolveEmbeddingConfig, resolveRerankerConfig } from "../server/model-config.mjs";
+import { resolveEmbeddingConfig, resolveRerankerConfig, providerFromBaseUrl } from "../server/model-config.mjs";
 import { buildRerankerRequest } from "../server/reranker-client.mjs";
 
 test("模型密钥使用 AES-256-GCM 加密并可解密", () => {
@@ -145,12 +145,25 @@ test("DATABASE_SSL 解析支持 require 与 verify", () => {
 });
 
 test("无 Redis 时后台任务以内存队列执行并保留状态", async () => {
-  const job = await enqueueTask("test", { value: 2 }, async ({ value }, progress) => { progress(50); return value * 3; });
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  const completed = await getTask(job.id);
-  assert.equal(completed.status, "completed");
-  assert.equal(completed.progress, 100);
-  assert.equal(completed.result, 6);
+  const previous = process.env.REDIS_URL;
+  delete process.env.REDIS_URL;
+  try {
+    const job = await enqueueTask("test", { value: 2 }, async ({ value }, progress) => { progress(50); return value * 3; });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const completed = await getTask(job.id);
+    assert.equal(completed.status, "completed");
+    assert.equal(completed.progress, 100);
+    assert.equal(completed.result, 6);
+  } finally {
+    if (previous === undefined) delete process.env.REDIS_URL;
+    else process.env.REDIS_URL = previous;
+  }
+});
+
+test("CherryIN 与 DeepSeek 服务商可从 API 地址识别", () => {
+  assert.equal(providerFromBaseUrl("https://open.cherryin.net/v1"), "CherryIN");
+  assert.equal(providerFromBaseUrl("https://api.deepseek.com"), "DeepSeek");
+  assert.equal(providerFromBaseUrl("https://api.moonshot.cn/v1"), "Kimi");
 });
 
 test("检索模型默认使用云端且本地模式不会混用云端地址", () => {

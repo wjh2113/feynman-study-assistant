@@ -26,7 +26,7 @@
 - 文件存储：开发环境本机 `.data/uploads`；生产推荐京东云 OSS（S3 兼容，`STORAGE_PROVIDER=jdcloud`），亦兼容阿里云 OSS
 - 任务队列：开发环境内存队列，生产环境 Redis + BullMQ
 - 邮件：SMTP；支付：沙箱、微信支付与支付宝适配器
-- 默认云模型：DeepSeek 文本模型、OCR（阿里云百炼 Qwen 或百度智能云通用文字识别）、`text-embedding-v3`、`gte-rerank`
+- 默认云模型：DeepSeek / Kimi / CherryIN 等 OpenAI 兼容文本模型、OCR（阿里云百炼 Qwen 或百度智能云通用文字识别）、`text-embedding-v3`、`gte-rerank`
 
 ### 目录结构
 
@@ -62,6 +62,11 @@ npm run dev
 DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 DEEPSEEK_API_KEY=
 DEEPSEEK_MODEL=deepseek-v4-pro
+
+# CherryIN（OpenAI 兼容，模型名必须是 厂商/模型名）
+# DEEPSEEK_BASE_URL=https://open.cherryin.net/v1
+# DEEPSEEK_MODEL=anthropic/claude-sonnet-4.5
+# DEEPSEEK_API_KEY=
 
 VISION_PROVIDER=qwen
 VISION_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1

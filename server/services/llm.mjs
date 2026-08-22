@@ -1,13 +1,17 @@
 import { getModelConfig } from "../model-config.mjs";
 
 export const cleanJson = (value) => {
-  const text = value.trim().replace(/^```json\s*/i, "").replace(/```$/i, "");
-  return JSON.parse(text);
+  const text = String(value || "").trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) return JSON.parse(match[0]);
+    throw new Error("文本模型没有返回合法 JSON");
+  }
 };
 
-export async function deepseek(messages, temperature = 0.35, userId, timeoutMs = Number(process.env.GENERATION_TIMEOUT_MS || 90_000)) {
-  const config = await getModelConfig(userId);
-  if (!config.apiKey) return null;
+async function completeChat(config, messages, temperature, timeoutMs, jsonObject) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -21,20 +25,36 @@ export async function deepseek(messages, temperature = 0.35, userId, timeoutMs =
         model: config.model,
         messages,
         temperature,
-        response_format: { type: "json_object" }
+        ...(jsonObject ? { response_format: { type: "json_object" } } : {})
       }),
       signal: controller.signal
     });
     if (!response.ok) {
       const detail = await response.text();
-      throw new Error(`文本模型返回 ${response.status}：${detail.slice(0, 300)}`);
+      const error = new Error(`文本模型返回 ${response.status}：${detail.slice(0, 300)}`);
+      error.status = response.status;
+      throw error;
     }
-    const data = await response.json();
-    return cleanJson(data.choices?.[0]?.message?.content || "{}");
+    return response.json();
   } catch (error) {
     if (error.name === "AbortError") throw new Error(`文本模型生成超过 ${Math.round(timeoutMs / 1000)} 秒，已停止等待`);
     throw error;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+export async function deepseek(messages, temperature = 0.35, userId, timeoutMs = Number(process.env.GENERATION_TIMEOUT_MS || 90_000)) {
+  const config = await getModelConfig(userId);
+  if (!config.apiKey) return null;
+  try {
+    const data = await completeChat(config, messages, temperature, timeoutMs, true);
+    return cleanJson(data.choices?.[0]?.message?.content || "{}");
+  } catch (error) {
+    if (error.status === 400) {
+      const data = await completeChat(config, messages, temperature, timeoutMs, false);
+      return cleanJson(data.choices?.[0]?.message?.content || "{}");
+    }
+    throw error;
   }
 }

@@ -21,6 +21,21 @@ const developmentOrigins = new Set([
   "http://localhost:5173"
 ]);
 
+function isPrivateLanOrigin(origin) {
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    const host = url.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") return true;
+    const parts = host.split(".").map(Number);
+    if (parts.length !== 4 || parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) return false;
+    const [a, b] = parts;
+    return a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
+  } catch {
+    return false;
+  }
+}
+
 const rateBuckets = new Map();
 let redisClient;
 const rateBucketCleanupTimer = setInterval(() => {
@@ -105,7 +120,8 @@ export function verifyRequestOrigin(req, res, next) {
   }
   const normalized = origin.replace(/\/$/, "");
   const ownOrigin = `${req.protocol}://${req.get("host")}`;
-  const isDevelopmentOrigin = process.env.NODE_ENV !== "production" && developmentOrigins.has(normalized);
+  const isDevelopmentOrigin = process.env.NODE_ENV !== "production"
+    && (developmentOrigins.has(normalized) || isPrivateLanOrigin(normalized));
   if (normalized === ownOrigin || allowedOrigins.has(normalized) || isDevelopmentOrigin) return next();
   return res.status(403).json({ error: "请求来源不被允许" });
 }

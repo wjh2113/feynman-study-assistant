@@ -101,6 +101,8 @@ before(async () => {
       ...process.env,
       PORT: String(port),
       NODE_ENV: "test",
+      DATABASE_URL: "",
+      REDIS_URL: "",
       VISION_PROVIDER: "qwen",
       VISION_API_KEY: "sk-test-voice",
       VISION_BASE_URL: mockUrl,

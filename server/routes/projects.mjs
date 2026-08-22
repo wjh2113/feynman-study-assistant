@@ -5,9 +5,11 @@ import { getObject } from "../object-storage.mjs";
 import {
   countDocumentChunks,
   deleteChapter,
+  deleteChunksByFilename,
   deleteDocument,
   deleteProject,
   ensureDefaultChapter,
+  findProjectDocument,
   getChapter,
   getDocument,
   getProject,
@@ -163,15 +165,22 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
     if (!project) return res.status(404).json({ error: "学习项目不存在" });
 
     const sources = project.analysis?.sources || [];
-    const source = sources.find((item) => item.id === req.params.documentId);
+    const source = sources.find((item) => item.id === req.params.documentId)
+      || sources.find((item) => item.name === req.params.documentId);
     if (!source) return res.status(404).json({ error: "资料不存在或不属于当前项目" });
 
-    const removal = await deleteDocument(req.params.projectId, req.params.documentId);
-    const remainingSources = sources.filter((item) => item.id !== req.params.documentId);
+    const stored = await findProjectDocument(req.params.projectId, req.userId, {
+      documentId: source.id,
+      filename: source.name
+    });
+    const removal = stored
+      ? await deleteDocument(req.params.projectId, stored.id)
+      : { deleted: false, chunksDeleted: 0 };
+    const extraChunks = await deleteChunksByFilename(req.params.projectId, source.name);
+    const remainingSources = sources.filter((item) => item.id !== source.id && item.name !== source.name);
     const deletedName = String(source.name || "");
-    const practiceDocumentIds = (project.practiceDocumentIds || []).filter(
-      (id) => id !== req.params.documentId
-    );
+    const removedIds = new Set([source.id, stored?.id, req.params.documentId].filter(Boolean));
+    const practiceDocumentIds = (project.practiceDocumentIds || []).filter((id) => !removedIds.has(id));
     const remainingChunks = await countDocumentChunks(req.params.projectId);
 
     // Subject knowledge map is derived from all materials together — clear it so
@@ -207,26 +216,28 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
       progress: remainingSources.length ? Math.min(Number(project.progress || 0), 15) : 0,
       blindspots: (project.blindspots || []).filter((item) => {
         const ids = Array.isArray(item.documentIds) ? item.documentIds : [];
-        if (ids.length) return !ids.includes(req.params.documentId);
+        if (ids.length) return ids.every((id) => !removedIds.has(id));
         return !String(item.source || "").startsWith(deletedName);
       }),
       sessions: (project.sessions || []).filter((item) => {
         const ids = Array.isArray(item.documentIds) ? item.documentIds : [];
         if (!ids.length) return true;
-        return !ids.includes(req.params.documentId);
+        return ids.every((id) => !removedIds.has(id));
       })
     };
+    const chunksDeleted = Number(removal.chunksDeleted || 0) + Number(extraChunks || 0);
     await saveProject(nextProject);
     await recordEvent(req.userId, req.params.projectId, "document_deleted", {
-      documentId: req.params.documentId,
+      documentId: stored?.id || source.id,
       filename: source.name,
       mapCleared: true,
       needsResummarize: analysis.needsResummarize,
-      chunksDeleted: removal.chunksDeleted || 0
+      chunksDeleted
     });
 
     let resummarize = null;
-    if (remainingSources.length) {
+    const remainingDocuments = await listDocumentsForProject(req.params.projectId, req.userId);
+    if (remainingDocuments.length) {
       try {
         resummarize = await resummarizeProject(req.params.projectId, req.userId);
         nextProject = resummarize.project;
@@ -237,11 +248,15 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
     }
 
     res.json({
-      project: nextProject,
+      project: {
+        ...nextProject,
+        documentCount: remainingDocuments.length
+      },
       deleted: {
         id: source.id,
+        storedId: stored?.id || null,
         name: source.name,
-        chunksDeleted: removal.chunksDeleted || 0
+        chunksDeleted
       },
       mapCleared: true,
       needsResummarize: Boolean(nextProject.analysis?.needsResummarize),

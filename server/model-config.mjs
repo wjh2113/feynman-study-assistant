@@ -35,8 +35,9 @@ export async function getModelConfig(userId) {
   };
 }
 
-function providerFromBaseUrl(baseUrl) {
+export function providerFromBaseUrl(baseUrl) {
   const host = String(baseUrl || "").toLowerCase();
+  if (host.includes("cherryin")) return "CherryIN";
   if (host.includes("deepseek")) return "DeepSeek";
   if (host.includes("moonshot") || host.includes("kimi")) return "Kimi";
   if (host.includes("openai")) return "OpenAI";
@@ -253,6 +254,7 @@ export function resolveRerankerConfig(stored = {}, embeddingConfig) {
 
 function providerNameFromUrl(baseUrl) {
   const host = String(baseUrl || "").toLowerCase();
+  if (host.includes("cherryin")) return "CherryIN";
   if (host.includes("siliconflow") || host.includes("silicon")) return "SiliconFlow";
   if (host.includes("openai")) return "OpenAI";
   if (host.includes("deepseek")) return "DeepSeek";

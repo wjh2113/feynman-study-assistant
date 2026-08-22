@@ -306,7 +306,20 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 .source-item:last-child { border-bottom: 0; }
 .source-item .file-row { border-bottom: 0; }
 .source-panel-actions { display: flex; align-items: center; gap: 8px; }
-.source-delete-btn { color: #a65a50; }
+.source-delete-btn {
+  border: 1px solid #efd0ca;
+  background: #fff8f6;
+  min-height: 32px;
+  border-radius: 8px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #a65a50;
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
+}
 .source-delete-btn:hover { color: #963f35; background: #fff0ed; }
 .source-delete-confirm { margin: 0 12px 13px 54px; border: 1px solid #efd0ca; border-radius: 10px; padding: 12px; display: flex; align-items: center; gap: 9px; background: #fff8f6; }
 .source-delete-confirm > div { min-width: 0; flex: 1; }

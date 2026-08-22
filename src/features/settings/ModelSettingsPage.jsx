@@ -28,9 +28,11 @@ import {
   testVisionSettings
 } from "../../api/settings.js";
 import { EMBEDDING_PRESETS } from "./embeddingPresets.js";
+import { TEXT_MODEL_PRESETS, pickTextPreset } from "./textModelPresets.js";
 
 export function ModelSettingsPage({ showToast, embedded = false }) {
   const [form, setForm] = useState({
+    preset: "deepseek",
     baseUrl: "https://api.deepseek.com",
     model: "deepseek-v4-pro",
     apiKey: ""
@@ -87,7 +89,24 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
 
   const applyModelPublic = (data) => {
     setSaved(data);
-    setForm((current) => ({ ...current, baseUrl: data.baseUrl, model: data.model, apiKey: "" }));
+    const preset = pickTextPreset(data.baseUrl);
+    setForm((current) => ({
+      ...current,
+      preset,
+      baseUrl: data.baseUrl,
+      model: data.model,
+      apiKey: ""
+    }));
+  };
+
+  const applyTextPreset = (presetKey) => {
+    const preset = TEXT_MODEL_PRESETS[presetKey] || TEXT_MODEL_PRESETS.custom;
+    setForm((current) => ({
+      ...current,
+      preset: presetKey,
+      baseUrl: preset.baseUrl || current.baseUrl,
+      model: preset.models[0]?.id || current.model
+    }));
   };
 
   const applyVisionPublic = (data) => {
@@ -390,7 +409,7 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
         <PageHeading
           eyebrow="应用设置 · 模型服务"
           title="模型设置"
-          description="支持 DeepSeek、Kimi 等 OpenAI 兼容接口；Qwen3.5-OCR 负责识别 PDF 扫描页、文档截图和图片文字。"
+          description="支持 DeepSeek、Kimi、CherryIN 等 OpenAI 兼容接口；Qwen3.5-OCR 负责识别 PDF 扫描页、文档截图和图片文字。"
         />
       )}
       <div className={`settings-layout ${embedded ? "settings-layout-embedded" : ""}`}>
@@ -406,24 +425,55 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
           {loading ? <div className="settings-loading"><Spinner /> 正在读取本地配置…</div> : (
             <div className="settings-fields">
               <label>
+                <span>服务商</span>
+                <select value={form.preset} onChange={(event) => applyTextPreset(event.target.value)}>
+                  {Object.entries(TEXT_MODEL_PRESETS).map(([key, preset]) => (
+                    <option key={key} value={key}>{preset.name}</option>
+                  ))}
+                </select>
+                <small>
+                  {form.preset === "cherryin"
+                    ? TEXT_MODEL_PRESETS.cherryin.hint
+                    : "选择服务商会自动填入 API 地址和常用模型，密钥仍需你自己填写。"}
+                </small>
+              </label>
+              <label>
                 <span>API 地址</span>
-                <input value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://api.deepseek.com 或 https://api.moonshot.cn/v1" />
-                <small>DeepSeek 官方地址通常不需要修改；Kimi 请填 https://api.moonshot.cn/v1</small>
+                <input value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value, preset: pickTextPreset(event.target.value) })} placeholder="https://api.deepseek.com、https://api.moonshot.cn/v1 或 https://open.cherryin.net/v1" />
+                <small>CherryIN 请填 https://open.cherryin.net/v1；DeepSeek 官方地址通常不需要改。</small>
               </label>
               <label>
                 <span>模型名称</span>
-                <select value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })}>
-                  <optgroup label="DeepSeek">
-                    <option value="deepseek-v4-flash">deepseek-v4-flash（更快）</option>
-                    <option value="deepseek-v4-pro">deepseek-v4-pro（更强）</option>
-                  </optgroup>
-                  <optgroup label="Kimi">
-                    <option value="moonshot-v1-8k">moonshot-v1-8k</option>
-                    <option value="moonshot-v1-32k">moonshot-v1-32k</option>
-                    <option value="moonshot-v1-128k">moonshot-v1-128k</option>
-                  </optgroup>
-                </select>
-                <small>默认使用 deepseek-v4-flash，响应更快；需要更强分析能力时切到 Pro。</small>
+                {(TEXT_MODEL_PRESETS[form.preset]?.models || []).length ? (
+                  <select
+                    value={(TEXT_MODEL_PRESETS[form.preset].models.some((item) => item.id === form.model) ? form.model : "__custom__")}
+                    onChange={(event) => {
+                      if (event.target.value === "__custom__") {
+                        const known = (TEXT_MODEL_PRESETS[form.preset].models || []).some((item) => item.id === form.model);
+                        setForm({ ...form, model: known ? "" : form.model });
+                        return;
+                      }
+                      setForm({ ...form, model: event.target.value });
+                    }}
+                  >
+                    {(TEXT_MODEL_PRESETS[form.preset].models || []).map((item) => (
+                      <option key={item.id} value={item.id}>{item.label}</option>
+                    ))}
+                    <option value="__custom__">其他（手动填写完整模型名）</option>
+                  </select>
+                ) : null}
+                {(!TEXT_MODEL_PRESETS[form.preset]?.models?.length || !(TEXT_MODEL_PRESETS[form.preset].models || []).some((item) => item.id === form.model)) && (
+                  <input
+                    value={form.model}
+                    onChange={(event) => setForm({ ...form, model: event.target.value })}
+                    placeholder={form.preset === "cherryin" ? "例如 anthropic/claude-sonnet-4.5" : "模型名称"}
+                  />
+                )}
+                <small>
+                  {form.preset === "cherryin"
+                    ? "必须使用控制台里的完整模型 ID，例如 anthropic/claude-sonnet-4.5，不要只写 claude-sonnet-4.5。"
+                    : "默认使用 deepseek-v4-flash，响应更快；需要更强分析能力时切到 Pro。"}
+                </small>
               </label>
               <label>
                 <span>API Key</span>
@@ -432,7 +482,7 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
                   autoComplete="off"
                   value={form.apiKey}
                   onChange={(event) => setForm({ ...form, apiKey: event.target.value })}
-                  placeholder={saved?.configured ? `已保存：${saved.apiKeyMasked}` : "输入 API Key"}
+                  placeholder={saved?.configured ? `已保存：${saved.apiKeyMasked}` : form.preset === "cherryin" ? "输入 CherryIN 令牌" : "输入 API Key"}
                 />
                 <small>{saved?.configured ? "留空会继续使用已保存的密钥。" : "密钥只发送到本机后端，不写入浏览器存储。"}</small>
               </label>

@@ -2,12 +2,12 @@ import React, { useEffect, useRef, useState } from "react";
 import { PageHeading } from "../../components/PageHeading.jsx";
 import { EmptyMini } from "../../components/EmptyMini.jsx";
 import { Spinner } from "../../components/Spinner.jsx";
+import { ConfirmDialog } from "../../components/ConfirmDialog.jsx";
 import {
   ChevronDown,
   ChevronRight,
   CircleAlert,
   Download,
-  MoreHorizontal,
   RotateCcw,
   Sparkles,
   Trash2,
@@ -179,36 +179,24 @@ export function Sources({
         <div className="file-row">
           <FileTypeIcon name={source.name} />
           <div className="file-copy"><strong>{source.name}</strong><span>{source.type} · {source.pages || 1} 页 {source.chunks ? `· ${source.chunks} 个检索分块` : ""} · {ocrLabel}</span></div>
-          <button className="parse-toggle" onClick={() => setOpenSource(expanded ? null : source.id)}>
+          <button type="button" className="parse-toggle" onClick={() => setOpenSource(expanded ? null : source.id)}>
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
             {expanded ? "收起解析" : "查看大纲"}
           </button>
           {source.downloadUrl ? (
             <a className="icon-btn" href={source.downloadUrl} title="下载原始资料"><Download size={17} /></a>
-          ) : <button className="icon-btn"><MoreHorizontal size={18} /></button>}
-          {hasPersistedSources && <button
-            className="icon-btn source-delete-btn"
+          ) : null}
+          <button
+            type="button"
+            className="source-delete-btn"
             aria-label={`删除资料 ${source.name}`}
-            title="删除资料"
+            title="删除资料并更新向量索引与知识地图"
             onClick={() => setDeleteSourceId(source.id)}
           >
-            <Trash2 size={16} />
-          </button>}
+            <Trash2 size={14} />
+            删除
+          </button>
         </div>
-        {deleteSourceId === source.id && (
-          <div className="source-delete-confirm" role="alert">
-            <div>
-              <strong>确认删除“{source.name}”？</strong>
-              <span>将删除原文件、向量分块与检索索引，并清空学科知识地图；若还有其他资料，会尝试重新总结。</span>
-              <span>原始文件、资料记录和对应的向量检索分块都会删除，此操作无法撤销。</span>
-            </div>
-            <button className="secondary-btn" onClick={() => setDeleteSourceId(null)} disabled={deletingSourceId === source.id}>取消</button>
-            <button className="danger-btn" onClick={() => deleteSource(source)} disabled={deletingSourceId === source.id}>
-              {deletingSourceId === source.id ? <Spinner /> : <Trash2 size={15} />}
-              {deletingSourceId === source.id ? "正在删除…" : "确认删除"}
-            </button>
-          </div>
-        )}
         {expanded && (
           <div className="parse-detail">
             <div className="parse-outline">
@@ -226,7 +214,7 @@ export function Sources({
                 {stats.imagesSkipped > 0 && <span>未 OCR <b>{stats.imagesSkipped}</b> 张</span>}
                 {stats.indexedCharacters > 0 && <span>索引字符 <b>{stats.indexedCharacters}</b></span>}
               </div>
-              {!!outline.sections?.length ? (
+              {outline.sections?.length ? (
                 <ol className="parse-outline-list">
                   {outline.sections.map((section, index) => (
                     <li key={`${section.title}-${index}`} style={{ paddingLeft: `${Math.max(0, (section.level || 1) - 1) * 12}px` }}>
@@ -341,6 +329,21 @@ export function Sources({
         {sources.map(renderSource)}
         {!sources.length && <EmptyMini text="还没有已解析的资料。" />}
       </section>
+      <ConfirmDialog
+        open={Boolean(deleteSourceId)}
+        tone="danger"
+        title={`确认删除「${sources.find((item) => item.id === deleteSourceId)?.name || "这份资料"}」？`}
+        description="将删除原文件、对应向量分块与检索索引，并按剩余资料重新生成知识地图。此操作无法撤销。"
+        confirmLabel={deletingSourceId ? "正在删除…" : "确认删除"}
+        cancelLabel="取消"
+        onCancel={() => {
+          if (!deletingSourceId) setDeleteSourceId(null);
+        }}
+        onConfirm={() => {
+          const source = sources.find((item) => item.id === deleteSourceId);
+          if (source && !deletingSourceId) deleteSource(source);
+        }}
+      />
     </>
   );
 }

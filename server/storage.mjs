@@ -431,6 +431,28 @@ export async function listDocumentsForProject(projectId, userId) {
   return result.rows;
 }
 
+export async function findProjectDocument(projectId, userId, { documentId, filename } = {}) {
+  const documents = await listDocumentsForProject(projectId, userId);
+  if (documentId) {
+    const matched = documents.find((document) => document.id === documentId);
+    if (matched) return matched;
+  }
+  const name = String(filename || "").trim();
+  if (!name) return null;
+  return documents.find((document) => document.filename === name) || null;
+}
+
+export async function deleteChunksByFilename(projectId, filename) {
+  const name = String(filename || "").trim();
+  if (!name) return 0;
+  const db = await getDatabase();
+  const result = await db.query(
+    "DELETE FROM document_chunks WHERE project_id = $1 AND metadata->>'filename' = $2",
+    [projectId, name]
+  );
+  return Number(result.rowCount || 0);
+}
+
 export async function replaceDocumentIndex({ projectId, userId, document, source, chunks, embeddings }) {
   const db = await getDatabase();
   const chapterId = document.chapter_id || document.chapterId || null;

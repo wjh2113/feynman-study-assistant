@@ -19,6 +19,8 @@ function bullQueue() {
 
 function ensureWorker() {
   if (!redisEnabled() || worker) return;
+  bullQueue();
+  if (!connection) return;
   worker = new Worker("zhifan-tasks", async (job) => {
     const handler = handlers.get(job.name);
     if (!handler) throw new Error(`任务处理器未注册：${job.name}`);

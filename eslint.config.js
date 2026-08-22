@@ -15,7 +15,7 @@ export default [
   },
   js.configs.recommended,
   {
-    files: ["server.mjs", "server/**/*.mjs", "tests/**/*.mjs", "scripts/**/*.{js,mjs}"],
+    files: ["server.mjs", "server/**/*.mjs", "tests/**/*.mjs", "scripts/**/*.{js,mjs}", "vite.config.js", "eslint.config.js"],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: "module",
@@ -24,7 +24,7 @@ export default [
       }
     },
     rules: {
-      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" }],
+      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" }],
       "no-empty": ["error", { allowEmptyCatch: true }]
     }
   },

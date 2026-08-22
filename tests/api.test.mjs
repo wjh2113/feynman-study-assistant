@@ -130,6 +130,7 @@ before(async () => {
       PORT: String(port),
       DEEPSEEK_API_KEY: "",
       DATABASE_URL: "",
+      REDIS_URL: "",
       RAG_TEST_MODE: "true",
       PGLITE_MEMORY: "true",
       DATA_DIR: `.data-test-${port}`,
@@ -207,6 +208,17 @@ test("未登录请求、跨站写请求和已移除的用户列表接口会被�
     body: JSON.stringify({ title: "Vite proxy" })
   });
   assert.notEqual(viteProxy.status, 403);
+
+  const lanOrigin = await fetch(`${baseUrl}/api/projects/origin-check`, {
+    method: "PUT",
+    headers: {
+      ...cookieHeader(),
+      Origin: "http://192.168.1.19:5173",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ title: "LAN origin" })
+  });
+  assert.notEqual(lanOrigin.status, 403);
 
   const users = await authFetch(`${baseUrl}/api/users`);
   assert.equal(users.status, 404);
@@ -640,6 +652,43 @@ test("删除资料会同步清理原始文件、项目记录和向量分块", as
   assert.equal(ragResponse.status, 200);
   const rag = await ragResponse.json();
   assert.equal(rag.sources.some((item) => item.documentId === target.id), false);
+});
+
+test("未入库的分析资料也可删除，并清理知识地图", async () => {
+  const projectId = `analysis-only-delete-${port}`;
+  const created = await authFetch(`${baseUrl}/api/projects/${projectId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: "仅分析资料",
+      mode: "course",
+      progress: 22,
+      analysis: {
+        sources: [
+          { id: "src-1", name: "AI产品方法论课件.pdf", type: "课件", pages: 38, status: "ready" },
+          { id: "src-2", name: "个人学习笔记.md", type: "笔记", pages: 1, status: "ready" }
+        ],
+        modules: [{ id: "m1", title: "旧地图", concepts: [{ id: "c1", title: "旧概念" }] }],
+        questions: [{ id: "q1", question: "旧问题" }]
+      },
+      blindspots: [],
+      sessions: []
+    })
+  });
+  assert.equal(created.status, 200, await created.clone().text());
+  const response = await authFetch(
+    `${baseUrl}/api/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent("src-1")}`,
+    { method: "DELETE" }
+  );
+  assert.equal(response.status, 200, await response.clone().text());
+  const data = await response.json();
+  assert.equal(data.deleted.id, "src-1");
+  assert.equal(data.project.analysis.sources.some((item) => item.id === "src-1"), false);
+  assert.equal(data.project.analysis.sources.length, 1);
+  assert.equal(data.project.analysis.sources[0].id, "src-2");
+  assert.equal(data.mapCleared, true);
+  assert.equal(data.project.analysis.modules.length, 0);
+  assert.equal(data.needsResummarize, true);
 });
 
 test("不支持的文件格式返回明确错误", async () => {
