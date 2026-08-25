@@ -14,6 +14,7 @@ import {
   Plus,
   X
 } from "../components/icons.jsx";
+import { dedupeAnalysisSources, mapDocumentIdsToDeduped } from "../lib/analysis-sources.mjs";
 import { isDemoProject } from "../lib/demoProject.js";
 import { coachSessionsToSummaries } from "../lib/coachSessions.js";
 import { subjectNavItems, practiceNavItems } from "../lib/nav.js";
@@ -38,14 +39,15 @@ import { OutputStudio } from "../features/output/OutputStudio.jsx";
 import { PreferencesPage } from "../features/preferences/PreferencesPage.jsx";
 
 function sourceIdsFromProject(project) {
-  return (project?.analysis?.sources || []).map((source) => source.id).filter(Boolean);
+  return dedupeAnalysisSources(project?.analysis?.sources || []).map((source) => source.id).filter(Boolean);
 }
 
 function initialDocumentIds(project) {
   if (!project) return [];
+  const sources = project?.analysis?.sources || [];
   if (Array.isArray(project.practiceDocumentIds) && project.practiceDocumentIds.length) {
     const available = new Set(sourceIdsFromProject(project));
-    const kept = project.practiceDocumentIds.filter((id) => available.has(id));
+    const kept = mapDocumentIdsToDeduped(project.practiceDocumentIds, sources).filter((id) => available.has(id));
     if (kept.length) return kept;
   }
   return sourceIdsFromProject(project);
@@ -170,12 +172,13 @@ export function App() {
 
   useEffect(() => {
     if (!project) return;
+    const sources = project?.analysis?.sources || [];
     const available = new Set(sourceIdsFromProject(project));
     setSelectedDocumentIdsState((current) => {
-      const kept = (current || []).filter((id) => available.has(id));
+      const kept = mapDocumentIdsToDeduped(current, sources).filter((id) => available.has(id));
       if (kept.length) return kept;
       if (Array.isArray(project.practiceDocumentIds) && project.practiceDocumentIds.length) {
-        const fromProject = project.practiceDocumentIds.filter((id) => available.has(id));
+        const fromProject = mapDocumentIdsToDeduped(project.practiceDocumentIds, sources).filter((id) => available.has(id));
         if (fromProject.length) return fromProject;
       }
       return [...available];

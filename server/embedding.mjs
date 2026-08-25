@@ -132,6 +132,40 @@ export function fallbackRankCandidates(candidates, topK = 5) {
     .slice(0, topK);
 }
 
+function hasStrongRetrievalSignal(candidate) {
+  if (!candidate) return false;
+  return Number(candidate.fusionScore || 0) >= 0.06
+    || Number(candidate.keywordScore || 0) >= 0.14
+    || Number(candidate.vectorScore || 0) >= 0.42;
+}
+
+export function pickAnswerSources(candidates, reranked, threshold = relevanceThreshold) {
+  const top = reranked[0];
+  if (top && top.rerankScore >= threshold) {
+    return { sources: reranked, insufficient: false, warning: null };
+  }
+
+  const fusionRanked = fallbackRankCandidates(candidates, 5);
+  const fusionTop = fusionRanked[0];
+  if (fusionTop && fusionTop.rerankScore >= threshold) {
+    return {
+      sources: fusionRanked,
+      insufficient: false,
+      warning: top ? "精排分数偏低，已改用混合检索排序" : null
+    };
+  }
+
+  if (hasStrongRetrievalSignal(candidates[0])) {
+    return {
+      sources: fusionRanked.length ? fusionRanked : reranked,
+      insufficient: false,
+      warning: "检索相关度偏低，以下回答可能不完整"
+    };
+  }
+
+  return { sources: [], insufficient: true, warning: null };
+}
+
 export function embeddingStatus(config) {
   if (process.env.RAG_TEST_MODE === "true") {
     return {

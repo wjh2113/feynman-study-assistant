@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { dedupeAnalysisSources } from "../../src/lib/analysis-sources.mjs";
 import { chunkSources } from "../chunking.mjs";
 import { embedTexts, embeddingStatus } from "../embedding.mjs";
 import { getEmbeddingConfig } from "../model-config.mjs";
@@ -47,7 +48,7 @@ function mergeAnalysisSources(existing = [], incoming = []) {
     if (!source?.id) continue;
     map.set(source.id, { ...(map.get(source.id) || {}), ...source });
   }
-  return [...map.values()];
+  return dedupeAnalysisSources([...map.values()]);
 }
 
 function mergeAnalysisModules(existing = [], incoming = []) {

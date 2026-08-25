@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { FileTypeIcon } from "../features/sources/FileTypeIcon.jsx";
+import { dedupeAnalysisSources } from "../lib/analysis-sources.mjs";
 
 export function PracticeDocumentPicker({
   sources = [],
@@ -7,8 +8,9 @@ export function PracticeDocumentPicker({
   onChange,
   label = "选择练习资料"
 }) {
+  const visibleSources = useMemo(() => dedupeAnalysisSources(sources), [sources]);
   const selected = new Set(selectedIds || []);
-  const allIds = (sources || []).map((source) => source.id).filter(Boolean);
+  const allIds = visibleSources.map((source) => source.id).filter(Boolean);
 
   const toggle = (id) => {
     if (!onChange) return;
@@ -30,11 +32,11 @@ export function PracticeDocumentPicker({
           <button type="button" className="text-btn" onClick={() => onChange?.([])} disabled={!selected.size}>清空</button>
         </div>
       </header>
-      {!sources.length ? (
+      {!visibleSources.length ? (
         <p className="practice-doc-picker-empty">还没有可练习的资料，请先在「学习资料」上传并完成解析。</p>
       ) : (
         <ul className="practice-doc-grid">
-          {sources.map((source) => {
+          {visibleSources.map((source) => {
             const checked = selected.has(source.id);
             return (
               <li key={source.id}>

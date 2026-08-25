@@ -1,4 +1,4 @@
-import { embedTexts, embeddingStatus, fallbackRankCandidates, relevanceThreshold, rerankCandidates } from "../embedding.mjs";
+import { embedTexts, embeddingStatus, pickAnswerSources, relevanceThreshold, rerankCandidates } from "../embedding.mjs";
 import { getEmbeddingConfig } from "../model-config.mjs";
 import { isLlmConfigured } from "../gateway-client.mjs";
 import { hybridSearch, recordEvent } from "../storage.mjs";
@@ -67,14 +67,19 @@ export async function answerRagQuery({ userId, projectId, query }) {
     }
     stage = "精排候选片段";
     let degraded = null;
-    let sources;
+    let reranked = [];
     try {
-      sources = await rerankCandidates(query, candidates, 5, retrievalConfig.reranker);
+      reranked = await rerankCandidates(query, candidates, 5, retrievalConfig.reranker);
     } catch (error) {
       degraded = `Reranker 不可用，已降级为向量与关键词融合排序：${error.message}`;
-      sources = fallbackRankCandidates(candidates, 5);
     }
-    const rerankById = new Map(sources.map((item) => [item.id, item.rerankScore]));
+    const picked = pickAnswerSources(candidates, reranked, relevanceThreshold);
+    if (picked.warning && !degraded) degraded = picked.warning;
+    const sources = picked.sources;
+    const rerankById = new Map(reranked.map((item) => [item.id, item.rerankScore]));
+    for (const item of sources) {
+      if (!rerankById.has(item.id)) rerankById.set(item.id, item.rerankScore);
+    }
     const debug = {
       candidateCount: candidates.length,
       threshold: relevanceThreshold,
@@ -97,7 +102,7 @@ export async function answerRagQuery({ userId, projectId, query }) {
         parentContent: item.parentContent
       }))
     };
-    if (!sources.length || sources[0].rerankScore < relevanceThreshold) {
+    if (picked.insufficient || !sources.length) {
       await recordEvent(userId, projectId, "rag_query_insufficient", { query, topScore: sources[0]?.rerankScore || 0 });
       return {
         body: {
