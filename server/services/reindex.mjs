@@ -11,11 +11,12 @@ import {
   replaceDocumentIndex,
   saveProject
 } from "../storage.mjs";
+import { dedupeProjectDocuments } from "./document-dedupe.mjs";
 
 export async function reindexProject(projectId, userId, onProgress = () => {}) {
     const project = await getProject(projectId, userId);
     if (!project) throw new Error("学习项目不存在");
-    const documents = await listDocumentsForProject(projectId, userId);
+    const documents = await dedupeProjectDocuments(projectId, userId);
     if (!documents.length) throw new Error("当前项目没有可以重建索引的资料");
     let totalChunks = 0; let totalParents = 0;
     const updatedSources = new Map();

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { PageHeading } from "../../components/PageHeading.jsx";
 import { EmptyMini } from "../../components/EmptyMini.jsx";
 import { Spinner } from "../../components/Spinner.jsx";
@@ -17,8 +17,10 @@ import {
 } from "../../components/icons.jsx";
 import { formatSize } from "../../lib/format.js";
 import { outlineForSource } from "../../lib/documentOutline.js";
+import { dedupeAnalysisSources } from "../../lib/analysis-sources.mjs";
+import { resolveMapAvailability } from "../../lib/map-availability.js";
 import { analyzeBackground } from "../../api/ingest.js";
-import { deleteDocument, getProject, reindexProject, resummarizeProject } from "../../api/projects.js";
+import { deleteDocument, getProject, reindexProject, resummarizeProject, syncProjectSources } from "../../api/projects.js";
 import { FileTypeIcon } from "./FileTypeIcon.jsx";
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -78,7 +80,11 @@ export function Sources({
   const [resummarizing, setResummarizing] = useState(false);
   const fileInput = useRef();
   const prevSourceCountRef = useRef(0);
-  const sources = project.analysis?.sources || [];
+  const rawSources = project.analysis?.sources || [];
+  const sources = useMemo(() => dedupeAnalysisSources(rawSources), [rawSources]);
+  const mapAvailability = useMemo(() => resolveMapAvailability(project), [project]);
+  const mapNeedsGenerate = mapAvailability.kind === "sources-without-map";
+  const hasDuplicateSources = rawSources.length > sources.length;
   const hasPersistedSources = Number(project.documentCount || 0) > 0 || sources.some((source) => source.downloadUrl);
   const mapStatus = project.analysis?.contentAnalysisStatus;
   const mapPending = mapStatus === "pending" || mapStatus === "running";
@@ -102,6 +108,17 @@ export function Sources({
       window.clearInterval(timer);
     };
   }, [mapPending, project.id, updateProject]);
+
+  useEffect(() => {
+    if (!project.id || !hasDuplicateSources) return undefined;
+    let cancelled = false;
+    syncProjectSources(project.id)
+      .then((data) => {
+        if (!cancelled && data.project) updateProject(data.project);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [project.id, hasDuplicateSources, updateProject]);
 
   useEffect(() => {
     const count = sources.length;
@@ -354,6 +371,16 @@ export function Sources({
         </div>
       )}
 
+      {mapNeedsGenerate && !mapPending && !mapFailed && !project.analysis?.needsResummarize && (
+        <div className="request-warning">
+          <CircleAlert size={16} />
+          <span>{mapAvailability.description}</span>
+          <button className="secondary-btn" onClick={resummarizeSources} disabled={resummarizing || loading}>
+            {resummarizing ? <Spinner /> : <Sparkles size={15} />} 重新总结知识地图
+          </button>
+        </div>
+      )}
+
       {mapFailed && (
         <div className="request-warning">
           <CircleAlert size={16} />
@@ -395,7 +422,7 @@ export function Sources({
             {hasPersistedSources && !!sources.length && (
               <button className="secondary-btn" onClick={resummarizeSources} disabled={resummarizing || loading}>
                 {resummarizing ? <Spinner /> : <Sparkles size={14} />}
-                {resummarizing ? "正在重新总结…" : "重新总结"}
+                {resummarizing ? "正在生成知识地图…" : "重新总结知识地图"}
               </button>
             )}
             {hasPersistedSources && !!sources.length && (

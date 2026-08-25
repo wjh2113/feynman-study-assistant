@@ -20,6 +20,8 @@ import {
   saveProject,
   updateDocumentInsights
 } from "../storage.mjs";
+import { dedupeAnalysisSources } from "../../src/lib/analysis-sources.mjs";
+import { dedupeProjectDocuments } from "./document-dedupe.mjs";
 
 function sourceFromParsedPreview(filename, storedSource = {}, parseReport = {}) {
   const pages = [];
@@ -52,7 +54,7 @@ export async function resummarizeProject(projectId, userId, onProgress = () => {
   const mapOnly = Boolean(options.mapOnly);
   const project = await getProject(projectId, userId);
   if (!project) throw new Error("学习项目不存在");
-  const documents = await listDocumentsForProject(projectId, userId);
+  const documents = await dedupeProjectDocuments(projectId, userId);
   if (!documents.length) {
     const cleared = {
       ...project,
@@ -227,7 +229,7 @@ export async function resummarizeProject(projectId, userId, onProgress = () => {
       ...demo,
       ...result,
       documentSummaries,
-      sources: enrichedSources,
+      sources: dedupeAnalysisSources(enrichedSources),
       modules: result.modules || demo.modules || [],
       questions: normalizeQuestions(result.questions, { ...demo, ...result, sources: enrichedSources }),
       needsResummarize: false,

@@ -20,6 +20,7 @@ import {
   saveProject
 } from "../storage.mjs";
 import { completeDocumentDelete } from "../services/document-delete.mjs";
+import { syncProjectSourcesFromDocuments } from "../services/document-dedupe.mjs";
 import { enqueueTaskLater } from "../task-queue.mjs";
 
 const router = Router();
@@ -155,6 +156,21 @@ router.delete("/api/projects/:projectId/chapters/:chapterId", async (req, res) =
     res.status(204).end();
   } catch (error) {
     res.status(400).json({ error: error.message || "删除章节失败" });
+  }
+});
+
+router.post("/api/projects/:projectId/sync-sources", async (req, res) => {
+  try {
+    const project = await syncProjectSourcesFromDocuments(req.params.projectId, req.userId);
+    if (!project) return res.status(404).json({ error: "学习项目不存在" });
+    res.json({
+      project: {
+        ...projectForPersistence(project),
+        documentCount: (await listDocumentsForProject(project.id, req.userId)).length
+      }
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "同步资料列表失败" });
   }
 });
 

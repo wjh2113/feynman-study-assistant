@@ -39,6 +39,10 @@ export function resummarizeProject(projectId) {
   return apiFetch(`/api/projects/${encodeURIComponent(projectId)}/resummarize`, { method: "POST" });
 }
 
+export function syncProjectSources(projectId) {
+  return apiFetch(`/api/projects/${encodeURIComponent(projectId)}/sync-sources`, { method: "POST" });
+}
+
 export function listChapters(projectId) {
   return apiFetch(`/api/projects/${encodeURIComponent(projectId)}/chapters`);
 }

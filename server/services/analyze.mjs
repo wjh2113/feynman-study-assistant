@@ -22,6 +22,7 @@ import {
 } from "../storage.mjs";
 import { deepseek } from "./llm.mjs";
 import { getUserPreferences } from "../user-preferences.mjs";
+import { dedupeProjectDocuments } from "./document-dedupe.mjs";
 
 const INGEST_CORPUS_BUDGET = Number(process.env.INGESTION_CORPUS_CHARS || 48_000);
 const INGEST_LLM_TIMEOUT_MS = Number(process.env.INGESTION_GENERATION_TIMEOUT_MS || 300_000);
@@ -718,6 +719,7 @@ export async function analyzeFiles({
       );
     }
     if (!checkpoint.storedSources) await onCheckpoint({ storedSources });
+    await dedupeProjectDocuments(projectId, userId);
     await onProgress({ percent: 78, stage: "storage", label: "正在写入资料与索引" });
 
     const demo = demoAnalysis(title, sources);
