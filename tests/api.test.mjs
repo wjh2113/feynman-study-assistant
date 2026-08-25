@@ -886,6 +886,15 @@ test("个人偏好可保存追问轮次并影响教练结束条件", async () =>
   assert.equal(prefs.coachPassScore, 80);
   assert.equal(prefs.ocrEnabled, true);
   assert.equal(prefs.ocrMaxImages, 20);
+  assert.equal(prefs.splitAnalysisChars, 24000);
+
+  const saveSplit = await authFetch(`${baseUrl}/api/settings/preferences`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ splitAnalysisChars: 12000 })
+  });
+  assert.equal(saveSplit.status, 200);
+  assert.equal((await saveSplit.json()).splitAnalysisChars, 12000);
 
   const turn2 = await authFetch(`${baseUrl}/api/coach`, {
     method: "POST",
@@ -905,9 +914,10 @@ test("个人偏好可保存追问轮次并影响教练结束条件", async () =>
   const restore = await authFetch(`${baseUrl}/api/settings/preferences`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ coachMaxTurns: 3, ocrMaxImages: 40 })
+    body: JSON.stringify({ coachMaxTurns: 3, ocrMaxImages: 40, splitAnalysisChars: 24000 })
   });
   assert.equal(restore.status, 200);
+  assert.equal((await restore.json()).splitAnalysisChars, 24000);
 });
 
 test("关闭图片 OCR 后上传图片不再调用视觉识别", async () => {

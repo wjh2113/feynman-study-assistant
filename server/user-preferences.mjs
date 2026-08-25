@@ -5,6 +5,12 @@ const DEFAULT_OCR_MAX_IMAGES = Math.max(
   Math.min(200, Number(process.env.OCR_MAX_IMAGES || 40))
 );
 
+/** Raw source chars above this → split quality-chat (per-file then merge). */
+const DEFAULT_SPLIT_ANALYSIS_CHARS = Math.max(
+  5_000,
+  Math.min(100_000, Number(process.env.SPLIT_ANALYSIS_CHARS || 24_000))
+);
+
 export const PREFERENCE_DEFAULTS = {
   coachMaxTurns: 3,
   coachPassScore: 75,
@@ -12,7 +18,8 @@ export const PREFERENCE_DEFAULTS = {
   coachShowEvidence: true,
   coachBlindspotThreshold: 60,
   ocrEnabled: true,
-  ocrMaxImages: DEFAULT_OCR_MAX_IMAGES
+  ocrMaxImages: DEFAULT_OCR_MAX_IMAGES,
+  splitAnalysisChars: DEFAULT_SPLIT_ANALYSIS_CHARS
 };
 
 function clampInt(value, min, max, fallback) {
@@ -37,7 +44,13 @@ export function normalizePreferences(raw = {}) {
       PREFERENCE_DEFAULTS.coachBlindspotThreshold
     ),
     ocrEnabled: raw.ocrEnabled !== false,
-    ocrMaxImages: clampInt(raw.ocrMaxImages, 1, 200, PREFERENCE_DEFAULTS.ocrMaxImages)
+    ocrMaxImages: clampInt(raw.ocrMaxImages, 1, 200, PREFERENCE_DEFAULTS.ocrMaxImages),
+    splitAnalysisChars: clampInt(
+      raw.splitAnalysisChars,
+      5_000,
+      100_000,
+      PREFERENCE_DEFAULTS.splitAnalysisChars
+    )
   };
 }
 

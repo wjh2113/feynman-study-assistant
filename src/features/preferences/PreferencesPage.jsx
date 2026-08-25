@@ -12,7 +12,8 @@ const DEFAULTS = {
   coachShowEvidence: true,
   coachBlindspotThreshold: 60,
   ocrEnabled: true,
-  ocrMaxImages: 40
+  ocrMaxImages: 40,
+  splitAnalysisChars: 24000
 };
 
 export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
@@ -178,6 +179,38 @@ export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
                     <div className="settings-provider">
                       <FileText size={20} />
                       <div>
+                        <strong>知识地图分析</strong>
+                        <span>超长资料自动拆分调用 quality-chat，再合并成地图</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="settings-fields">
+                    <label>
+                      <span>拆分分析字数阈值</span>
+                      <input
+                        type="number"
+                        min={5000}
+                        max={100000}
+                        step={1000}
+                        value={form.splitAnalysisChars}
+                        onChange={(event) => setForm((current) => ({
+                          ...current,
+                          splitAnalysisChars: Number(event.target.value)
+                        }))}
+                      />
+                      <small>
+                        默认 24000。资料原文总字数超过该值时，先按文件/分段摘要，再合并知识地图；调高更倾向单次分析，调低更早拆分。范围 5000–100000。
+                      </small>
+                    </label>
+                  </div>
+                </section>
+
+                <section className="panel settings-form">
+                  <div className="settings-head">
+                    <div className="settings-provider">
+                      <FileText size={20} />
+                      <div>
                         <strong>图片 OCR</strong>
                         <span>上传扫描 PDF、DOCX 截图或图片时是否识别文字</span>
                       </div>
@@ -234,6 +267,11 @@ export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
               <span className="section-kicker">当前账号</span>
               <h3>{user?.username || "未登录"}</h3>
               <p>学习偏好与模型配置都保存在你的账号下，切换项目不会丢失。</p>
+            </div>
+            <div className="concept-note">
+              <span className="section-kicker">拆分分析</span>
+              <h3>长文更稳</h3>
+              <p>超过阈值走「分段摘要 → 合并地图」；短文仍一次 quality-chat。入库仍是两阶段，先可检索再出地图。</p>
             </div>
             <div className="concept-note">
               <span className="section-kicker">OCR 说明</span>
