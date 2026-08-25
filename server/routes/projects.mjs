@@ -218,7 +218,7 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
       onePager: null,
       description: remainingSources.length
         ? (willQueueMap
-          ? "资料已变更，知识地图正在后台重新生成…"
+          ? "资料已变更，正在后台重嵌剩余资料并重建知识地图…"
           : "资料已变更，知识地图已清空，请重新总结剩余资料。")
         : (project.learningPlan?.summary || "上传学习资料后，AI 将生成学科知识地图。"),
       progress: remainingSources.length ? Math.min(Number(project.progress || 0), 15) : 0,
