@@ -3,16 +3,13 @@ import { PageHeading } from "../../components/PageHeading.jsx";
 import { Spinner } from "../../components/Spinner.jsx";
 import { VoiceInputButton } from "../../components/VoiceInputButton.jsx";
 import {
-  BarChart2,
   Check,
   CircleAlert,
   Clock,
-  ExternalLink,
   FileText,
   RotateCcw,
   Search,
-  Sparkles,
-  Tag
+  Sparkles
 } from "../../components/icons.jsx";
 import { askRag, getRagHistory, saveRagHistory } from "../../api/rag.js";
 
@@ -26,27 +23,58 @@ function groupHistory(items) {
   return Object.entries(groups).filter(([, list]) => list.length);
 }
 
+function shortFilename(name = "") {
+  const text = String(name || "").trim();
+  if (text.length <= 28) return text;
+  const ext = text.includes(".") ? text.slice(text.lastIndexOf(".")) : "";
+  const base = ext ? text.slice(0, -ext.length) : text;
+  return `${base.slice(0, 18)}…${base.slice(-4)}${ext}`;
+}
+
+function citationMeta(source) {
+  const bits = [];
+  if (source.page != null) bits.push(`第 ${source.page} 页`);
+  const heading = source.headingPath || source.heading;
+  if (heading) bits.push(heading);
+  return bits.join(" · ");
+}
+
+function scoreLabel(candidate) {
+  const raw = Number(candidate.fusionScore ?? candidate.rerankScore ?? 0);
+  if (!Number.isFinite(raw) || raw <= 0) return "—";
+  const pct = raw <= 1 ? Math.round(raw * 100) : Math.round(raw);
+  return `${Math.min(pct, 100)}%`;
+}
+
 export function RagAssistant({ project, navigate, showToast, refreshProject }) {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState([]);
   const [current, setCurrent] = useState(null);
   const [requestError, setRequestError] = useState("");
-  const hasSources = Number(project.documentCount || 0) > 0 || Boolean(project.analysis?.sources?.some((source) => source.downloadUrl));
+  const hasSources = Number(project.documentCount || 0) > 0
+    || Boolean(project.analysis?.sources?.some((source) => source.downloadUrl));
   const grouped = useMemo(() => groupHistory(history), [history]);
 
   useEffect(() => {
     let cancelled = false;
+    setCurrent(null);
     getRagHistory(project.id, 50)
       .then((data) => {
         if (cancelled) return;
         const records = (data.records || []).map((record) => {
           const raw = String(record.query || record.question || "").trim();
           const question = !raw || raw === "[object Object]" ? "（历史异常记录）" : raw;
-          return { ...record, question, answer: record.answer, when: record.when || "", group: record.group || "更早" };
+          return {
+            ...record,
+            question,
+            answer: record.answer,
+            when: record.when || "",
+            group: record.group || "更早"
+          };
         });
         setHistory(records);
-        setCurrent(records[0] || null);
+        // Keep empty main pane until user asks or picks history.
       })
       .catch((error) => showToast(`读取问答历史失败：${error.message}`));
     return () => { cancelled = true; };
@@ -82,7 +110,13 @@ export function RagAssistant({ project, navigate, showToast, refreshProject }) {
     }
   };
 
+  const clearCurrent = () => {
+    setCurrent(null);
+    setRequestError("");
+  };
+
   const item = current;
+  const debugCandidates = item?.debug?.candidates || [];
 
   return (
     <div className="rag-layout">
@@ -90,12 +124,9 @@ export function RagAssistant({ project, navigate, showToast, refreshProject }) {
         <PageHeading
           eyebrow="严格据资料 · 禁止扩展"
           title="资料问答"
-          description="只根据上传原文回答，并标文件名与引用。"
+          description="只根据上传原文回答，并标出引用位置。历史记录在右侧，不会自动展开。"
         />
-        <div className="rag-toggles">
-          <span className="rag-toggle on"><Check size={14} /> 仅用上传资料</span>
-          <span className="rag-toggle on"><Tag size={14} /> 显示文件名与引用</span>
-        </div>
+
         <section className="panel rag-ask-panel">
           <div className="rag-input-row">
             <div className="rag-textarea-shell">
@@ -111,97 +142,150 @@ export function RagAssistant({ project, navigate, showToast, refreshProject }) {
               <VoiceInputButton
                 className="floating"
                 disabled={!hasSources || loading}
-                onTranscript={(text) => setQuery((current) => `${current}${current ? " " : ""}${text}`.trim())}
+                onTranscript={(text) => setQuery((currentText) => `${currentText}${currentText ? " " : ""}${text}`.trim())}
               />
             </div>
-            <button className="primary-btn rag-send" type="button" onClick={() => ask()} disabled={!hasSources || loading || !query.trim()}>
-              {loading ? <Spinner /> : <Search size={16} />} {loading ? "检索中…" : "检索并回答"}
+            <button
+              className="primary-btn rag-send"
+              type="button"
+              onClick={() => ask()}
+              disabled={!hasSources || loading || !query.trim()}
+            >
+              {loading ? <Spinner /> : <Search size={16} />}
+              {loading ? "检索中…" : "检索并回答"}
             </button>
           </div>
           {requestError && <p className="rag-error">{requestError}</p>}
+          <p className="rag-ask-hint">
+            <Check size={13} /> 仅用上传资料作答
+          </p>
         </section>
 
         {item ? (
-          <>
-            <section className="panel rag-answer-panel">
-              <header className="rag-answer-head">
+          <section className="panel rag-answer-panel">
+            <header className="rag-answer-head">
+              <div>
                 <span className="rag-q-badge">问</span>
                 <h2>{item.question}</h2>
-              </header>
-              <div className="rag-answer-body">
-                <p>{item.answer || "暂无回答"}</p>
-                {item.insufficient && (
-                  <div className="rag-insufficient"><CircleAlert size={15} /> 资料中未找到足够依据，以下回答可能不完整。</div>
-                )}
               </div>
-              {!!item.sources?.length && (
-                <div className="rag-citations">
-                  {item.sources.map((source, index) => (
-                    <div className="rag-citation" key={`${source.filename}-${index}`}>
-                      <FileText size={14} />
-                      <span>
-                        《{source.filename}》
-                        {source.page != null ? ` | 第 ${source.page} 页` : ""}
-                        {source.headingPath ? ` | ${source.headingPath}` : source.heading ? ` | ${source.heading}` : ""}
-                      </span>
-                      <ExternalLink size={12} />
-                    </div>
-                  ))}
+              <button type="button" className="text-btn rag-clear-btn" onClick={clearCurrent}>
+                新提问
+              </button>
+            </header>
+
+            <div className="rag-answer-body">
+              <span className="rag-a-label">答</span>
+              <p>{item.answer || "暂无回答"}</p>
+              {item.insufficient && (
+                <div className="rag-insufficient">
+                  <CircleAlert size={15} /> 资料中未找到足够依据，以下回答可能不完整。
                 </div>
               )}
-            </section>
+            </div>
 
-            {item.debug?.candidates?.length > 0 && (
-              <section className="panel rag-debug-panel">
-                <header><BarChart2 size={16} /> 检索调试</header>
+            {!!item.sources?.length && (
+              <div className="rag-citations">
+                <h3>引用来源 · {item.sources.length}</h3>
+                <ol>
+                  {item.sources.map((source, index) => {
+                    const meta = citationMeta(source);
+                    return (
+                      <li className="rag-citation" key={`${source.filename}-${source.page}-${index}`}>
+                        <span className="rag-cite-index">{index + 1}</span>
+                        <div className="rag-cite-copy">
+                          <strong title={source.filename}>{shortFilename(source.filename)}</strong>
+                          {meta ? <span>{meta}</span> : null}
+                          {source.quote || source.content ? (
+                            <q>{String(source.quote || source.content).slice(0, 120)}</q>
+                          ) : null}
+                        </div>
+                        <FileText size={14} className="rag-cite-icon" />
+                      </li>
+                    );
+                  })}
+                </ol>
+              </div>
+            )}
+
+            {debugCandidates.length > 0 && (
+              <details className="rag-debug">
+                <summary>检索细节（{debugCandidates.length} 条候选）</summary>
                 <div className="rag-debug-list compact">
-                  {(item.debug.candidates || []).map((candidate) => {
-                    const score = Number(candidate.fusionScore ?? candidate.rerankScore ?? 0);
+                  {debugCandidates.map((candidate) => {
                     const heading = candidate.headingPath || candidate.heading || "";
                     return (
                       <article key={candidate.id}>
-                        <strong>
-                          {candidate.filename}
-                          {candidate.page != null ? ` 第 ${candidate.page} 页` : ""}
+                        <strong title={candidate.filename}>
+                          {shortFilename(candidate.filename)}
+                          {candidate.page != null ? ` · 第 ${candidate.page} 页` : ""}
                           {heading ? ` · ${heading}` : ""}
                         </strong>
-                        <em>{Math.round(score * 100)}%</em>
+                        <em>{scoreLabel(candidate)}</em>
                       </article>
                     );
                   })}
                 </div>
-              </section>
+              </details>
             )}
-          </>
+          </section>
         ) : (
           <section className="panel rag-empty-panel">
             <Sparkles size={22} />
-            <p>上传并完成资料解析后，在这里提问。回答会严格引用原文。</p>
+            <h3>{hasSources ? "提出一个具体问题" : "还没有可检索的资料"}</h3>
+            <p>
+              {hasSources
+                ? "例如「五十音怎么记」「は和が有什么区别」。回答会严格依据原文并标注引用。"
+                : "先到「学科资料」上传并完成解析，再回到这里提问。"}
+            </p>
+            {!hasSources && (
+              <button type="button" className="secondary-btn" onClick={() => navigate?.("sources")}>
+                去上传资料
+              </button>
+            )}
           </section>
         )}
       </div>
 
       <aside className="rag-history-side">
-        <header><Clock size={16} /> 问答历史</header>
+        <header>
+          <Clock size={16} />
+          <span>问答历史</span>
+          {history.length > 0 && <em>{history.length}</em>}
+        </header>
+
         {grouped.map(([label, items]) => (
           <div className="rag-history-group" key={label}>
-            <span>{label}</span>
+            <span className="rag-history-label">{label}</span>
             {items.map((record) => (
               <button
                 type="button"
-                key={record.id || record.question}
-                className={current?.question === record.question ? "active" : ""}
+                key={record.id || `${record.question}-${record.when}`}
+                className={`rag-history-item ${current && (current.id === record.id || current.question === record.question) ? "active" : ""}`}
                 onClick={() => setCurrent(record)}
+                title={record.question}
               >
-                {record.question}
+                <span className="q-mark">问</span>
+                <strong>{record.question}</strong>
+                <em>{record.when || label}</em>
               </button>
             ))}
           </div>
         ))}
+
         {!history.length && <p className="rag-history-empty">还没有问答记录</p>}
+
         {!!history.length && (
-          <button className="text-btn" type="button" onClick={() => { setCurrent(history[0]); setQuery(history[0]?.question || ""); }}>
-            <RotateCcw size={14} /> 重新提问最新一条
+          <button
+            className="text-btn rag-history-replay"
+            type="button"
+            onClick={() => {
+              const latest = history[0];
+              if (!latest?.question) return;
+              setQuery(latest.question);
+              setCurrent(null);
+            }}
+          >
+            <RotateCcw size={14} /> 把最新问题填回输入框
           </button>
         )}
       </aside>
