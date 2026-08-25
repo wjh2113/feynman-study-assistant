@@ -241,13 +241,15 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
 
     let resummarize = null;
     if (willQueueMap) {
+      // Full rebuild: re-parse + re-embed remaining docs, then regenerate the map.
+      // Kept async so the delete API itself stays fast.
       const job = await enqueueTask(
         "resummarize",
-        { projectId: req.params.projectId, userId: req.userId, mapOnly: true },
+        { projectId: req.params.projectId, userId: req.userId, mapOnly: false },
         ({ projectId, userId, mapOnly }, progress) =>
           resummarizeProject(projectId, userId, progress, { mapOnly: Boolean(mapOnly) })
       );
-      resummarize = { queued: true, mapOnly: true, job };
+      resummarize = { queued: true, mapOnly: false, job };
     }
 
     res.json({

@@ -137,7 +137,7 @@ export function Sources({
       if (openSource === source.id) setOpenSource(null);
       setDeleteSourceId(null);
       if (data.resummarize?.queued) {
-        showToast(`已删除“${source.name}”，向量已清理，知识地图正在后台重建`);
+        showToast(`已删除“${source.name}”，正在后台重嵌剩余资料并重建知识地图`);
       } else if (data.resummarize?.resummarized) {
         showToast(`已删除“${source.name}”，向量分块已清理，知识地图已按剩余资料重新总结`);
       } else if (data.mapCleared && data.needsResummarize) {
@@ -305,7 +305,11 @@ export function Sources({
       {mapPending && (
         <div className="request-warning" role="status">
           <Spinner />
-          <span>资料已可检索，知识地图正在后台用 quality-chat 生成…</span>
+          <span>
+            {project.description?.includes("资料已变更")
+              ? "正在后台重嵌剩余资料并重建知识地图…"
+              : "资料已可检索，知识地图正在后台用 quality-chat 生成…"}
+          </span>
         </div>
       )}
 
@@ -369,7 +373,7 @@ export function Sources({
         open={Boolean(deleteSourceId)}
         tone="danger"
         title={`确认删除「${sources.find((item) => item.id === deleteSourceId)?.name || "这份资料"}」？`}
-        description="将删除原文件、对应向量分块与检索索引；知识地图会在后台按剩余资料重建。此操作无法撤销。"
+        description="将删除原文件与对应向量；剩余资料会在后台重新分块嵌入，并重建知识地图。此操作无法撤销。"
         confirmLabel={deletingSourceId ? "正在删除…" : "确认删除"}
         cancelLabel="取消"
         onCancel={() => {
