@@ -2,7 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import { randomUUID } from "node:crypto";
 import { logError } from "../observability.mjs";
-import { enqueueTask, getTask } from "../task-queue.mjs";
+import { enqueueTask, enqueueTaskLater, getTask } from "../task-queue.mjs";
 import {
   createIngestionJob,
   findActiveIngestionJob,
@@ -11,6 +11,7 @@ import {
   listIngestionJobs,
   persistOriginalFile,
   projectBelongsToUser,
+  saveProject,
   updateIngestionJob
 } from "../storage.mjs";
 import { rateLimit } from "../middleware/security.mjs";
@@ -63,12 +64,29 @@ router.post("/api/projects/:projectId/resummarize", async (req, res) => {
       return res.status(404).json({ error: "学习项目不存在" });
     }
     if (req.query.background === "true") {
-      const job = await enqueueTask(
+      const project = await getProject(req.params.projectId, req.userId);
+      if (!project) return res.status(404).json({ error: "学习项目不存在" });
+      const status = project.analysis?.contentAnalysisStatus;
+      if (status === "pending" || status === "running") {
+        return res.status(202).json({ queued: true, projectId: req.params.projectId, alreadyRunning: true });
+      }
+      await saveProject({
+        ...project,
+        userId: req.userId,
+        description: "正在后台重新总结知识地图…",
+        analysis: {
+          ...(project.analysis || {}),
+          contentAnalysisStatus: "running",
+          contentAnalysisError: null,
+          needsResummarize: false
+        }
+      });
+      enqueueTaskLater(
         "resummarize",
         { projectId: req.params.projectId, userId: req.userId },
         ({ projectId, userId }, progress) => resummarizeProject(projectId, userId, progress)
       );
-      return res.status(202).json({ job });
+      return res.status(202).json({ queued: true, projectId: req.params.projectId });
     }
     res.json(await resummarizeProject(req.params.projectId, req.userId));
   } catch (error) {

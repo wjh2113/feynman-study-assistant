@@ -20,7 +20,7 @@ import { outlineForSource } from "../../lib/documentOutline.js";
 import { dedupeAnalysisSources } from "../../lib/analysis-sources.mjs";
 import { resolveMapAvailability } from "../../lib/map-availability.js";
 import { analyzeBackground } from "../../api/ingest.js";
-import { deleteDocument, getProject, reindexProject, resummarizeProject, syncProjectSources } from "../../api/projects.js";
+import { deleteDocument, getProject, reindexProject, resummarizeProjectBackground, syncProjectSources } from "../../api/projects.js";
 import { FileTypeIcon } from "./FileTypeIcon.jsx";
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -80,6 +80,7 @@ export function Sources({
   const [resummarizing, setResummarizing] = useState(false);
   const fileInput = useRef();
   const prevSourceCountRef = useRef(0);
+  const mapNotifyRef = useRef(null);
   const rawSources = project.analysis?.sources || [];
   const sources = useMemo(() => dedupeAnalysisSources(rawSources), [rawSources]);
   const mapAvailability = useMemo(() => resolveMapAvailability(project), [project]);
@@ -89,6 +90,16 @@ export function Sources({
   const mapStatus = project.analysis?.contentAnalysisStatus;
   const mapPending = mapStatus === "pending" || mapStatus === "running";
   const mapFailed = mapStatus === "failed";
+  const mapBusy = mapPending || resummarizing;
+  const resummarizeLabel = mapBusy ? "正在生成知识地图…" : "重新总结知识地图";
+
+  useEffect(() => {
+    if (mapPending) setResummarizing(false);
+  }, [mapPending]);
+
+  useEffect(() => {
+    if (!mapPending) mapNotifyRef.current = null;
+  }, [mapPending]);
 
   useEffect(() => {
     if (!mapPending || !project.id) return undefined;
@@ -96,7 +107,16 @@ export function Sources({
     const poll = async () => {
       try {
         const data = await getProject(project.id);
-        if (!cancelled && data.project) updateProject(data.project);
+        if (cancelled || !data.project) return;
+        updateProject(data.project);
+        const nextStatus = data.project.analysis?.contentAnalysisStatus;
+        if (nextStatus === "ready" && mapNotifyRef.current !== "ready") {
+          mapNotifyRef.current = "ready";
+          showToast("知识地图已重新生成，可前往查看");
+        } else if (nextStatus === "failed" && mapNotifyRef.current !== "failed") {
+          mapNotifyRef.current = "failed";
+          showToast(data.project.analysis?.contentAnalysisError || "知识地图生成失败，请重试");
+        }
       } catch {
         // keep current project state
       }
@@ -107,7 +127,7 @@ export function Sources({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [mapPending, project.id, updateProject]);
+  }, [mapPending, project.id, updateProject, showToast]);
 
   useEffect(() => {
     if (!project.id || !hasDuplicateSources) return undefined;
@@ -225,14 +245,28 @@ export function Sources({
   };
 
   const resummarizeSources = async () => {
+    if (mapPending) {
+      showToast("知识地图正在后台生成，请稍候");
+      return;
+    }
+    const previousProject = project;
     setResummarizing(true);
+    updateProject({
+      ...project,
+      description: "正在后台重新总结知识地图…",
+      analysis: {
+        ...(project.analysis || {}),
+        contentAnalysisStatus: "running",
+        contentAnalysisError: null,
+        needsResummarize: false
+      }
+    });
     try {
-      const data = await resummarizeProject(project.id);
-      updateProject(data.project);
-      showToast(`已根据 ${data.documents} 份资料重新总结知识地图`);
+      await resummarizeProjectBackground(project.id);
+      showToast("已开始后台重新总结知识地图，可继续使用其他功能");
     } catch (error) {
+      updateProject(previousProject);
       showToast(error.message);
-    } finally {
       setResummarizing(false);
     }
   };
@@ -366,7 +400,9 @@ export function Sources({
           <span>
             {project.description?.includes("资料已变更")
               ? "正在后台重嵌剩余资料并重建知识地图…"
-              : "资料已可检索，知识地图正在后台用 quality-chat 生成…"}
+              : project.description?.includes("重新总结")
+                ? "正在后台重新总结知识地图…"
+                : "资料已可检索，知识地图正在后台用 quality-chat 生成…"}
           </span>
         </div>
       )}
@@ -375,8 +411,8 @@ export function Sources({
         <div className="request-warning">
           <CircleAlert size={16} />
           <span>{mapAvailability.description}</span>
-          <button className="secondary-btn" onClick={resummarizeSources} disabled={resummarizing || loading}>
-            {resummarizing ? <Spinner /> : <Sparkles size={15} />} 重新总结知识地图
+          <button className="secondary-btn" onClick={resummarizeSources} disabled={mapBusy || loading}>
+            {mapBusy ? <Spinner /> : <Sparkles size={15} />} {resummarizeLabel}
           </button>
         </div>
       )}
@@ -385,8 +421,8 @@ export function Sources({
         <div className="request-warning">
           <CircleAlert size={16} />
           <span>{project.analysis?.contentAnalysisError || "知识地图生成失败，可点击重新总结重试。"}</span>
-          <button className="secondary-btn" onClick={resummarizeSources} disabled={resummarizing || loading}>
-            {resummarizing ? <Spinner /> : <Sparkles size={15} />} 重新总结知识地图
+          <button className="secondary-btn" onClick={resummarizeSources} disabled={mapBusy || loading}>
+            {mapBusy ? <Spinner /> : <Sparkles size={15} />} {resummarizeLabel}
           </button>
         </div>
       )}
@@ -395,8 +431,8 @@ export function Sources({
         <div className="request-warning">
           <CircleAlert size={16} />
           <span>资料已变更，知识地图已清空，请重新总结剩余资料。</span>
-          <button className="secondary-btn" onClick={resummarizeSources} disabled={resummarizing || loading}>
-            {resummarizing ? <Spinner /> : <Sparkles size={15} />} 重新总结知识地图
+          <button className="secondary-btn" onClick={resummarizeSources} disabled={mapBusy || loading}>
+            {mapBusy ? <Spinner /> : <Sparkles size={15} />} {resummarizeLabel}
           </button>
         </div>
       )}
@@ -420,9 +456,9 @@ export function Sources({
           <div><span className="section-kicker">{hasPersistedSources ? "已入库" : "资料列表"}</span><h3>{sources.length} 份资料</h3></div>
           <div className="source-panel-actions">
             {hasPersistedSources && !!sources.length && (
-              <button className="secondary-btn" onClick={resummarizeSources} disabled={resummarizing || loading}>
-                {resummarizing ? <Spinner /> : <Sparkles size={14} />}
-                {resummarizing ? "正在生成知识地图…" : "重新总结知识地图"}
+              <button className="secondary-btn" onClick={resummarizeSources} disabled={mapBusy || loading}>
+                {mapBusy ? <Spinner /> : <Sparkles size={14} />}
+                {resummarizeLabel}
               </button>
             )}
             {hasPersistedSources && !!sources.length && (

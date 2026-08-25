@@ -39,6 +39,15 @@ export function resummarizeProject(projectId) {
   return apiFetch(`/api/projects/${encodeURIComponent(projectId)}/resummarize`, { method: "POST" });
 }
 
+export function resummarizeProjectBackground(projectId) {
+  return fetchJsonWithTimeout(
+    `/api/projects/${encodeURIComponent(projectId)}/resummarize?background=true`,
+    { method: "POST" },
+    15_000,
+    "提交知识地图总结"
+  );
+}
+
 export function syncProjectSources(projectId) {
   return apiFetch(`/api/projects/${encodeURIComponent(projectId)}/sync-sources`, { method: "POST" });
 }
