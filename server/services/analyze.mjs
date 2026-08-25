@@ -125,6 +125,7 @@ export function contentAnalysisMessages(title, corpus, { resummarize = false } =
  "modules": [{
    "id":"m1","title":"","description":"",
    "concepts":[{"id":"c1","title":"","explanation":"通俗解释","importance":"核心|高价值|补充","mastery":1,
+   "map":{"links":[{"to":"同地图其他概念id","label":"前置|递进|相关|拓展"}]},
    "sourceRefs":[{"file":"必须是原文件名","page":1,"quote":"短原文证据"}]}]
  }],
  "tacitKnowledge":[{"title":"","type":"实战经验|案例|踩坑|反直觉观点","detail":"",
@@ -134,6 +135,7 @@ export function contentAnalysisMessages(title, corpus, { resummarize = false } =
  "questions":[{"id":"q1","question":"基于资料、能检验真实理解的完整问题","conceptId":"c1","concept":"对应概念","why":"考察意图",
    "sourceRefs":[{"file":"原文件名","page":1,"quote":"出题依据"}]}]
 }
+概念 map.links：尽量为每个概念产出 0-2 条指向其他概念 id 的连线（前置/递进/相关/拓展），形成可渲染的知识关系图。
 ${extra}
 
 资料如下：
@@ -342,6 +344,7 @@ async function mergeSplitAnalysis(title, partSummaries, documentSummaries, userI
  "modules": [{
    "id":"m1","title":"","description":"",
    "concepts":[{"id":"c1","title":"","explanation":"通俗解释","importance":"核心|高价值|补充","mastery":1,
+   "map":{"links":[{"to":"同地图其他概念id","label":"前置|递进|相关|拓展"}]},
    "sourceRefs":[{"file":"必须是原文件名","page":1,"quote":"短原文证据"}]}]
  }],
  "tacitKnowledge":[{"title":"","type":"实战经验|案例|踩坑|反直觉观点","detail":"",
@@ -351,7 +354,7 @@ async function mergeSplitAnalysis(title, partSummaries, documentSummaries, userI
  "questions":[{"id":"q1","question":"基于资料的完整问题","conceptId":"c1","concept":"对应概念","why":"考察意图",
    "sourceRefs":[{"file":"原文件名","page":1,"quote":"出题依据"}]}]
 }
-要求：2-4 个模块；合并重复概念；documentSummaries 每个原文件一份；5 个费曼问题；保持 JSON 紧凑。
+要求：2-4 个模块；合并重复概念；documentSummaries 每个原文件一份；5 个费曼问题；概念尽量带 map.links 连线；保持 JSON 紧凑。
 
 分段摘要输入：
 ${compact}`

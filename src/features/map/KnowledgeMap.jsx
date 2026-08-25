@@ -39,25 +39,92 @@ function ImportanceDots({ level }) {
   );
 }
 
+function buildHeuristicLinks(nodes) {
+  const byModule = new Map();
+  for (const node of nodes) {
+    const key = node.moduleId || "_";
+    if (!byModule.has(key)) byModule.set(key, []);
+    byModule.get(key).push(node);
+  }
+
+  const moduleOrder = [...byModule.keys()];
+  const linkMap = new Map();
+
+  const addLink = (fromId, toId, label) => {
+    if (!fromId || !toId || fromId === toId) return;
+    const list = linkMap.get(fromId) || [];
+    if (list.some((item) => item.to === toId)) return;
+    list.push({ to: toId, label });
+    linkMap.set(fromId, list);
+  };
+
+  for (const [, siblings] of byModule) {
+    for (let index = 0; index < siblings.length - 1; index += 1) {
+      addLink(siblings[index].id, siblings[index + 1].id, "递进");
+    }
+  }
+
+  for (let index = 0; index < moduleOrder.length - 1; index += 1) {
+    const current = byModule.get(moduleOrder[index]) || [];
+    const next = byModule.get(moduleOrder[index + 1]) || [];
+    if (current.length && next.length) {
+      addLink(current[current.length - 1].id, next[0].id, "拓展");
+    }
+  }
+
+  return linkMap;
+}
+
 function flattenConcepts(modules) {
   const nodes = [];
   modules.forEach((module, moduleIndex) => {
     (module.concepts || []).forEach((concept, conceptIndex) => {
+      const status = concept.mastery >= 3
+        ? "mastered"
+        : concept.mastery === 2
+          ? "learning"
+          : concept.mastery
+            ? "weak"
+            : "locked";
+      const existingLinks = Array.isArray(concept.map?.links)
+        ? concept.map.links
+        : Array.isArray(concept.links)
+          ? concept.links
+          : [];
       nodes.push({
         ...concept,
         moduleId: module.id || `m-${moduleIndex}`,
         moduleTitle: module.title,
-        map: concept.map || {
-          x: 12 + (conceptIndex % 3) * 28,
-          y: 14 + moduleIndex * 28,
-          status: concept.mastery >= 3 ? "mastered" : concept.mastery === 2 ? "learning" : concept.mastery ? "weak" : "locked",
-          progress: `${Math.max(concept.mastery || 0, 0)}/4`,
-          links: []
+        map: {
+          x: concept.map?.x ?? (12 + (conceptIndex % 3) * 28),
+          y: concept.map?.y ?? (14 + moduleIndex * 28),
+          status: concept.map?.status || status,
+          progress: concept.map?.progress || `${Math.max(concept.mastery || 0, 0)}/4`,
+          links: existingLinks
+            .map((link) => ({
+              to: link.to || link.target || link.id,
+              label: link.label || link.relation || "相关"
+            }))
+            .filter((link) => link.to)
         }
       });
     });
   });
-  return nodes;
+
+  const idSet = new Set(nodes.map((node) => node.id).filter(Boolean));
+  const heuristic = buildHeuristicLinks(nodes);
+  return nodes.map((node) => {
+    const kept = (node.map.links || []).filter((link) => idSet.has(link.to));
+    const auto = heuristic.get(node.id) || [];
+    const merged = kept.length ? kept : auto;
+    return {
+      ...node,
+      map: {
+        ...node.map,
+        links: merged
+      }
+    };
+  });
 }
 
 function ConceptDetail({ selected, navigate }) {

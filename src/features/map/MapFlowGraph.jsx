@@ -21,10 +21,10 @@ const nodeTypes = { mapConcept: MapConceptNode };
 
 const defaultEdgeOptions = {
   type: "smoothstep",
-  markerEnd: { type: MarkerType.ArrowClosed, color: "#94a3b8", width: 18, height: 18 },
-  style: { stroke: "#b8c5d6", strokeWidth: 1.6 },
-  labelStyle: { fill: "#64748b", fontSize: 11, fontWeight: 600 },
-  labelBgStyle: { fill: "#ffffff", fillOpacity: 0.95 },
+  markerEnd: { type: MarkerType.ArrowClosed, color: "#64748b", width: 18, height: 18 },
+  style: { stroke: "#94a3b8", strokeWidth: 2 },
+  labelStyle: { fill: "#475569", fontSize: 11, fontWeight: 600, fontFamily: "var(--sans)" },
+  labelBgStyle: { fill: "#ffffff", fillOpacity: 0.96 },
   labelBgPadding: [6, 4],
   labelBgBorderRadius: 8
 };
@@ -42,7 +42,13 @@ function buildGraphState(conceptNodes, projectId) {
 
 export function MapFlowGraph({ projectId, nodes, selectedId, onSelect }) {
   const conceptKey = useMemo(
-    () => nodes.map((node) => `${node.id}:${node.map?.status || ""}`).join("|"),
+    () =>
+      nodes
+        .map((node) => {
+          const links = (node.map?.links || []).map((link) => `${link.to}:${link.label || ""}`).join(",");
+          return `${node.id}:${node.map?.status || ""}:${links}`;
+        })
+        .join("|"),
     [nodes]
   );
 
