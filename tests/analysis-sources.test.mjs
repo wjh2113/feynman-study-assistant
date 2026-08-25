@@ -34,12 +34,18 @@ test("preferAnalysisSource favors ready sources with more chunks", () => {
 
 test("pickAnswerSources accepts strong hybrid retrieval when rerank is low", () => {
   const candidates = [
-    { id: "1", fusionScore: 0.08, keywordScore: 0.05, vectorScore: 0.3, content: "五十音图" }
+    { id: "1", fusionScore: 0.016, keywordScore: 0, vectorScore: 0.41, matchedKeywords: [], content: "五十音图" }
   ];
   const reranked = [{ ...candidates[0], rerankScore: 0.12 }];
   const picked = pickAnswerSources(candidates, reranked, 0.35);
   assert.equal(picked.insufficient, false);
   assert.ok(picked.sources.length);
+});
+
+test("normalizeRetrievalQuery maps 50音 to 五十音", async () => {
+  const { normalizeRetrievalQuery, keywordTokens } = await import("../server/chunking.mjs");
+  assert.match(normalizeRetrievalQuery("怎么快速记住50音图"), /五十音/);
+  assert.ok(keywordTokens("50音图").includes("五十"));
 });
 
 test("pickAnswerSources rejects unrelated queries", () => {

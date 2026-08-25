@@ -7,7 +7,40 @@ import { buildRerankerRequest } from "./reranker-client.mjs";
 
 export { embeddingDimensions };
 
-export const relevanceThreshold = Math.max(0, Math.min(1, Number(process.env.RAG_RELEVANCE_THRESHOLD || 0.35)));
+export const relevanceThreshold = Math.max(0, Math.min(1, Number(process.env.RAG_RELEVANCE_THRESHOLD || 0.28)));
+
+function fusionRerankScore(candidate) {
+  const vector = Number(candidate.vectorScore || 0);
+  const keyword = Number(candidate.keywordScore || 0);
+  const fusion = Number(candidate.fusionScore || 0);
+  return Math.max(vector, keyword * 1.5, Math.min(0.99, fusion * 30));
+}
+
+function hasStrongRetrievalSignal(candidate) {
+  if (!candidate) return false;
+  const vector = Number(candidate.vectorScore || 0);
+  const keyword = Number(candidate.keywordScore || 0);
+  const fusion = Number(candidate.fusionScore || 0);
+  const matched = Array.isArray(candidate.matchedKeywords) ? candidate.matchedKeywords.length : 0;
+  // fusionScore is RRF (typically ~0.01–0.03), not a 0–1 relevance score.
+  return vector >= 0.24
+    || keyword >= 0.03
+    || fusion >= 0.011
+    || matched >= 1;
+}
+
+function isClearlyIrrelevant(candidates, reranked) {
+  const top = candidates[0];
+  if (!top || !reranked.length) return false;
+  const rerankTop = Number(reranked[0]?.rerankScore || 0);
+  const matched = Array.isArray(top.matchedKeywords) ? top.matchedKeywords.length : 0;
+  const keyword = Number(top.keywordScore || 0);
+  const vector = Number(top.vectorScore || 0);
+  if (matched >= 1 || keyword >= 0.03) return false;
+  if (vector >= 0.38 && rerankTop >= 0.06) return false;
+  if (process.env.RAG_TEST_MODE === "true") return rerankTop < 0.22;
+  return rerankTop < 0.18;
+}
 
 function envEmbeddingConfig() {
   return resolveEmbeddingConfig({});
@@ -126,20 +159,17 @@ export function fallbackRankCandidates(candidates, topK = 5) {
   return [...candidates]
     .map((candidate) => ({
       ...candidate,
-      rerankScore: Math.max(Number(candidate.vectorScore || 0), Math.min(0.99, Number(candidate.fusionScore || 0) * 20))
+      rerankScore: fusionRerankScore(candidate)
     }))
     .sort((a, b) => b.rerankScore - a.rerankScore)
     .slice(0, topK);
 }
 
-function hasStrongRetrievalSignal(candidate) {
-  if (!candidate) return false;
-  return Number(candidate.fusionScore || 0) >= 0.06
-    || Number(candidate.keywordScore || 0) >= 0.14
-    || Number(candidate.vectorScore || 0) >= 0.42;
-}
-
 export function pickAnswerSources(candidates, reranked, threshold = relevanceThreshold) {
+  if (isClearlyIrrelevant(candidates, reranked)) {
+    return { sources: [], insufficient: true, warning: null };
+  }
+
   const top = reranked[0];
   if (top && top.rerankScore >= threshold) {
     return { sources: reranked, insufficient: false, warning: null };
@@ -152,6 +182,14 @@ export function pickAnswerSources(candidates, reranked, threshold = relevanceThr
       sources: fusionRanked,
       insufficient: false,
       warning: top ? "精排分数偏低，已改用混合检索排序" : null
+    };
+  }
+
+  if (top && top.rerankScore >= 0.08 && hasStrongRetrievalSignal(candidates[0])) {
+    return {
+      sources: reranked.slice(0, 5),
+      insufficient: false,
+      warning: "检索相关度偏低，以下回答可能不完整"
     };
   }
 

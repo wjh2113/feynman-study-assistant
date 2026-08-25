@@ -1,4 +1,5 @@
 import { embedTexts, embeddingStatus, pickAnswerSources, relevanceThreshold, rerankCandidates } from "../embedding.mjs";
+import { normalizeRetrievalQuery } from "../chunking.mjs";
 import { getEmbeddingConfig } from "../model-config.mjs";
 import { isLlmConfigured } from "../gateway-client.mjs";
 import { hybridSearch, recordEvent } from "../storage.mjs";
@@ -51,9 +52,10 @@ export async function answerRagQuery({ userId, projectId, query }) {
     if (!query?.trim()) return { status: 400, body: { error: "请输入问题" } };
     stage = "生成问题向量";
     const retrievalConfig = await getEmbeddingConfig(userId);
-    const [queryEmbedding] = await embedTexts([query], retrievalConfig.embedding);
+    const retrievalQuery = normalizeRetrievalQuery(query);
+    const [queryEmbedding] = await embedTexts([retrievalQuery], retrievalConfig.embedding);
     stage = "召回资料片段";
-    const candidates = await hybridSearch(projectId, userId, query, queryEmbedding, 20);
+    const candidates = await hybridSearch(projectId, userId, retrievalQuery, queryEmbedding, 20);
     if (!candidates.length) {
       return {
         body: {
