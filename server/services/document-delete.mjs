@@ -24,34 +24,68 @@ export async function completeDocumentDelete(
   },
   onProgress = () => {}
 ) {
-  onProgress(5);
-  let chunksDeleted = 0;
+  try {
+    onProgress(5);
+    let chunksDeleted = 0;
 
-  if (storedId) {
-    const removal = await deleteDocument(projectId, storedId);
-    if (removal.deleted) chunksDeleted += Number(removal.chunksDeleted || 0);
-  } else if (filename) {
-    const stored = await findProjectDocument(projectId, userId, { documentId: sourceId, filename });
-    if (stored?.id) {
-      const removal = await deleteDocument(projectId, stored.id);
+    if (storedId) {
+      const removal = await deleteDocument(projectId, storedId);
       if (removal.deleted) chunksDeleted += Number(removal.chunksDeleted || 0);
+    } else if (filename) {
+      const stored = await findProjectDocument(projectId, userId, { documentId: sourceId, filename });
+      if (stored?.id) {
+        const removal = await deleteDocument(projectId, stored.id);
+        if (removal.deleted) chunksDeleted += Number(removal.chunksDeleted || 0);
+      }
     }
-  }
 
-  chunksDeleted += await deleteChunksByFilename(projectId, sourceName || filename);
-  onProgress(35);
+    chunksDeleted += await deleteChunksByFilename(projectId, sourceName || filename);
+    onProgress(35);
 
-  const remainingDocuments = await listDocumentsForProject(projectId, userId);
-  const remainingChunks = await countDocumentChunks(projectId);
-  let resummarize = null;
+    const remainingDocuments = await listDocumentsForProject(projectId, userId);
+    const remainingChunks = await countDocumentChunks(projectId);
+    let resummarize = null;
 
-  if (remainingDocuments.length) {
-    onProgress(45);
-    const mapOnly = remainingChunks > 0;
-    resummarize = await resummarizeProject(projectId, userId, (value) => {
-      onProgress(45 + Math.round(Number(value || 0) * 0.55));
-    }, { mapOnly });
-  } else {
+    if (remainingDocuments.length) {
+      onProgress(45);
+      const mapOnly = remainingChunks > 0;
+      resummarize = await resummarizeProject(projectId, userId, (value) => {
+        onProgress(45 + Math.round(Number(value || 0) * 0.55));
+      }, { mapOnly });
+    } else {
+      const project = await getProject(projectId, userId);
+      if (project) {
+        await saveProject({
+          ...project,
+          userId,
+          analysis: {
+            ...(project.analysis || {}),
+            contentAnalysisStatus: "ready",
+            contentAnalysisError: null,
+            retrieval: {
+              ...(project.analysis?.retrieval || {}),
+              chunks: 0,
+              parents: 0
+            }
+          }
+        });
+      }
+    }
+
+    await recordEvent(userId, projectId, "document_delete_completed", {
+      sourceId,
+      filename: sourceName || filename,
+      chunksDeleted,
+      mapOnly: Boolean(resummarize?.mapOnly)
+    });
+    onProgress(100);
+
+    return {
+      chunksDeleted,
+      resummarize,
+      remainingDocuments: remainingDocuments.length
+    };
+  } catch (error) {
     const project = await getProject(projectId, userId);
     if (project) {
       await saveProject({
@@ -59,27 +93,12 @@ export async function completeDocumentDelete(
         userId,
         analysis: {
           ...(project.analysis || {}),
-          retrieval: {
-            ...(project.analysis?.retrieval || {}),
-            chunks: 0,
-            parents: 0
-          }
+          contentAnalysisStatus: "failed",
+          contentAnalysisError: error.message || "资料删除后重建知识地图失败",
+          needsResummarize: true
         }
       });
     }
+    throw error;
   }
-
-  await recordEvent(userId, projectId, "document_delete_completed", {
-    sourceId,
-    filename: sourceName || filename,
-    chunksDeleted,
-    mapOnly: Boolean(resummarize?.mapOnly)
-  });
-  onProgress(100);
-
-  return {
-    chunksDeleted,
-    resummarize,
-    remainingDocuments: remainingDocuments.length
-  };
 }

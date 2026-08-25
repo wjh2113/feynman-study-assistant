@@ -21,6 +21,28 @@ import {
   updateDocumentInsights
 } from "../storage.mjs";
 
+function sourceFromParsedPreview(filename, storedSource = {}, parseReport = {}) {
+  const pages = [];
+  for (const chunk of String(storedSource.parsedPreview || "").split(/\n\n+/).filter(Boolean)) {
+    const match = chunk.match(/^第\s*(\d+)\s*页\n([\s\S]*)$/);
+    if (match) {
+      pages.push({ page: Number(match[1]), text: match[2] });
+    } else {
+      pages.push({ page: pages.length + 1, text: chunk.trim() });
+    }
+  }
+  const source = {
+    filename,
+    type: storedSource.type || "document",
+    pages: pages.length ? pages : [{ page: 1, text: "" }],
+    parseReport: parseReport || storedSource.parseReport || {}
+  };
+  source.summary = storedSource.summary || buildSourceSummary(source);
+  source.parsedPreview = storedSource.parsedPreview;
+  source.outline = storedSource.outline || buildDocumentOutline(source);
+  return source;
+}
+
 /**
  * Rebuild subject knowledge map from remaining uploaded files.
  * Replaces modules/summary (does not merge with the previous map).
@@ -84,25 +106,31 @@ export async function resummarizeProject(projectId, userId, onProgress = () => {
 
     for (const [index, document] of documents.entries()) {
       onProgress(5 + Math.round((index / documents.length) * (mapOnly ? 35 : 50)));
-      const buffer = await getObject({ key: document.stored_name, storagePath: document.storage_path });
-      const source = await parseFile({
-        originalname: document.filename,
-        mimetype: document.mime_type,
-        size: Number(document.byte_size || buffer.length),
-        buffer
-      }, userId);
-      source.documentKey = document.id;
-      source.summary = buildSourceSummary(source);
-      source.parsedPreview = source.pages
-        .map((page) => `第 ${page.page} 页\n${page.text}`)
-        .join("\n\n")
-        .slice(0, 30000);
-      source.outline = buildDocumentOutline(source);
-      sources.push(source);
-
       const prev = prevSources.find(
         (item) => item.id === document.id || item.name === document.filename
       );
+
+      let source;
+      if (mapOnly && prev?.parsedPreview) {
+        source = sourceFromParsedPreview(document.filename, prev, prev.parseReport);
+        source.documentKey = document.id;
+      } else {
+        const buffer = await getObject({ key: document.stored_name, storagePath: document.storage_path });
+        source = await parseFile({
+          originalname: document.filename,
+          mimetype: document.mime_type,
+          size: Number(document.byte_size || buffer.length),
+          buffer
+        }, userId);
+        source.documentKey = document.id;
+        source.summary = buildSourceSummary(source);
+        source.parsedPreview = source.pages
+          .map((page) => `第 ${page.page} 页\n${page.text}`)
+          .join("\n\n")
+          .slice(0, 30000);
+        source.outline = buildDocumentOutline(source);
+      }
+      sources.push(source);
 
       if (mapOnly) {
         storedSources.push({
@@ -111,7 +139,7 @@ export async function resummarizeProject(projectId, userId, onProgress = () => {
           type: source.type,
           pages: source.pages.length,
           chunks: Number(prev?.chunks || 0),
-          size: Number(document.byte_size || buffer.length),
+          size: Number(document.byte_size || prev?.size || 0),
           status: "ready",
           chapterId: document.chapter_id || null,
           downloadUrl: `/api/documents/${document.id}/file`,

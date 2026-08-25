@@ -54,7 +54,7 @@ function gatewayError(status, detail = "") {
   }
   if (status === 503) return new Error("LLM 网关暂无可用模型路由（503），请稍后重试");
   if (status === 504 || /gateway time-?out/i.test(raw)) {
-    return new Error("LLM 网关超时（504）。知识地图生成较慢，请稍后点「重新总结」重试；若反复失败请缩短资料或调高网关 fast-chat 超时");
+    return new Error("LLM 网关超时（504）。知识地图生成较慢，请稍后点「重新总结」重试；若反复失败请缩短资料或调高网关 quality-chat 超时");
   }
   return new Error(`LLM 网关返回 ${status}${snippet ? `：${snippet}` : ""}`);
 }
