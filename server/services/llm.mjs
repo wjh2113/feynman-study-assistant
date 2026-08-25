@@ -57,7 +57,7 @@ async function completeViaGateway(messages, temperature, timeoutMs, jsonObject, 
 }
 
 /**
- * JSON chat. Gateway mode: pick capability (fast-chat for ingest, quality-chat for coach).
+ * JSON chat. Gateway mode: pick capability (fast-chat / quality-chat).
  * Direct mode: uses the user's configured text model.
  */
 export async function chatJson(

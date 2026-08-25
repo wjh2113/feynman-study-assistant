@@ -303,7 +303,7 @@ export function Sources({
       {mapPending && (
         <div className="request-warning" role="status">
           <Spinner />
-          <span>资料已可检索，知识地图正在后台生成（快模型）…</span>
+          <span>资料已可检索，知识地图正在后台用 quality-chat 生成…</span>
         </div>
       )}
 

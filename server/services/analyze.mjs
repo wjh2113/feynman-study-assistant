@@ -19,7 +19,7 @@ import {
   updateDocumentInsights,
   updateIngestionJob
 } from "../storage.mjs";
-import { fastJson } from "./llm.mjs";
+import { deepseek } from "./llm.mjs";
 
 const INGEST_CORPUS_BUDGET = Number(process.env.INGESTION_CORPUS_CHARS || 48_000);
 const INGEST_LLM_TIMEOUT_MS = Number(process.env.INGESTION_GENERATION_TIMEOUT_MS || 180_000);
@@ -141,7 +141,8 @@ ${corpus}`
 
 export async function generateContentAnalysis(title, sources, userId, { resummarize = false } = {}) {
   const corpus = corpusFrom(sources);
-  return fastJson(contentAnalysisMessages(title, corpus, { resummarize }), 0.35, userId, INGEST_LLM_TIMEOUT_MS);
+  // File / knowledge-map analysis uses quality-chat (DeepSeek Pro on gateway).
+  return deepseek(contentAnalysisMessages(title, corpus, { resummarize }), 0.35, userId, INGEST_LLM_TIMEOUT_MS);
 }
 
 export function extractSentences(text) {

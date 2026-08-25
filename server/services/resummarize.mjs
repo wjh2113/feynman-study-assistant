@@ -5,7 +5,7 @@ import { isLlmConfigured } from "../gateway-client.mjs";
 import { parseFile } from "../document-parser.mjs";
 import { buildDocumentOutline } from "../document-outline.mjs";
 import { getObject } from "../object-storage.mjs";
-import { fastJson } from "./llm.mjs";
+import { deepseek } from "./llm.mjs";
 import {
   buildSourceSummary,
   contentAnalysisMessages,
@@ -126,11 +126,11 @@ export async function resummarizeProject(projectId, userId, onProgress = () => {
   const modelConfigured = await isLlmConfigured(userId);
   let result = {};
   if (modelConfigured) {
-    result = await fastJson(
+    result = await deepseek(
       contentAnalysisMessages(project.title, corpusFrom(sources), { resummarize: true }),
       0.35,
       userId,
-      Number(process.env.INGESTION_GENERATION_TIMEOUT_MS || 90_000)
+      Number(process.env.INGESTION_GENERATION_TIMEOUT_MS || 180_000)
     );
     if (!result || typeof result !== "object") throw new Error("文本模型没有返回有效的重新总结结果");
   } else {
