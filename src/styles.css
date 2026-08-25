@@ -3484,6 +3484,20 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 }
 .rag-cite-icon { color: #94a3b8; margin-top: 4px; }
 
+.rag-query-expand {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #eef2f7;
+}
+.rag-query-expand p {
+  margin: 6px 0 0;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .rag-debug {
   margin-top: 14px;
   border-top: 1px solid #eef2f7;

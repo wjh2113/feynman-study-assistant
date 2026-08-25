@@ -207,6 +207,21 @@ export function RagAssistant({ project, navigate, showToast, refreshProject }) {
               </div>
             )}
 
+            {(item?.debug?.queryExpansion?.keywords?.length > 0 || item?.debug?.queryExpansion?.searchText) && (
+              <div className="rag-query-expand">
+                <span className="section-kicker">检索扩写</span>
+                {item.debug.queryExpansion.intent ? <p>{item.debug.queryExpansion.intent}</p> : null}
+                <p>
+                  {item.debug.queryExpansion.keywords?.length
+                    ? `关键词：${item.debug.queryExpansion.keywords.join("、")}`
+                    : null}
+                  {item.debug.queryExpansion.searchText
+                    ? `${item.debug.queryExpansion.keywords?.length ? " · " : ""}检索句：${item.debug.queryExpansion.searchText}`
+                    : null}
+                </p>
+              </div>
+            )}
+
             {debugCandidates.length > 0 && (
               <details className="rag-debug">
                 <summary>检索细节（{debugCandidates.length} 条候选）</summary>

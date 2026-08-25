@@ -1,9 +1,9 @@
 import { embedTexts, embeddingStatus, pickAnswerSources, relevanceThreshold, rerankCandidates } from "../embedding.mjs";
-import { normalizeRetrievalQuery } from "../chunking.mjs";
 import { getEmbeddingConfig } from "../model-config.mjs";
 import { isLlmConfigured } from "../gateway-client.mjs";
 import { hybridSearch, recordEvent } from "../storage.mjs";
 import { deepseek } from "./llm.mjs";
+import { expandRetrievalQuery } from "./rag-query-expand.mjs";
 
 const NO_EVIDENCE = "资料中没有找到相关内容。";
 
@@ -50,9 +50,11 @@ export async function answerRagQuery({ userId, projectId, query }) {
   try {
     if (!projectId) return { status: 400, body: { error: "缺少学习项目" } };
     if (!query?.trim()) return { status: 400, body: { error: "请输入问题" } };
+    stage = "理解检索意图";
+    const queryExpansion = await expandRetrievalQuery(query, userId);
     stage = "生成问题向量";
     const retrievalConfig = await getEmbeddingConfig(userId);
-    const retrievalQuery = normalizeRetrievalQuery(query);
+    const retrievalQuery = queryExpansion.retrievalQuery;
     const [queryEmbedding] = await embedTexts([retrievalQuery], retrievalConfig.embedding);
     stage = "召回资料片段";
     const candidates = await hybridSearch(projectId, userId, retrievalQuery, queryEmbedding, 20);
@@ -62,7 +64,7 @@ export async function answerRagQuery({ userId, projectId, query }) {
           answer: NO_EVIDENCE,
           sources: [],
           citations: [],
-          debug: { candidateCount: 0, threshold: relevanceThreshold, candidates: [] },
+          debug: { candidateCount: 0, threshold: relevanceThreshold, queryExpansion, candidates: [] },
           demo: !(await isLlmConfigured(userId))
         }
       };
@@ -85,6 +87,7 @@ export async function answerRagQuery({ userId, projectId, query }) {
     const debug = {
       candidateCount: candidates.length,
       threshold: relevanceThreshold,
+      queryExpansion,
       embedding: embeddingStatus(retrievalConfig.embedding),
       degraded,
       candidates: candidates.map((item, index) => ({
