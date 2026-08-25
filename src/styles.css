@@ -1015,7 +1015,7 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
   font-family: var(--serif);
   font-size: clamp(16px, 1.5vw, 18px);
   line-height: 1.55;
-  font-weight: 650;
+  font-weight: 600;
   color: #0f172a;
   letter-spacing: -0.01em;
 }
