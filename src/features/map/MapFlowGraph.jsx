@@ -1,13 +1,16 @@
-import React, { useCallback, useEffect, useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
+  ControlButton,
   Controls,
   MarkerType,
   ReactFlow,
   useEdgesState,
-  useNodesState
+  useNodesState,
+  useReactFlow
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { Maximize2, Minimize2 } from "../../components/icons.jsx";
 import { MapConceptNode } from "./MapConceptNode.jsx";
 import {
   buildFlowElements,
@@ -40,7 +43,76 @@ function buildGraphState(conceptNodes, projectId) {
   };
 }
 
+function MapFlowFullscreenControl({ containerRef, fullscreen, setFullscreen }) {
+  const { fitView } = useReactFlow();
+
+  useEffect(() => {
+    const sync = () => {
+      const active = document.fullscreenElement === containerRef.current;
+      setFullscreen(active);
+      if (active) {
+        window.setTimeout(() => fitView({ padding: 0.12, maxZoom: 1.2 }), 80);
+      }
+    };
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, [containerRef, fitView, setFullscreen]);
+
+  useEffect(() => {
+    if (!fullscreen || document.fullscreenElement) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key !== "Escape") return;
+      containerRef.current?.classList.remove("is-fullscreen");
+      setFullscreen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [containerRef, fullscreen, setFullscreen]);
+
+  const toggleFullscreen = useCallback(async () => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const nativeActive = document.fullscreenElement === container;
+    const cssActive = container.classList.contains("is-fullscreen");
+
+    if (nativeActive || cssActive) {
+      if (nativeActive) {
+        try {
+          await document.exitFullscreen();
+        } catch {
+          // ignore
+        }
+      }
+      container.classList.remove("is-fullscreen");
+      setFullscreen(false);
+      return;
+    }
+
+    try {
+      await container.requestFullscreen();
+    } catch {
+      container.classList.add("is-fullscreen");
+      setFullscreen(true);
+      window.setTimeout(() => fitView({ padding: 0.12, maxZoom: 1.2 }), 80);
+    }
+  }, [containerRef, fitView, setFullscreen]);
+
+  return (
+    <ControlButton
+      className="react-flow__controls-fullscreen"
+      onClick={toggleFullscreen}
+      title={fullscreen ? "退出全屏" : "全屏展示"}
+      aria-label={fullscreen ? "退出全屏" : "全屏展示"}
+    >
+      {fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+    </ControlButton>
+  );
+}
+
 export function MapFlowGraph({ projectId, nodes, selectedId, onSelect }) {
+  const wrapRef = useRef(null);
+  const [fullscreen, setFullscreen] = useState(false);
   const conceptKey = useMemo(
     () =>
       nodes
@@ -85,7 +157,11 @@ export function MapFlowGraph({ projectId, nodes, selectedId, onSelect }) {
   }, [onSelect]);
 
   return (
-    <section className="map-flow-wrap">
+    <section
+      ref={wrapRef}
+      className={`map-flow-wrap${fullscreen ? " is-fullscreen" : ""}`}
+      aria-label="知识关系图"
+    >
       <ReactFlow
         nodes={flowNodes}
         edges={flowEdges}
@@ -104,7 +180,13 @@ export function MapFlowGraph({ projectId, nodes, selectedId, onSelect }) {
         proOptions={{ hideAttribution: true }}
       >
         <Background gap={22} size={1} color="#dbe4ee" />
-        <Controls showInteractive={false} className="map-flow-controls" />
+        <Controls showInteractive={false} className="map-flow-controls">
+          <MapFlowFullscreenControl
+            containerRef={wrapRef}
+            fullscreen={fullscreen}
+            setFullscreen={setFullscreen}
+          />
+        </Controls>
       </ReactFlow>
     </section>
   );

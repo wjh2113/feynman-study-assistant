@@ -3090,6 +3090,29 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
   overflow: hidden;
   background: #f8fafc;
 }
+.map-flow-wrap:fullscreen,
+.map-flow-wrap.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  width: 100vw !important;
+  height: 100vh !important;
+  min-height: 100vh !important;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: #f8fafc;
+}
+.map-flow-wrap:fullscreen .react-flow,
+.map-flow-wrap.is-fullscreen .react-flow {
+  width: 100%;
+  height: 100%;
+}
+.map-flow-wrap .react-flow__controls-fullscreen svg {
+  width: 16px;
+  height: 16px;
+}
 .map-flow-wrap .react-flow__node { padding: 0; border: 0; background: transparent; box-shadow: none; }
 .map-flow-wrap .react-flow__panel { box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08); border: 1px solid #e2e8f0; border-radius: 10px; }
 .map-flow-handle { width: 8px; height: 8px; background: transparent; border: 0; opacity: 0; }
