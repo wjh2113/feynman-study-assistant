@@ -220,7 +220,7 @@ export function KnowledgeMap({ project, selectedDocumentIds = [], navigate }) {
   }, [project.id, modules]);
 
   if (!modules.length) {
-    return <NoAnalysis navigate={navigate} needsResummarize={Boolean(project.analysis?.needsResummarize)} />;
+    return <NoAnalysis project={project} navigate={navigate} />;
   }
 
   const toggleModule = (id) => {

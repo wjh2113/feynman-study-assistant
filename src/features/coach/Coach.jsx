@@ -19,6 +19,7 @@ import { askCoach, diagnoseCoach } from "../../api/coach.js";
 import { createSession, listSessions, updateSession } from "../../api/projects.js";
 import { getPreferences } from "../../api/settings.js";
 import { questionsForProject } from "../../lib/questions.js";
+import { resolveMapAvailability } from "../../lib/map-availability.js";
 import { ScoreBar } from "./ScoreBar.jsx";
 
 const SCORE_LABELS = {
@@ -64,8 +65,12 @@ function resolveInitialQuestion(baseQuestions, stored) {
 }
 
 export function Coach({ project, selectedDocumentIds = [], updateProject, saveProjectPatch, refreshProject, showToast, navigate }) {
+  const mapAvailability = resolveMapAvailability(project);
   const concepts = (project.analysis?.modules || []).flatMap((module) => module.concepts || []);
-  const baseQuestions = questionsForProject(project, { documentIds: selectedDocumentIds });
+  const baseQuestions = useMemo(
+    () => questionsForProject(project, { documentIds: selectedDocumentIds }),
+    [project, selectedDocumentIds]
+  );
   const stored = useMemo(() => readStoredConcept(), []);
   const bootQuestion = useMemo(() => resolveInitialQuestion(baseQuestions, stored), [baseQuestions, stored]);
   const selectionKey = selectedDocumentIds.join(",");
@@ -177,9 +182,29 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
     sessionStorage.removeItem("zhifan-selected-concept");
   }, []);
 
+  useEffect(() => {
+    if (!baseQuestions.length) return;
+    setQuestion((current) => {
+      if (current && baseQuestions.some((item) => item.id === current.id)) return current;
+      return resolveInitialQuestion(baseQuestions, readStoredConcept()) || baseQuestions[0];
+    });
+  }, [baseQuestions, selectionKey]);
+
+  useEffect(() => {
+    if (mapAvailability.kind !== "generating" || !project.id || !refreshProject) return undefined;
+    const timer = window.setInterval(() => {
+      refreshProject(project.id, selectedDocumentIds).catch(() => {});
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [mapAvailability.kind, project.id, refreshProject, selectedDocumentIds]);
+
   if (!selectedDocumentIds.length) return <EmptyMini text="请先在上方勾选要练习的资料" />;
   if (!prefsReady) return <EmptyMini text="正在读取对练偏好…" />;
-  if (!question || !concept) return <NoAnalysis navigate={navigate} />;
+  if (mapAvailability.kind !== "ready") return <NoAnalysis project={project} navigate={navigate} />;
+  if (!baseQuestions.length) {
+    return <EmptyMini text="当前所选资料暂无可练问题，请换选资料或在「学习资料」重新总结知识地图。" />;
+  }
+  if (!question || !concept) return <EmptyMini text="正在准备练习问题…" />;
 
   const syncSessionCache = (sessionPatch) => {
     if (!sessionPatch?.id) return;
