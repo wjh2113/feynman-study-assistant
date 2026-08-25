@@ -20,7 +20,7 @@ import {
   updateDocumentInsights,
   updateIngestionJob
 } from "../storage.mjs";
-import { deepseek } from "./llm.mjs";
+import { fastJson } from "./llm.mjs";
 import { getUserPreferences } from "../user-preferences.mjs";
 
 const INGEST_CORPUS_BUDGET = Number(process.env.INGESTION_CORPUS_CHARS || 48_000);
@@ -213,7 +213,7 @@ async function summarizeAnalysisPart(title, part, userId) {
   const label = part.partIndex
     ? `${part.filename}（分段 ${part.partIndex}）`
     : part.filename;
-  const result = await deepseek(
+  const result = await fastJson(
     [
       {
         role: "system",
@@ -328,7 +328,7 @@ async function mergeSplitAnalysis(title, partSummaries, documentSummaries, userI
   const intro = resummarize
     ? `请根据已分段摘要，重新汇总学习项目《${title}》（只依据这些摘要，不要引用已删除资料）。`
     : `请根据已分段摘要，汇总学习项目《${title}》的知识地图。`;
-  const result = await deepseek(
+  const result = await fastJson(
     [
       {
         role: "system",
@@ -377,7 +377,7 @@ ${compact}`
 export async function generateSplitContentAnalysis(title, sources, userId, { resummarize = false } = {}) {
   const parts = buildAnalysisParts(sources, SPLIT_PART_BUDGET);
   if (!parts.length) {
-    return deepseek(contentAnalysisMessages(title, corpusFrom(sources), { resummarize }), 0.35, userId, INGEST_LLM_TIMEOUT_MS);
+    return fastJson(contentAnalysisMessages(title, corpusFrom(sources), { resummarize }), 0.35, userId, INGEST_LLM_TIMEOUT_MS);
   }
   const partSummaries = await mapPool(parts, SPLIT_CONCURRENCY, (part) =>
     summarizeAnalysisPart(title, part, userId)
@@ -402,7 +402,7 @@ export async function generateContentAnalysis(title, sources, userId, { resummar
   if (rawChars > threshold) {
     return generateSplitContentAnalysis(title, sources, userId, { resummarize });
   }
-  const result = await deepseek(
+  const result = await fastJson(
     contentAnalysisMessages(title, corpusFrom(sources), { resummarize }),
     0.35,
     userId,

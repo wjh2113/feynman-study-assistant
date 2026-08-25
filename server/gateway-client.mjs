@@ -34,6 +34,13 @@ export function getGatewayPublicStatus() {
   };
 }
 
+const GATEWAY_RETRYABLE_STATUSES = new Set([502, 503, 504]);
+const GATEWAY_MAX_RETRIES = Math.max(0, Number(process.env.LLM_GATEWAY_RETRIES || 2));
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function gatewayError(status, detail = "") {
   const raw = String(detail || "");
   const isHtml = /<!DOCTYPE|<html/i.test(raw);
@@ -42,43 +49,70 @@ function gatewayError(status, detail = "") {
   if (status === 402) return new Error("LLM 网关积分不足（402），请联系管理员充值");
   if (status === 403) return new Error(`LLM 网关数据级别受限（403）${snippet ? `：${snippet}` : ""}`);
   if (status === 404) return new Error(`LLM 网关能力不存在（404）${snippet ? `：${snippet}` : ""}`);
-  if (status === 503) return new Error("LLM 网关暂无可用模型路由（503）");
+  if (status === 502) {
+    return new Error("LLM 网关暂时不可用（502），上游服务繁忙或重启中，请稍后点「重新总结」重试");
+  }
+  if (status === 503) return new Error("LLM 网关暂无可用模型路由（503），请稍后重试");
   if (status === 504 || /gateway time-?out/i.test(raw)) {
-    return new Error("LLM 网关超时（504）。知识地图生成较慢，请稍后点「重新总结」重试；若反复失败请缩短资料或调高网关 quality-chat 超时");
+    return new Error("LLM 网关超时（504）。知识地图生成较慢，请稍后点「重新总结」重试；若反复失败请缩短资料或调高网关 fast-chat 超时");
   }
   return new Error(`LLM 网关返回 ${status}${snippet ? `：${snippet}` : ""}`);
 }
 
+function isGatewayRetryableError(error) {
+  const message = String(error?.message || "");
+  return GATEWAY_RETRYABLE_STATUSES.has(Number(error?.status))
+    || /LLM 网关返回 (502|503|504)|LLM 网关暂时不可用|LLM 网关暂无可用模型路由|LLM 网关超时|fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(message);
+}
+
 async function gatewayFetch(path, { method = "POST", body, headers = {}, timeoutMs = 60_000, signal } = {}) {
   const { baseUrl, apiKey } = gatewayConfig();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const abortOnParent = () => controller.abort();
-  signal?.addEventListener?.("abort", abortOnParent);
-  try {
-    const response = await fetch(`${baseUrl}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        ...headers
-      },
-      body,
-      signal: controller.signal
-    });
-    if (!response.ok) {
-      const detail = await response.text();
-      throw gatewayError(response.status, detail);
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= GATEWAY_MAX_RETRIES; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const abortOnParent = () => controller.abort();
+    signal?.addEventListener?.("abort", abortOnParent);
+    try {
+      const response = await fetch(`${baseUrl}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          ...headers
+        },
+        body,
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const detail = await response.text();
+        const error = gatewayError(response.status, detail);
+        error.status = response.status;
+        if (GATEWAY_RETRYABLE_STATUSES.has(response.status) && attempt < GATEWAY_MAX_RETRIES) {
+          lastError = error;
+          await sleep(1000 * (attempt + 1));
+          continue;
+        }
+        throw error;
+      }
+      return response;
+    } catch (error) {
+      if (error.name === "AbortError") {
+        throw new Error(`LLM 网关请求超过 ${Math.round(timeoutMs / 1000)} 秒，已停止等待`);
+      }
+      if (attempt < GATEWAY_MAX_RETRIES && isGatewayRetryableError(error)) {
+        lastError = error;
+        await sleep(1000 * (attempt + 1));
+        continue;
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener?.("abort", abortOnParent);
     }
-    return response;
-  } catch (error) {
-    if (error.name === "AbortError") {
-      throw new Error(`LLM 网关请求超过 ${Math.round(timeoutMs / 1000)} 秒，已停止等待`);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener?.("abort", abortOnParent);
   }
+
+  throw lastError || new Error("LLM 网关请求失败");
 }
 
 export async function gatewayChat({
