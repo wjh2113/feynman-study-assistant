@@ -23,9 +23,12 @@ export function deleteProject(projectId) {
 }
 
 export function deleteDocument(projectId, documentId) {
-  return apiFetch(`/api/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(documentId)}`, {
-    method: "DELETE"
-  });
+  return fetchJsonWithTimeout(
+    `/api/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(documentId)}`,
+    { method: "DELETE" },
+    15_000,
+    "删除资料"
+  );
 }
 
 export function reindexProject(projectId) {

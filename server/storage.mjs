@@ -434,14 +434,21 @@ export async function listDocumentsForProject(projectId, userId) {
 }
 
 export async function findProjectDocument(projectId, userId, { documentId, filename } = {}) {
-  const documents = await listDocumentsForProject(projectId, userId);
+  const db = await getDatabase();
   if (documentId) {
-    const matched = documents.find((document) => document.id === documentId);
-    if (matched) return matched;
+    const byId = await db.query(
+      "SELECT * FROM documents WHERE id = $1 AND project_id = $2 AND user_id = $3 LIMIT 1",
+      [documentId, projectId, userId]
+    );
+    if (byId.rows[0]) return byId.rows[0];
   }
   const name = String(filename || "").trim();
   if (!name) return null;
-  return documents.find((document) => document.filename === name) || null;
+  const byName = await db.query(
+    "SELECT * FROM documents WHERE project_id = $1 AND user_id = $2 AND filename = $3 LIMIT 1",
+    [projectId, userId, name]
+  );
+  return byName.rows[0] || null;
 }
 
 export async function deleteChunksByFilename(projectId, filename) {

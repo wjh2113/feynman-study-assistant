@@ -23,6 +23,44 @@ import { FileTypeIcon } from "./FileTypeIcon.jsx";
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
+function projectAfterSourceDelete(project, source) {
+  const sources = project.analysis?.sources || [];
+  const remainingSources = sources.filter((item) => item.id !== source.id && item.name !== source.name);
+  const deletedName = String(source.name || "");
+  const removedIds = new Set([source.id].filter(Boolean));
+  const willQueueRebuild = remainingSources.length > 0;
+  return {
+    ...project,
+    documentCount: Math.max(0, Number(project.documentCount || sources.length) - 1),
+    description: remainingSources.length
+      ? "资料已变更，正在后台清理向量并重建知识地图…"
+      : (project.learningPlan?.summary || "上传学习资料后，AI 将生成学科知识地图。"),
+    progress: remainingSources.length ? Math.min(Number(project.progress || 0), 15) : 0,
+    analysis: {
+      ...(project.analysis || {}),
+      sources: remainingSources,
+      summary: "",
+      highValue: [],
+      modules: [],
+      tacitKnowledge: [],
+      scenarios: [],
+      questions: [],
+      documentSummaries: (project.analysis?.documentSummaries || []).filter(
+        (item) => String(item.filename || item.name || "") !== deletedName
+      ),
+      needsResummarize: remainingSources.length > 0 && !willQueueRebuild,
+      contentAnalysisStatus: willQueueRebuild ? "pending" : "ready",
+      contentAnalysisError: null
+    },
+    practiceDocumentIds: (project.practiceDocumentIds || []).filter((id) => !removedIds.has(id)),
+    blindspots: (project.blindspots || []).filter((item) => {
+      const ids = Array.isArray(item.documentIds) ? item.documentIds : [];
+      if (ids.length) return ids.every((id) => !removedIds.has(id));
+      return !String(item.source || "").startsWith(deletedName);
+    })
+  };
+}
+
 export function Sources({
   project,
   updateProject,
@@ -131,12 +169,14 @@ export function Sources({
 
   const deleteSource = async (source) => {
     setDeleteSourceId(null);
+    const previousProject = project;
+    updateProject(projectAfterSourceDelete(project, source));
+    if (openSource === source.id) setOpenSource(null);
     setDeletingSourceId(source.id);
     showToast(`正在删除「${source.name}」…`);
     try {
       const data = await deleteDocument(project.id, source.id);
       updateProject(data.project);
-      if (openSource === source.id) setOpenSource(null);
       if (data.queued || data.resummarize?.queued) {
         showToast(`已移除「${source.name}」，正在后台清理向量并重建知识地图`);
       } else if (data.mapCleared && data.needsResummarize) {
@@ -147,6 +187,7 @@ export function Sources({
         showToast(`已删除「${source.name}」`);
       }
     } catch (error) {
+      updateProject(previousProject);
       showToast(error.message);
     } finally {
       setDeletingSourceId(null);
@@ -381,7 +422,9 @@ export function Sources({
         }}
         onConfirm={() => {
           const source = sources.find((item) => item.id === deleteSourceId);
-          if (source && !deletingSourceId) deleteSource(source);
+          if (!source || deletingSourceId) return;
+          setDeleteSourceId(null);
+          deleteSource(source);
         }}
       />
     </>

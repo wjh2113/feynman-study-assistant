@@ -176,8 +176,8 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
     const deletedName = String(source.name || "");
     const removedIds = new Set([source.id, stored?.id, req.params.documentId].filter(Boolean));
     const practiceDocumentIds = (project.practiceDocumentIds || []).filter((id) => !removedIds.has(id));
-    const remainingDocuments = await listDocumentsForProject(req.params.projectId, req.userId);
-    const willQueueRebuild = Boolean(stored?.id) || remainingDocuments.length > 0;
+    const hasPersistedDocs = Number(project.documentCount || 0) > 0;
+    const willQueueRebuild = Boolean(stored?.id) || (remainingSources.length > 0 && hasPersistedDocs);
 
     const analysis = {
       ...(project.analysis || {}),
@@ -220,13 +220,6 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
     };
 
     await saveProject(nextProject);
-    await recordEvent(req.userId, req.params.projectId, "document_deleted", {
-      documentId: stored?.id || source.id,
-      filename: source.name,
-      mapCleared: true,
-      needsResummarize: analysis.needsResummarize,
-      async: true
-    });
 
     enqueueTaskLater(
       "document-delete",
@@ -241,9 +234,15 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
       (payload, progress) => completeDocumentDelete(payload, progress)
     );
 
-    const nextDocumentCount = stored
-      ? Math.max(0, remainingDocuments.length - 1)
-      : remainingDocuments.length;
+    void recordEvent(req.userId, req.params.projectId, "document_deleted", {
+      documentId: stored?.id || source.id,
+      filename: source.name,
+      mapCleared: true,
+      needsResummarize: analysis.needsResummarize,
+      async: true
+    }).catch(() => {});
+
+    const nextDocumentCount = Math.max(0, Number(project.documentCount || 0) - (stored ? 1 : 0));
 
     res.status(202).json({
       project: {
