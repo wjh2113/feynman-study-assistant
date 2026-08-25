@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { keywordTokens } from "./chunking.mjs";
 import { embeddingDimensions } from "./constants.mjs";
+import { gatewayConfig, gatewayEmbeddings, gatewayRerank, isGatewayEnabled } from "./gateway-client.mjs";
 import { resolveEmbeddingConfig, resolveRerankerConfig } from "./model-config.mjs";
 import { buildRerankerRequest } from "./reranker-client.mjs";
 
@@ -67,7 +68,9 @@ export async function embedTexts(texts, config) {
   const output = [];
   for (let index = 0; index < values.length; index += 8) {
     const batch = values.slice(index, index + 8);
-    const payload = await postJson(`${baseUrl}/embeddings`, { model, input: batch, dimensions: effectiveDimensions }, apiKey);
+    const payload = isGatewayEnabled()
+      ? await gatewayEmbeddings({ input: batch, dimensions: effectiveDimensions })
+      : await postJson(`${baseUrl}/embeddings`, { model, input: batch, dimensions: effectiveDimensions }, apiKey);
     const rows = [...(payload.data || [])].sort((a, b) => a.index - b.index);
     if (rows.length !== batch.length) throw new Error("Embedding 服务返回的向量数量不正确");
     output.push(...rows.map((row) => {
@@ -94,11 +97,22 @@ export async function rerankCandidates(query, candidates, topK = 5, config) {
       .slice(0, topK);
   }
 
+  const documents = candidates.map((item) => `${item.headingPath ? `章节：${item.headingPath}\n` : ""}${item.content}`);
+  if (isGatewayEnabled()) {
+    const payload = await gatewayRerank({ query, documents, topN: topK });
+    if (payload?.results?.length) {
+      return payload.results.slice(0, topK).map((result) => ({
+        ...candidates[result.index],
+        rerankScore: Number(result.relevance_score ?? result.score ?? 0)
+      }));
+    }
+  }
+
   const { baseUrl, apiKey, model } = config || envRerankerConfig();
   const request = buildRerankerRequest(
     { baseUrl, model },
     query,
-    candidates.map((item) => `${item.headingPath ? `章节：${item.headingPath}\n` : ""}${item.content}`),
+    documents,
     topK
   );
   const payload = await postJson(request.endpoint, request.body, apiKey);
@@ -130,6 +144,18 @@ export function embeddingStatus(config) {
       threshold: relevanceThreshold
     };
   }
+  if (isGatewayEnabled()) {
+    const { baseUrl } = gatewayConfig();
+    return {
+      provider: "gateway",
+      model: "embedding",
+      dimensions: Number(process.env.EMBEDDING_DIMENSIONS || embeddingDimensions),
+      baseUrl,
+      rerankerModel: "rerank",
+      rerankerBaseUrl: baseUrl,
+      threshold: relevanceThreshold
+    };
+  }
   const embedding = config?.embedding || envEmbeddingConfig();
   const reranker = config?.reranker || envRerankerConfig(embedding);
   return {
@@ -145,6 +171,10 @@ export function embeddingStatus(config) {
 
 export async function retrievalServiceHealth(config) {
   if (process.env.RAG_TEST_MODE === "true") return { ok: true, test: true };
+  if (isGatewayEnabled()) {
+    const { gatewayHealth } = await import("./gateway-client.mjs");
+    return gatewayHealth();
+  }
   const embedding = config?.embedding || envEmbeddingConfig();
   try {
     const response = await fetch(`${embedding.baseUrl.replace(/\/v1$/, "")}/health`, { signal: AbortSignal.timeout(3000) });

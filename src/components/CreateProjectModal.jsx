@@ -32,8 +32,7 @@ function localFallbackPlan({ title, goal, level }) {
     materialAdvice: ["优先上传能讲清原理的资料", "笔记与教材对照上传"],
     practiceAdvice: ["先解释是什么与为什么，再给失效边界", "对练时尽量关掉原文"],
     milestones: [`能讲清「${subject}」的核心问题`, "完成至少 3 次费曼对练"],
-    warnings: ["先锁高价值概念，不要追求一次覆盖全部"],
-    demo: true
+    warnings: ["先锁高价值概念，不要追求一次覆盖全部"]
   };
 }
 

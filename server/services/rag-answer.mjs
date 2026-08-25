@@ -1,5 +1,6 @@
 import { embedTexts, embeddingStatus, fallbackRankCandidates, relevanceThreshold, rerankCandidates } from "../embedding.mjs";
-import { getEmbeddingConfig, getModelConfig } from "../model-config.mjs";
+import { getEmbeddingConfig } from "../model-config.mjs";
+import { isLlmConfigured } from "../gateway-client.mjs";
 import { hybridSearch, recordEvent } from "../storage.mjs";
 import { deepseek } from "./llm.mjs";
 
@@ -60,7 +61,7 @@ export async function answerRagQuery({ userId, projectId, query }) {
           sources: [],
           citations: [],
           debug: { candidateCount: 0, threshold: relevanceThreshold, candidates: [] },
-          demo: !(await getModelConfig(userId)).apiKey
+          demo: !(await isLlmConfigured(userId))
         }
       };
     }
@@ -106,7 +107,7 @@ export async function answerRagQuery({ userId, projectId, query }) {
           debug,
           retrieval: "bge-m3-hybrid-rerank",
           insufficient: true,
-          demo: !(await getModelConfig(userId)).apiKey
+          demo: !(await isLlmConfigured(userId))
         }
       };
     }
@@ -117,7 +118,7 @@ export async function answerRagQuery({ userId, projectId, query }) {
 引用原文：${source.content}${source.parentContent && source.parentContent !== source.content ? `\n上下文：${source.parentContent}` : ""}`).join("\n\n");
 
     let answer;
-    const modelConfigured = Boolean((await getModelConfig(userId)).apiKey);
+    const modelConfigured = await isLlmConfigured(userId);
     if (modelConfigured) {
       stage = "生成资料回答";
       const result = await deepseek([

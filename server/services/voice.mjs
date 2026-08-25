@@ -1,4 +1,5 @@
-import { getEmbeddingConfig, getModelConfig, getVisionConfig } from "../model-config.mjs";
+import { gatewayTranscribe, isGatewayEnabled, isLlmConfigured } from "../gateway-client.mjs";
+import { getEmbeddingConfig, getVisionConfig } from "../model-config.mjs";
 import { deepseek } from "./llm.mjs";
 
 const DEFAULT_ASR_MODEL = process.env.QWEN_ASR_MODEL || "qwen3-asr-flash";
@@ -24,7 +25,6 @@ export function messageText(data) {
 
 async function resolveAsrConfig(userId) {
   const vision = await getVisionConfig(userId);
-  // Qwen ASR needs a DashScope-compatible key; Baidu OCR AK/SK cannot call it.
   if (vision.provider !== "baidu" && vision.apiKey) {
     return {
       baseUrl: vision.baseUrl.replace(/\/$/, ""),
@@ -100,11 +100,19 @@ async function callAsr({ baseUrl, apiKey, model }, audioDataUrl) {
   }
 }
 
+function extensionForMime(mimeType = "audio/webm") {
+  const mime = String(mimeType || "audio/webm").split(";")[0].toLowerCase();
+  if (mime.includes("wav")) return "wav";
+  if (mime.includes("mpeg") || mime.includes("mp3")) return "mp3";
+  if (mime.includes("ogg")) return "ogg";
+  if (mime.includes("mp4") || mime.includes("m4a")) return "m4a";
+  return "webm";
+}
+
 async function refineTranscript(userId, rawText, purpose = "") {
   const text = String(rawText || "").trim();
   if (!text) return "";
-  const modelConfigured = Boolean((await getModelConfig(userId)).apiKey);
-  if (!modelConfigured) return text;
+  if (!(await isLlmConfigured(userId))) return text;
 
   try {
     const result = await deepseek([
@@ -135,16 +143,31 @@ export async function transcribeAndRefineAudio({
   purpose = ""
 }) {
   if (!buffer?.length) throw new Error("没有收到有效录音");
-  const asr = await resolveAsrConfig(userId);
   const mime = String(mimeType || "audio/webm").split(";")[0] || "audio/webm";
-  const audioDataUrl = `data:${mime};base64,${Buffer.from(buffer).toString("base64")}`;
-  const raw = await callAsr(asr, audioDataUrl);
+  let raw = "";
+  let model = "speech";
+
+  if (isGatewayEnabled()) {
+    const payload = await gatewayTranscribe({
+      buffer,
+      filename: `recording.${extensionForMime(mime)}`,
+      mimeType: mime
+    });
+    raw = String(payload?.text || "").trim();
+    model = payload?.gateway?.model || "speech";
+  } else {
+    const asr = await resolveAsrConfig(userId);
+    const audioDataUrl = `data:${mime};base64,${Buffer.from(buffer).toString("base64")}`;
+    raw = await callAsr(asr, audioDataUrl);
+    model = asr.model;
+  }
+
   if (!raw) throw new Error("语音模型没有返回转写内容，请重新录制");
   const text = await refineTranscript(userId, raw, purpose);
   return {
     raw,
     text,
-    model: asr.model,
+    model,
     refined: text !== raw
   };
 }

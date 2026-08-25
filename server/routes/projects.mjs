@@ -1,6 +1,7 @@
 import { Router } from "express";
 import JSZip from "jszip";
 import { randomUUID } from "node:crypto";
+import { projectForPersistence } from "../../src/lib/progress.mjs";
 import { getObject } from "../object-storage.mjs";
 import {
   countDocumentChunks,
@@ -40,7 +41,7 @@ router.get("/api/projects", async (req, res) => {
     const projects = await listProjects(req.userId);
     res.json({
       projects: await Promise.all(projects.map(async (project) => ({
-        ...project,
+        ...projectForPersistence(project),
         documentCount: (await listDocumentsForProject(project.id, req.userId)).length
       })))
     });
@@ -53,7 +54,7 @@ router.get("/api/projects/:projectId", async (req, res) => {
   try {
     const project = await getProject(req.params.projectId, req.userId);
     if (!project) return res.status(404).json({ error: "学习项目不存在" });
-    res.json({ project: { ...project, documentCount: (await listDocumentsForProject(project.id, req.userId)).length } });
+    res.json({ project: { ...projectForPersistence(project), documentCount: (await listDocumentsForProject(project.id, req.userId)).length } });
   } catch (error) {
     res.status(500).json({ error: error.message || "读取项目失败" });
   }
@@ -61,7 +62,7 @@ router.get("/api/projects/:projectId", async (req, res) => {
 
 router.put("/api/projects/:projectId", async (req, res) => {
   try {
-    const project = { ...(req.body || {}), id: req.params.projectId, userId: req.userId };
+    const project = projectForPersistence({ ...(req.body || {}), id: req.params.projectId, userId: req.userId });
     await saveProject(project);
     await ensureDefaultChapter(req.params.projectId, req.userId);
     res.json({ project });
@@ -218,11 +219,6 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
         const ids = Array.isArray(item.documentIds) ? item.documentIds : [];
         if (ids.length) return ids.every((id) => !removedIds.has(id));
         return !String(item.source || "").startsWith(deletedName);
-      }),
-      sessions: (project.sessions || []).filter((item) => {
-        const ids = Array.isArray(item.documentIds) ? item.documentIds : [];
-        if (!ids.length) return true;
-        return ids.every((id) => !removedIds.has(id));
       })
     };
     const chunksDeleted = Number(removal.chunksDeleted || 0) + Number(extraChunks || 0);

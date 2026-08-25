@@ -78,6 +78,9 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
   const [confirmExport, setConfirmExport] = useState(false);
   const [pendingImportFile, setPendingImportFile] = useState(null);
   const importInputRef = useRef(null);
+  const [gatewayInfo, setGatewayInfo] = useState(null);
+  const [gatewayChecking, setGatewayChecking] = useState(true);
+  const gatewayMode = gatewayInfo?.enabled === true;
 
   const pickPreset = (provider, baseUrl) => {
     if (provider === "local") return "local";
@@ -145,8 +148,10 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
 
   const loadRetrievalHealth = () => {
     setRetrievalLoading(true);
+    setGatewayChecking(true);
     getHealth()
       .then((data) => {
+        setGatewayInfo(data.gateway || null);
         setRetrievalSaved((current) => ({
           ...(current || {}),
           healthEmbedding: data.embedding,
@@ -154,7 +159,10 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
         }));
       })
       .catch((error) => setRetrievalSaved({ error: error.message }))
-      .finally(() => setRetrievalLoading(false));
+      .finally(() => {
+        setRetrievalLoading(false);
+        setGatewayChecking(false);
+      });
   };
 
   useEffect(() => {
@@ -401,7 +409,9 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
     }
   };
 
-  const retrievalConfigured = retrievalSaved?.embedding?.configured || retrievalForm.provider === "local";
+  const retrievalConfigured = gatewayMode || retrievalSaved?.embedding?.configured || retrievalForm.provider === "local";
+  const gatewayCapabilities = retrievalSaved?.service?.capabilities || [];
+  const gatewayHealthy = retrievalSaved?.service?.ok === true;
 
   return (
     <>
@@ -409,11 +419,84 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
         <PageHeading
           eyebrow="应用设置 · 模型服务"
           title="模型设置"
-          description="支持 DeepSeek、Kimi、CherryIN 等 OpenAI 兼容接口；Qwen3.5-OCR 负责识别 PDF 扫描页、文档截图和图片文字。"
+          description={
+            gatewayMode
+              ? "当前由服务端 AIapiMgr 网关统一代理文本、向量、OCR 与语音能力，无需在此填写各厂商 API Key。"
+              : "支持 DeepSeek、Kimi、CherryIN 等 OpenAI 兼容接口；也可由运维在服务端配置 LLM 网关（LLM_GATEWAY_URL）。OCR 负责识别 PDF 扫描页与图片文字。"
+          }
         />
       )}
       <div className={`settings-layout ${embedded ? "settings-layout-embedded" : ""}`}>
         <div className="settings-main">
+          {gatewayMode ? (
+            <section className="panel settings-form gateway-panel">
+              <div className="settings-head">
+                <div className="settings-provider">
+                  <Sparkles size={20} />
+                  <div>
+                    <strong>AIapiMgr 网关代理</strong>
+                    <span>文本 · 向量 · OCR · 语音</span>
+                  </div>
+                </div>
+                <span className={`config-status ${gatewayHealthy ? "ready" : ""}`}>
+                  {gatewayChecking ? (
+                    <><Spinner /> 检测中</>
+                  ) : gatewayHealthy ? (
+                    <><Check size={13} /> 已连接</>
+                  ) : (
+                    <><CircleAlert size={13} /> 未连通</>
+                  )}
+                </span>
+              </div>
+              <div className="settings-fields">
+                <label>
+                  <span>网关地址</span>
+                  <input value={gatewayInfo.baseUrl || ""} readOnly aria-readonly="true" />
+                </label>
+                <label>
+                  <span>租户</span>
+                  <input value={gatewayInfo.tenantId || "（未指定）"} readOnly aria-readonly="true" />
+                </label>
+                <label>
+                  <span>数据级别 / 主备切换</span>
+                  <input
+                    value={`${gatewayInfo.dataClass || "internal"} · fallback ${gatewayInfo.fallback === false ? "关" : "开"}`}
+                    readOnly
+                    aria-readonly="true"
+                  />
+                </label>
+                <label>
+                  <span>向量维度（EMBEDDING_DIMENSIONS）</span>
+                  <input
+                    value={retrievalSaved?.healthEmbedding?.dimensions || retrievalForm.embeddingDimensions}
+                    readOnly
+                    aria-readonly="true"
+                  />
+                  <small>须与网关中 embedding 路由维度一致，默认 1024。</small>
+                </label>
+                {gatewayCapabilities.length > 0 && (
+                  <label>
+                    <span>已启用能力</span>
+                    <input value={gatewayCapabilities.map((item) => item.name).join(" · ")} readOnly aria-readonly="true" />
+                  </label>
+                )}
+              </div>
+              {!gatewayHealthy && !gatewayChecking && (
+                <div className="connection-result error">
+                  <CircleAlert size={16} />
+                  <span>{retrievalSaved?.service?.error || "无法连接网关，请确认 AIapiMgr 已启动且 LLM_GATEWAY_API_KEY 正确。"}</span>
+                </div>
+              )}
+              <div className="settings-actions">
+                <button className="secondary-btn" onClick={loadRetrievalHealth} disabled={gatewayChecking}>
+                  {gatewayChecking ? <Spinner /> : <Zap size={16} />} 重新检测
+                </button>
+              </div>
+            </section>
+          ) : null}
+
+          {!gatewayMode ? (
+          <>
           <section className="panel settings-form">
           <div className="settings-head">
             <div className="settings-provider"><Sparkles size={20} /><div><strong>{saved?.provider || "文本模型"}</strong><span>OpenAI 兼容接口</span></div></div>
@@ -431,48 +514,45 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
                     <option key={key} value={key}>{preset.name}</option>
                   ))}
                 </select>
-                <small>
-                  {form.preset === "cherryin"
-                    ? TEXT_MODEL_PRESETS.cherryin.hint
-                    : "选择服务商会自动填入 API 地址和常用模型，密钥仍需你自己填写。"}
-                </small>
+                <small>切换服务商会自动填入 API 地址与常用模型。</small>
               </label>
               <label>
                 <span>API 地址</span>
-                <input value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value, preset: pickTextPreset(event.target.value) })} placeholder="https://api.deepseek.com、https://api.moonshot.cn/v1 或 https://open.cherryin.net/v1" />
-                <small>CherryIN 请填 https://open.cherryin.net/v1；DeepSeek 官方地址通常不需要改。</small>
+                <input
+                  value={form.baseUrl}
+                  onChange={(event) => setForm({ ...form, baseUrl: event.target.value, preset: pickTextPreset(event.target.value) })}
+                  placeholder="https://api.deepseek.com 或 https://open.cherryin.net/v1"
+                />
+                <small>
+                  {form.preset === "cherryin"
+                    ? "CherryIN 固定使用 https://open.cherryin.net/v1"
+                    : form.preset === "kimi"
+                      ? "Kimi 请填 https://api.moonshot.cn/v1"
+                      : "DeepSeek 官方地址通常不需要修改"}
+                </small>
               </label>
               <label>
                 <span>模型名称</span>
                 {(TEXT_MODEL_PRESETS[form.preset]?.models || []).length ? (
-                  <select
-                    value={(TEXT_MODEL_PRESETS[form.preset].models.some((item) => item.id === form.model) ? form.model : "__custom__")}
-                    onChange={(event) => {
-                      if (event.target.value === "__custom__") {
-                        const known = (TEXT_MODEL_PRESETS[form.preset].models || []).some((item) => item.id === form.model);
-                        setForm({ ...form, model: known ? "" : form.model });
-                        return;
-                      }
-                      setForm({ ...form, model: event.target.value });
-                    }}
-                  >
+                  <select value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })}>
                     {(TEXT_MODEL_PRESETS[form.preset].models || []).map((item) => (
                       <option key={item.id} value={item.id}>{item.label}</option>
                     ))}
-                    <option value="__custom__">其他（手动填写完整模型名）</option>
+                    {!(TEXT_MODEL_PRESETS[form.preset].models || []).some((item) => item.id === form.model) && form.model ? (
+                      <option value={form.model}>{form.model}</option>
+                    ) : null}
                   </select>
-                ) : null}
-                {(!TEXT_MODEL_PRESETS[form.preset]?.models?.length || !(TEXT_MODEL_PRESETS[form.preset].models || []).some((item) => item.id === form.model)) && (
+                ) : (
                   <input
                     value={form.model}
                     onChange={(event) => setForm({ ...form, model: event.target.value })}
-                    placeholder={form.preset === "cherryin" ? "例如 anthropic/claude-sonnet-4.5" : "模型名称"}
+                    placeholder="输入完整模型名"
                   />
                 )}
                 <small>
                   {form.preset === "cherryin"
-                    ? "必须使用控制台里的完整模型 ID，例如 anthropic/claude-sonnet-4.5，不要只写 claude-sonnet-4.5。"
-                    : "默认使用 deepseek-v4-flash，响应更快；需要更强分析能力时切到 Pro。"}
+                    ? "须用完整模型 ID，例如 anthropic/claude-sonnet-4.5"
+                    : "默认 flash 更快；需要更强分析时切到 Pro"}
                 </small>
               </label>
               <label>
@@ -482,7 +562,7 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
                   autoComplete="off"
                   value={form.apiKey}
                   onChange={(event) => setForm({ ...form, apiKey: event.target.value })}
-                  placeholder={saved?.configured ? `已保存：${saved.apiKeyMasked}` : form.preset === "cherryin" ? "输入 CherryIN 令牌" : "输入 API Key"}
+                  placeholder={saved?.configured ? `已保存：${saved.apiKeyMasked}` : "输入 API Key"}
                 />
                 <small>{saved?.configured ? "留空会继续使用已保存的密钥。" : "密钥只发送到本机后端，不写入浏览器存储。"}</small>
               </label>
@@ -815,6 +895,8 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
               </button>
             </div>
           </section>
+          </>
+          ) : null}
 
           <section className="panel settings-form">
             <div className="settings-head">
@@ -862,6 +944,21 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
         </div>
 
         <aside className="settings-aside">
+          {gatewayMode ? (
+            <>
+              <div className="concept-note">
+                <span className="section-kicker">网关模式</span>
+                <h3>密钥在服务端</h3>
+                <p>租户 API Key 写在服务器 .env 的 LLM_GATEWAY_API_KEY，业务应用不直连厂商，也不在前端填写密钥。</p>
+              </div>
+              <div className="concept-note">
+                <span className="section-kicker">能力路由</span>
+                <h3>用 capability 不用模型名</h3>
+                <p>文本走 quality-chat / fast-chat，向量走 embedding，OCR 走 vision，语音走 speech；换模型由 AIapiMgr 管理台调整。</p>
+              </div>
+            </>
+          ) : (
+            <>
           <div className="concept-note">
             <span className="section-kicker">配置后会发生什么</span>
             <h3>先核对解析，再开始学习</h3>
@@ -877,6 +974,8 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
             <h3>云端模式可大幅瘦身</h3>
             <p>切换为云端 Embedding/Reranker 后，可删除 .data/models/bge-m3 和 .tools/python311，释放约 4GB 空间。</p>
           </div>
+            </>
+          )}
         </aside>
       </div>
 

@@ -1,14 +1,17 @@
 import { embedTexts, fallbackRankCandidates, rerankCandidates } from "../embedding.mjs";
-import { getEmbeddingConfig, getModelConfig } from "../model-config.mjs";
+import { getEmbeddingConfig } from "../model-config.mjs";
+import { isLlmConfigured } from "../gateway-client.mjs";
 import {
   getCoachSession,
   getProject,
   hybridSearch,
+  listCoachSessions,
   recordEvent,
   resolveChapterId,
   saveCoachSession,
   saveProject
 } from "../storage.mjs";
+import { coachSessionsToSummaries } from "../../src/lib/coachSessions.js";
 import { getUserPreferences, resolveCoachRole } from "../user-preferences.mjs";
 import { deepseek } from "./llm.mjs";
 
@@ -151,7 +154,7 @@ async function generateSessionDiagnosis({
     evidence,
     blindspot
   };
-  const modelConfigured = Boolean((await getModelConfig(userId)).apiKey);
+  const modelConfigured = await isLlmConfigured(userId);
   if (!modelConfigured) return buildFallbackDiagnosis(context);
 
   try {
@@ -266,8 +269,8 @@ async function syncPracticeStateToProject(projectId, userId, patch = {}) {
   if (!project) return null;
   const next = { ...project, userId };
   if (patch.blindspots !== undefined) next.blindspots = patch.blindspots;
-  if (patch.sessions !== undefined) next.sessions = patch.sessions;
   if (patch.onePager !== undefined) next.onePager = patch.onePager;
+  delete next.sessions;
   return saveProject(next);
 }
 
@@ -333,25 +336,10 @@ async function maybePersistPracticeArtifacts({
   const nextBlindspots = exists
     ? project.blindspots
     : [...(project.blindspots || []), blindspot];
-  const nextSessions = payload.completed
-    ? [
-        {
-          id: sessionId || `session-${Date.now()}`,
-          concept: concept?.title || "",
-          score: Math.round(
-            SCORE_KEYS.reduce((sum, key) => sum + Number(payload.evaluation?.[key] || 0), 0) / SCORE_KEYS.length
-          ),
-          at: Date.now(),
-          documentIds: Array.isArray(documentIds) ? documentIds : []
-        },
-        ...(project.sessions || [])
-      ].slice(0, 20)
-    : project.sessions || [];
 
-  if (!exists || payload.completed) {
+  if (!exists) {
     await syncPracticeStateToProject(projectId, userId, {
-      blindspots: nextBlindspots,
-      sessions: nextSessions
+      blindspots: nextBlindspots
     });
   }
 }
@@ -408,7 +396,7 @@ export async function runCoachTurn({
       normalizedDocumentIds
     );
     const evidencePayload = mapEvidence(evidence);
-    const modelConfigured = Boolean((await getModelConfig(userId)).apiKey);
+    const modelConfigured = await isLlmConfigured(userId);
 
     if (!modelConfigured) {
       const hasExample = /比如|例如|就像|好比/.test(answer);
@@ -668,7 +656,7 @@ export async function diagnoseCoachSession({
 }
 
 export async function generateVariantQuestion(project, blindspot, concept, userId) {
-  const modelConfigured = Boolean((await getModelConfig(userId)).apiKey);
+  const modelConfigured = await isLlmConfigured(userId);
   const base = {
     id: `q-variant-${Date.now()}`,
     conceptId: concept?.id || "",
@@ -708,12 +696,19 @@ export async function generateOnePager({ userId, project, chapter = null, docume
     if (!project || typeof project !== "object") {
       return { status: 400, body: { error: "缺少学科数据，请刷新页面后重试" } };
     }
+    const normalizedDocIds = Array.isArray(documentIds) ? documentIds.filter(Boolean) : [];
+    const coachSessions = project?.id && userId
+      ? await listCoachSessions(project.id, userId, {
+        documentIds: normalizedDocIds.length ? normalizedDocIds : undefined
+      })
+      : [];
+    const sessionSummaries = coachSessionsToSummaries(coachSessions);
     const practice = {
       blindspots: Array.isArray(project?.blindspots) && project.blindspots.length
         ? project.blindspots
         : (chapter?.blindspots || []),
-      sessions: Array.isArray(project?.sessions) && project.sessions.length
-        ? project.sessions
+      sessions: sessionSummaries.length
+        ? sessionSummaries
         : (chapter?.sessions || [])
     };
     const subjectTitle = project?.title || "学习主题";
@@ -784,7 +779,7 @@ export async function generateOnePager({ userId, project, chapter = null, docume
       coreArgument: project?.analysis?.summary || "通过知识骨架、主动输出和定向补漏，把资料转化为可迁移的能力。",
       sections: fallbackSections.filter((item) => item.keyPoints?.length).slice(0, 7)
     };
-    const modelConfigured = Boolean((await getModelConfig(userId)).apiKey);
+    const modelConfigured = await isLlmConfigured(userId);
     if (!modelConfigured) {
       const payload = {
         title: `${subjectTitle}${docsLabel}` || "学习一页纸",

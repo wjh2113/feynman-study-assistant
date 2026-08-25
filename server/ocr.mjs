@@ -1,4 +1,5 @@
 import { recognizeWithBaidu } from "./baidu-ocr.mjs";
+import { gatewayVisionChat, isGatewayEnabled } from "./gateway-client.mjs";
 import { getVisionConfig } from "./model-config.mjs";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -20,48 +21,53 @@ function normalizeMime(mimeType = "image/png") {
 }
 
 async function recognizeWithQwen(buffer, mimeType, label, config) {
-  const response = await fetch(`${config.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: config.model,
-      temperature: 0,
-      messages: [
+  const prompt =
+    `请对“${label}”进行忠实 OCR。提取图片中所有可读文字，保留标题、列表和表格关系。` +
+    "不要总结、不要补写看不清的内容；没有文字则返回“[无可识别文字]”。只输出识别文字。";
+  const messages = [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: prompt },
         {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text:
-                `请对“${label}”进行忠实 OCR。提取图片中所有可读文字，保留标题、列表和表格关系。` +
-                "不要总结、不要补写看不清的内容；没有文字则返回“[无可识别文字]”。只输出识别文字。"
-            },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:${mimeType};base64,${buffer.toString("base64")}`
-              }
-            }
-          ]
+          type: "image_url",
+          image_url: {
+            url: `data:${mimeType};base64,${buffer.toString("base64")}`
+          }
         }
       ]
-    }),
-    signal: AbortSignal.timeout(OCR_TIMEOUT_MS)
-  });
+    }
+  ];
 
-  if (!response.ok) {
-    const detail = await response.text();
-    return {
-      text: "",
-      status: "failed",
-      warning: `OCR 调用失败（${response.status}）：${detail.slice(0, 160)}`
-    };
+  const payload = isGatewayEnabled()
+    ? await gatewayVisionChat({ messages })
+    : await (async () => {
+      const response = await fetch(`${config.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: config.model,
+          temperature: 0,
+          messages
+        }),
+        signal: AbortSignal.timeout(OCR_TIMEOUT_MS)
+      });
+      if (!response.ok) {
+        const detail = await response.text();
+        return {
+          error: `OCR 调用失败（${response.status}）：${detail.slice(0, 160)}`
+        };
+      }
+      return response.json();
+    })();
+
+  if (payload?.error) {
+    return { text: "", status: "failed", warning: payload.error };
   }
 
-  const payload = await response.json();
   const text = normalizeOcrText(payload.choices?.[0]?.message?.content);
   return {
     text: text === "[无可识别文字]" ? "" : text,
@@ -72,9 +78,10 @@ async function recognizeWithQwen(buffer, mimeType, label, config) {
 
 export async function recognizeImage(buffer, mimeType = "image/png", label = "图片", userId) {
   const config = await getVisionConfig(userId);
-  const configured = config.provider === "baidu"
+  const gateway = isGatewayEnabled();
+  const configured = gateway || (config.provider === "baidu"
     ? Boolean(config.apiKey && config.secretKey)
-    : Boolean(config.apiKey);
+    : Boolean(config.apiKey));
   if (!configured) {
     return {
       text: "",
@@ -97,7 +104,7 @@ export async function recognizeImage(buffer, mimeType = "image/png", label = "�
 
   const mime = normalizeMime(mimeType);
   try {
-    if (config.provider === "baidu") {
+    if (config.provider === "baidu" && !gateway) {
       if (!BAIDU_MIME.has(mime)) {
         return {
           text: "",

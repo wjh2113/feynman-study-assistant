@@ -1,4 +1,4 @@
-import { getModelConfig } from "../model-config.mjs";
+import { isLlmConfigured } from "../gateway-client.mjs";
 import { deepseek } from "./llm.mjs";
 
 function demoLearningPlan({ title, goal, level }) {
@@ -108,8 +108,7 @@ export async function generateLearningPlan({ userId, title, goal, level }) {
     level: String(level || "刚刚入门").trim()
   };
   const fallback = demoLearningPlan(input);
-  const model = await getModelConfig(userId);
-  if (!model.apiKey) {
+  if (!(await isLlmConfigured(userId))) {
     return { status: 200, body: { plan: fallback, demo: true } };
   }
 

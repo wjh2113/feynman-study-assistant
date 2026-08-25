@@ -16,6 +16,12 @@ export function putProject(projectId, project) {
   });
 }
 
+export function deleteProject(projectId) {
+  return apiFetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE"
+  });
+}
+
 export function deleteDocument(projectId, documentId) {
   return apiFetch(`/api/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(documentId)}`, {
     method: "DELETE"

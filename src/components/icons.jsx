@@ -56,3 +56,34 @@ export const Trash2 = icon(<path d="M3 6h18M8 6V4h8v2M19 6l-1 15H6L5 6M10 10v7M1
 export const UploadCloud = icon(<path d="M16 16l-4-4-4 4M12 12v9" />, <path d="M20 17.5A5 5 0 0 0 18 8a7 7 0 0 0-13.5 2A4 4 0 0 0 5 18h2" />);
 export const X = icon(<path d="m6 6 12 12M18 6 6 18" />);
 export const Zap = icon(<path d="M13 2 3 14h8l-1 8 10-12h-8Z" />);
+export const Bot = icon(<path d="M12 8V4" />, <rect x="4" y="8" width="16" height="12" rx="3" />, <circle cx="9" cy="14" r="1" fill="currentColor" stroke="none" />, <circle cx="15" cy="14" r="1" fill="currentColor" stroke="none" />);
+export const User = icon(<circle cx="12" cy="8" r="3.5" />, <path d="M5 19a7 7 0 0 1 14 0" />);
+export const Lock = icon(<rect x="5" y="11" width="14" height="10" rx="2" />, <path d="M8 11V8a4 4 0 0 1 8 0v3" />);
+export const ExternalLink = icon(<path d="M14 5h5v5" />, <path d="M10 14 19 5" />, <path d="M19 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5" />);
+export const Pencil = icon(<path d="M12 20h9" />, <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />);
+export const ThumbsUp = icon(<path d="M7 10v11H4a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1Z" />, <path d="M7 10 11 3a2 2 0 0 1 2 2v4h6.2a2 2 0 0 1 2 2.3l-1.2 7A2 2 0 0 1 18 20H7" />);
+export const Maximize2 = icon(<path d="M15 3h6v6M9 21H3v-6" />, <path d="M21 3 14 10M3 21l7-7" />);
+export const Calendar = icon(<rect x="3" y="5" width="18" height="16" rx="2" />, <path d="M8 3v4M16 3v4M3 11h18" />);
+export const Tag = icon(<path d="M12 2 2 12l8 8 10-10V2Z" />, <circle cx="8.5" cy="7.5" r="1" fill="currentColor" stroke="none" />);
+export const BarChart2 = icon(<path d="M6 20V10M12 20V4M18 20v-7" />);
+export const Info = icon(<circle cx="12" cy="12" r="9" />, <path d="M12 11v6M12 8h.01" />);
+export const ZoomIn = icon(<circle cx="11" cy="11" r="7" />, <path d="m20 20-4-4M11 8v6M8 11h6" />);
+export const ZoomOut = icon(<circle cx="11" cy="11" r="7" />, <path d="m20 20-4-4M8 11h6" />);
+export const Play = icon(<path d="m8 5 12 7-12 7Z" />);
+export const Clock = icon(<circle cx="12" cy="12" r="9" />, <path d="M12 7v5l3.5 2" />);
+export const Baby = icon(<circle cx="12" cy="12" r="9" />, <path d="M9 10h.01M15 10h.01M8 15s1.5 2 4 2 4-2 4-2" />);
+export const Quote = icon(<path d="M7 11h4v8H5v-6a4 4 0 0 1 4-4Z" />, <path d="M17 11h4v8h-6v-6a4 4 0 0 1 4-4Z" />);
+export const Save = icon(<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />, <path d="M17 21v-8H7v8M7 3v5h8" />);
+export const Archive = icon(<rect x="3" y="4" width="18" height="4" rx="1" />, <path d="M5 8v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8M10 12h4" />);
+export const Filter = icon(<path d="M4 5h16l-6 8v5l-4 2v-7Z" />);
+export const ListTree = icon(
+  <path d="M8 6h13M8 12h13M8 18h13" />,
+  <path d="M3 6h.01M3 12h.01M3 18h.01" />
+);
+export const Share2 = icon(
+  <circle cx="18" cy="5" r="3" />,
+  <circle cx="6" cy="12" r="3" />,
+  <circle cx="18" cy="19" r="3" />,
+  <path d="m8.6 13.5 6.8 4M8.6 10.5l6.8-4" />
+);
+export const Eye = icon(<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />, <circle cx="12" cy="12" r="3" />);

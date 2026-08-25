@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog.jsx";
 import { CreateProjectModal } from "../components/CreateProjectModal.jsx";
 import { PracticeDocumentPicker } from "../components/PracticeDocumentPicker.jsx";
@@ -12,16 +12,18 @@ import {
   LogOut,
   Menu,
   Plus,
-  Search,
-  Sparkles,
   X
 } from "../components/icons.jsx";
+import { isDemoProject } from "../lib/demoProject.js";
+import { coachSessionsToSummaries } from "../lib/coachSessions.js";
 import { subjectNavItems, practiceNavItems } from "../lib/nav.js";
-import { recalculateMasteryAndProgress } from "../lib/progress.mjs";
+import { recalculateMasteryAndProgress, projectForPersistence } from "../lib/progress.mjs";
 import {
   getProject,
   listProjects,
-  putProject
+  listSessions,
+  putProject,
+  deleteProject
 } from "../api/projects.js";
 import { getIngestion, listIngestions, retryIngestion as retryIngestionApi } from "../api/ingest.js";
 import { useAuth } from "../features/auth/useAuth.js";
@@ -47,6 +49,17 @@ function initialDocumentIds(project) {
     if (kept.length) return kept;
   }
   return sourceIdsFromProject(project);
+}
+
+async function enrichProjectWithSessions(project, documentIds = []) {
+  if (!project?.id) return project;
+  try {
+    const data = await listSessions(project.id, documentIds.length ? { documentIds } : {});
+    const sessions = coachSessionsToSummaries(data.sessions || []);
+    return recalculateMasteryAndProgress({ ...project, sessions }, { sessions });
+  } catch {
+    return recalculateMasteryAndProgress(project);
+  }
 }
 
 export function App() {
@@ -75,7 +88,7 @@ export function App() {
   analysisTasksRef.current = analysisTasks;
 
   const project = projects.find((item) => item.id === activeProjectId) || projects[0];
-  const practiceViews = useMemo(() => new Set(["coach", "blindspots", "output"]), []);
+  const coachView = activeView === "coach";
 
   const showToast = useCallback((message) => {
     setToast(message);
@@ -110,10 +123,19 @@ export function App() {
       try {
         const data = await listProjects();
         if (cancelled) return;
-        if (data.projects?.length) {
-          setProjects(data.projects);
+        const rawProjects = data.projects || [];
+        const demoProjects = rawProjects.filter(isDemoProject);
+        if (demoProjects.length) {
+          await Promise.allSettled(demoProjects.map((item) => deleteProject(item.id)));
+        }
+        const nextProjects = rawProjects.filter((item) => !isDemoProject(item));
+        if (demoProjects.length && !cancelled) {
+          showToast("已移除旧的演示学科，请新建真实学科");
+        }
+        if (nextProjects.length) {
+          setProjects(nextProjects);
           setActiveProjectId((current) =>
-            data.projects.some((item) => item.id === current) ? current : data.projects[0].id
+            nextProjects.some((item) => item.id === current) ? current : nextProjects[0].id
           );
         } else {
           setProjects([]);
@@ -132,6 +154,19 @@ export function App() {
   useEffect(() => {
     setSelectedDocumentIdsState(initialDocumentIds(project));
   }, [project?.id]);
+
+  useEffect(() => {
+    if (!persistenceReady || !user || !activeProjectId) return undefined;
+    let cancelled = false;
+    const current = projectsRef.current.find((item) => item.id === activeProjectId);
+    if (!current) return undefined;
+    enrichProjectWithSessions(current, selectedDocumentIds).then((enriched) => {
+      if (!cancelled && enriched) {
+        setProjects((items) => items.map((item) => (item.id === activeProjectId ? enriched : item)));
+      }
+    });
+    return () => { cancelled = true; };
+  }, [persistenceReady, user, activeProjectId, selectedDocumentIds.join(",")]);
 
   useEffect(() => {
     if (!project) return;
@@ -159,7 +194,7 @@ export function App() {
           dirtyProjectIdsRef.current.delete(id);
           return;
         }
-        putProject(item.id, item)
+        putProject(item.id, projectForPersistence(item))
           .then(() => {
             dirtyProjectIdsRef.current.delete(id);
           })
@@ -175,10 +210,45 @@ export function App() {
         if (item.id !== activeProjectId) return item;
         markDirty(item.id);
         const merged = { ...item, ...patch };
-        return recalculateMasteryAndProgress(merged);
+        const sessions = merged.sessions ?? item.sessions;
+        return recalculateMasteryAndProgress({ ...merged, sessions }, { sessions });
       })
     );
   };
+
+  const saveProjectPatch = useCallback(async (patch, projectId = activeProjectId) => {
+    if (!projectId) return null;
+    const current = projectsRef.current.find((item) => item.id === projectId);
+    if (!current) return null;
+    const merged = recalculateMasteryAndProgress({ ...current, ...patch });
+    try {
+      await putProject(merged.id, projectForPersistence(merged));
+      dirtyProjectIdsRef.current.delete(merged.id);
+      const enriched = await enrichProjectWithSessions(merged, merged.practiceDocumentIds || []);
+      setProjects((items) => items.map((item) => (item.id === merged.id ? enriched : item)));
+      return enriched;
+    } catch (error) {
+      showToast(`保存失败：${error.message}`);
+      updateProject(patch);
+      return null;
+    }
+  }, [activeProjectId, showToast]);
+
+  const refreshProject = useCallback(async (projectId = activeProjectId, documentIds = selectedDocumentIds) => {
+    if (!projectId) return null;
+    try {
+      const data = await getProject(projectId);
+      if (data.project) {
+        dirtyProjectIdsRef.current.delete(projectId);
+        const enriched = await enrichProjectWithSessions(data.project, documentIds);
+        setProjects((items) => items.map((item) => (item.id === projectId ? enriched : item)));
+        return enriched;
+      }
+    } catch (error) {
+      showToast(`同步项目失败：${error.message}`);
+    }
+    return null;
+  }, [activeProjectId, selectedDocumentIds, showToast]);
 
   const setSelectedDocumentIds = (nextIds) => {
     const normalized = Array.isArray(nextIds) ? [...new Set(nextIds.filter(Boolean))] : [];
@@ -252,7 +322,7 @@ export function App() {
               } catch {
                 // keep previous project state if refresh fails
               }
-              notify(`资料解析完成：${tracked.filenames.join("、")}`);
+              notify(`资料已入库：${tracked.filenames.join("、")}，知识地图后台生成中`);
             } else {
               notify(`资料解析失败：${task.error || "请检查模型配置后重试"}`, "error", {
                 ingestionId: tracked.ingestionId,
@@ -268,8 +338,9 @@ export function App() {
             queued: "等待后台任务开始",
             ocr: "正在解析文档与识别图片",
             embedding: "正在生成 Embedding 向量",
-            content: "正在生成内容分析",
-            storage: "正在写入资料与索引"
+            storage: "正在写入资料与索引",
+            content: "正在生成知识地图",
+            completed: "资料已入库"
           };
           setAnalysisTasks((items) => items.map((item) => item.id === tracked.id
             ? {
@@ -320,7 +391,7 @@ export function App() {
       setSelectedDocumentIdsState([]);
       setActiveView("overview");
       setCreateOpen(false);
-      showToast(newProject.learningPlan?.demo ? "学科已创建（演示规划）" : "学科已创建，已生成学习规划");
+      showToast("学科已创建，已生成学习规划");
     } catch (error) {
       showToast(error.message || "创建学科失败");
     }
@@ -419,7 +490,6 @@ export function App() {
         </nav>
 
         <div className="sidebar-foot">
-          <div className="model-chip"><Sparkles size={14} /> DeepSeek V4 Pro</div>
           <div className={`profile ${activeView === "preferences" || activeView === "settings" ? "active" : ""}`}>
             <button
               type="button"
@@ -442,7 +512,7 @@ export function App() {
             <span>学科</span>
             <ChevronRight size={14} />
             <strong>{project?.title || ""}</strong>
-            {practiceViews.has(activeView) && (
+            {coachView && (
               <>
                 <ChevronRight size={14} />
                 <span>练习资料</span>
@@ -452,11 +522,10 @@ export function App() {
             )}
           </div>
           <div className="topbar-actions">
-            <button className="search-pill" onClick={() => changeView("rag")}><Search size={16} /><span>询问资料库</span><kbd>RAG</kbd></button>
             <div className="notification-shell">
               <button className="icon-btn notification-button" aria-label="任务通知" onClick={() => setNotificationsOpen((value) => !value)}>
                 <Bell size={18} />
-                {!!notifications.length && <em>{Math.min(notifications.length, 9)}</em>}
+                {(notifications.length) ? <em>{Math.min(notifications.length, 9)}</em> : null}
               </button>
               {notificationsOpen && (
                 <div className="notification-panel">
@@ -470,8 +539,8 @@ export function App() {
                 </div>
               )}
             </div>
-            <button className="icon-btn topbar-logout" onClick={() => setLogoutOpen(true)} title="退出登录" aria-label="退出登录">
-              <LogOut size={18} />
+            <button className="topbar-logout-btn" onClick={() => setLogoutOpen(true)} title="退出登录">
+              <LogOut size={16} /> 退出登录
             </button>
           </div>
         </header>
@@ -479,7 +548,7 @@ export function App() {
         <div className="page-wrap">
           {project ? (
             <>
-              {practiceViews.has(activeView) && (
+              {coachView && (
                 <PracticeDocumentPicker
                   sources={project.analysis?.sources || []}
                   selectedIds={selectedDocumentIds}
@@ -493,6 +562,8 @@ export function App() {
                   selectedDocumentIds={selectedDocumentIds}
                   navigate={changeView}
                   updateProject={updateProject}
+                  saveProjectPatch={saveProjectPatch}
+                  refreshProject={refreshProject}
                   showToast={showToast}
                 />
               )}
@@ -508,14 +579,29 @@ export function App() {
                   analysisTask={analysisTasks.find((task) => task.projectId === project.id)}
                 />
               )}
-              {activeView === "map" && <KnowledgeMap project={project} navigate={changeView} />}
-              {activeView === "rag" && <RagAssistant project={project} navigate={changeView} showToast={showToast} />}
+              {activeView === "map" && (
+                <KnowledgeMap
+                  project={project}
+                  selectedDocumentIds={selectedDocumentIds}
+                  navigate={changeView}
+                />
+              )}
+              {activeView === "rag" && (
+                <RagAssistant
+                  project={project}
+                  navigate={changeView}
+                  showToast={showToast}
+                  refreshProject={refreshProject}
+                />
+              )}
               {activeView === "coach" && (
                 <Coach
                   key={`${project.id}:${selectedDocumentIds.join(",")}`}
                   project={project}
                   selectedDocumentIds={selectedDocumentIds}
                   updateProject={updateProject}
+                  saveProjectPatch={saveProjectPatch}
+                  refreshProject={refreshProject}
                   showToast={showToast}
                   navigate={changeView}
                 />
@@ -525,6 +611,8 @@ export function App() {
                   project={project}
                   selectedDocumentIds={selectedDocumentIds}
                   updateProject={updateProject}
+                  saveProjectPatch={saveProjectPatch}
+                  refreshProject={refreshProject}
                   showToast={showToast}
                   navigate={changeView}
                 />
@@ -535,6 +623,8 @@ export function App() {
                   project={project}
                   selectedDocumentIds={selectedDocumentIds}
                   updateProject={updateProject}
+                  saveProjectPatch={saveProjectPatch}
+                  refreshProject={refreshProject}
                   showToast={showToast}
                 />
               )}

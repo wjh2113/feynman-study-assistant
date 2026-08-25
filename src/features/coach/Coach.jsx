@@ -4,14 +4,16 @@ import { EmptyMini } from "../../components/EmptyMini.jsx";
 import { NoAnalysis } from "../../components/NoAnalysis.jsx";
 import { VoiceInputButton } from "../../components/VoiceInputButton.jsx";
 import {
+  Baby,
+  Bot,
   Check,
   CircleAlert,
   FileText,
-  GraduationCap,
   Lightbulb,
   RotateCcw,
   Send,
-  Sparkles
+  Sparkles,
+  User
 } from "../../components/icons.jsx";
 import { askCoach, diagnoseCoach } from "../../api/coach.js";
 import { createSession, listSessions, updateSession } from "../../api/projects.js";
@@ -61,7 +63,7 @@ function resolveInitialQuestion(baseQuestions, stored) {
   );
 }
 
-export function Coach({ project, selectedDocumentIds = [], updateProject, showToast, navigate }) {
+export function Coach({ project, selectedDocumentIds = [], updateProject, saveProjectPatch, refreshProject, showToast, navigate }) {
   const concepts = (project.analysis?.modules || []).flatMap((module) => module.concepts || []);
   const baseQuestions = questionsForProject(project, { documentIds: selectedDocumentIds });
   const stored = useMemo(() => readStoredConcept(), []);
@@ -101,9 +103,9 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
   const [latestBlindspot, setLatestBlindspot] = useState(null);
   const [diagnosis, setDiagnosis] = useState(null);
   const [diagnosisLoading, setDiagnosisLoading] = useState(false);
-  const [messages, setMessages] = useState(() => [
-    { from: "ai", text: bootQuestion?.question || "请先上传资料，让AI根据资料生成问题。" }
-  ]);
+  const [messages, setMessages] = useState(() => (
+    [{ from: "ai", text: bootQuestion?.question || "请先上传资料，让AI根据资料生成问题。" }]
+  ));
   const [sessionId, setSessionId] = useState(null);
   const [sessionsCache, setSessionsCache] = useState(null);
 
@@ -278,29 +280,22 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
         setPrefs((current) => ({ ...current, coachMaxTurns: Number(data.maxTurns) }));
       }
       if (data.session) syncSessionCache(data.session);
+      if (sessionId && (Array.isArray(data.evidence) || data.evaluation)) {
+        const metaPatch = {
+          ...(Array.isArray(data.evidence) ? { evidence: data.evidence } : {}),
+          ...(data.evaluation ? { evaluation: data.evaluation } : {})
+        };
+        syncSessionCache({ id: sessionId, meta: metaPatch });
+        updateSession(project.id, sessionId, { meta: metaPatch }).catch(() => {});
+      }
       if (data.blindspot) {
         setLatestBlindspot(data.blindspot);
-        const exists = projectBlindspots.some((item) => item.title === data.blindspot.title);
-        if (!exists) {
-          updateProject({
-            blindspots: [
-              ...projectBlindspots,
-              {
-                id: `b-${Date.now()}`,
-                ...data.blindspot,
-                concept: concept.title,
-                source: (question.sourceRefs?.[0] || concept.sourceRefs?.[0])?.file || "相关学习资料",
-                status: "open",
-                documentIds: selectedDocumentIds
-              }
-            ]
-          });
-          showToast("发现一个新的认知盲区，已加入补漏清单");
-        }
+        showToast("发现一个新的认知盲区，已加入补漏清单");
       }
       if (data.completed) {
         showToast("本轮对练已结束，请查看学习诊断");
       }
+      await refreshProject?.(project.id);
     } catch (error) {
       setAnswer(userText);
       setMessages(messages);
@@ -347,49 +342,43 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
     const avg = Math.round(Object.values(evaluation).reduce((a, b) => a + b, 0) / 4);
     const passScore = Number(prefs.coachPassScore) || 75;
     const passed = avg >= passScore;
+    const sessionPatch = {
+      documentIds: selectedDocumentIds,
+      score: avg,
+      status: passed ? "passed" : "needs_review",
+      meta: {
+        maxTurns,
+        isVariant,
+        blindspotId,
+        blindspotTitle,
+        practiceDocumentIds: selectedDocumentIds,
+        evaluation,
+        evidence,
+        ...(finalDiagnosis ? { diagnosis: finalDiagnosis } : {})
+      }
+    };
     if (sessionId) {
       try {
-        await updateSession(project.id, sessionId, {
-          documentIds: selectedDocumentIds,
-          score: avg,
-          status: passed ? "passed" : "needs_review",
-          meta: {
-            maxTurns,
-            isVariant,
-            blindspotId,
-            blindspotTitle,
-            practiceDocumentIds: selectedDocumentIds,
-            ...(finalDiagnosis ? { diagnosis: finalDiagnosis } : {})
-          }
-        });
+        await updateSession(project.id, sessionId, sessionPatch);
       } catch (error) {
         showToast(error.message);
         return;
       }
     }
-    updateProject({
-      sessions: [
-        {
-          id: `ss-${Date.now()}`,
-          concept: concept.title,
-          question: question.question,
-          score: avg,
-          date: "刚刚",
-          status: passed ? "通过" : "需补漏",
-          isRetest: isVariant,
-          documentIds: selectedDocumentIds
-        },
-        ...(project.sessions || [])
-      ],
-      blindspots: projectBlindspots.map((item) => {
-        if (!passed) return item;
-        if (blindspotId && item.id === blindspotId) return { ...item, status: "done" };
-        if (!blindspotId && item.concept === concept.title && item.status === "review") {
-          return { ...item, status: "done" };
-        }
-        return item;
-      })
+    const nextBlindspots = projectBlindspots.map((item) => {
+      if (!passed) return item;
+      if (blindspotId && item.id === blindspotId) return { ...item, status: "done" };
+      if (!blindspotId && item.concept === concept.title && item.status === "review") {
+        return { ...item, status: "done" };
+      }
+      return item;
     });
+    if (saveProjectPatch) {
+      await saveProjectPatch({ blindspots: nextBlindspots });
+    } else {
+      updateProject({ blindspots: nextBlindspots });
+    }
+    await refreshProject?.(project.id, selectedDocumentIds);
     setCompleted(true);
     showToast(passed ? "对练已通过，诊断已保存" : "对练已保存，请根据诊断补漏后再复测");
   };
@@ -407,11 +396,8 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
   return (
     <div className="coach-page">
       <PageHeading
-        eyebrow={isVariant ? "变式复测" : "第三步 · 费曼输出"}
-        title={isVariant ? `复测 · ${blindspotTitle || "盲区"}` : "费曼对练"}
-        description={isVariant ? "用变式题检验盲区是否真的补上了。" : "用自己的话讲清楚，经得住追问才算掌握。"}
+        title={isVariant ? `复测 · ${blindspotTitle || "盲区"}` : "第三步 · 费曼输出"}
         action={<button className="primary-btn" onClick={finish}><Check size={16} /> 结束并保存</button>}
-        demo={project.analysis?.demo}
       />
 
       <div className="coach-layout">
@@ -427,7 +413,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
               <span>{completed ? `已完成 ${maxTurns} 问` : `${currentTurn} / ${maxTurns}`}</span>
             </div>
             <div className="coach-top-meta">
-              <span className={`coach-role-chip ${role}`}>{roleLabel}{roleLocked ? " · 自动" : ""}</span>
+              <span className={`coach-role-chip ${role}`}><Baby size={14} /> {roleLabel}{roleLocked ? " · 自动" : ""}</span>
               {!roleLocked && (
                 <div className="role-switch compact">
                   <button className={role === "child" ? "active" : ""} onClick={() => setRole("child")}>小白</button>
@@ -448,11 +434,10 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
           </header>
 
           <div className="coach-prompt">
-            <div className="coach-prompt-icon"><GraduationCap size={20} /></div>
-            <div>
-              <em>{isVariant ? "复测题" : "本题"} · {concept.title}</em>
+            <div className="coach-prompt-copy">
               <strong>{question.question}</strong>
             </div>
+            <span className="soft-tag concept-tag">{question.isVariant ? "变式复测" : "概念类问题"}</span>
           </div>
 
           <div className="chat-area">
@@ -464,14 +449,31 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
             )}
             {dialogue.map((message, index) => (
               <div className={`message ${message.from}`} key={`${message.from}-${index}`}>
-                {message.from === "ai" && <div className="mini-avatar"><Sparkles size={14} /></div>}
-                <div>{message.text}</div>
+                {message.from === "ai" && (
+                  <div className="message-meta">
+                    <div className="mini-avatar"><Bot size={14} /></div>
+                    <span>费曼教练</span>
+                  </div>
+                )}
+                <div className="message-bubble">
+                  <p>{message.text}</p>
+                  {message.time && <time>{message.time}</time>}
+                </div>
+                {message.from === "user" && (
+                  <div className="message-meta user">
+                    <span>你</span>
+                    <div className="mini-avatar user"><User size={14} /></div>
+                  </div>
+                )}
               </div>
             ))}
             {loading && (
               <div className="message ai thinking">
-                <div className="mini-avatar"><Sparkles size={14} /></div>
-                <div>
+                <div className="message-meta">
+                  <div className="mini-avatar"><Bot size={14} /></div>
+                  <span>费曼教练</span>
+                </div>
+                <div className="message-bubble">
                   <div className="typing"><i /><i /><i /></div>
                   <span className="thinking-label">结合资料思考中…</span>
                 </div>
@@ -575,12 +577,15 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
               onChange={(event) => setAnswer(event.target.value)}
               disabled={completed}
               onKeyDown={(event) => {
-                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submit();
+                if (event.key !== "Enter") return;
+                if (event.metaKey || event.ctrlKey) return;
+                event.preventDefault();
+                submit();
               }}
               placeholder={completed ? "本轮已结束，可点击右上角保存" : "用人话解释……"}
             />
             <div className="answer-foot">
-              <span>{completed ? "本轮不会继续追问" : "⌘/Ctrl + Enter 发送"}</span>
+              <span>{completed ? "本轮不会继续追问" : "⌘ Enter 换行，Enter 发送"}</span>
               <div className="answer-foot-actions">
                 <VoiceInputButton
                   disabled={loading || completed}
@@ -603,30 +608,23 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
         <aside className="coach-side">
           <div className="coach-panel">
             <div className="coach-panel-head">
-              <span className="section-kicker">{question.concept || concept.title}</span>
+              <h3>{question.concept || concept.title}</h3>
               {avgScore != null && <b className="coach-avg">{avgScore}</b>}
             </div>
-            <h3>{concept.title}</h3>
-            <p className="coach-panel-why">{question.why || concept.explanation}</p>
-            <button className="source-link" type="button" onClick={() => navigate?.("sources")}>
-              <FileText size={14} /> {(question.sourceRefs?.[0] || concept.sourceRefs?.[0])?.file || "查看资料"}
-            </button>
-
             <div className="coach-score-block">
-              <span className="section-kicker">实时评分</span>
               {evaluation ? (
                 <>
-                  <ScoreBar label="说人话" value={evaluation.clarity} />
-                  <ScoreBar label="逻辑闭环" value={evaluation.logic} />
-                  <ScoreBar label="举例能力" value={evaluation.example} />
-                  <ScoreBar label="边界意识" value={evaluation.boundary} />
+                  <ScoreBar label="说人话" value={evaluation.clarity} passAt={prefs.coachPassScore || 75} />
+                  <ScoreBar label="逻辑闭环" value={evaluation.logic} passAt={prefs.coachPassScore || 75} />
+                  <ScoreBar label="举例能力" value={evaluation.example} passAt={prefs.coachPassScore || 75} />
+                  <ScoreBar label="边界意识" value={evaluation.boundary} passAt={prefs.coachPassScore || 75} />
                   {evaluationNotes && (
                     <p className="coach-note-line">
                       <Lightbulb size={14} />
                       {Object.values(evaluationNotes).filter(Boolean)[0]}
                     </p>
                   )}
-                  <p className="score-note">通过线 {prefs.coachPassScore || 75} 分</p>
+                  <p className="score-note">合格线 {prefs.coachPassScore || 75} 分</p>
                 </>
               ) : (
                 <EmptyMini text="发出第一段解释后显示评分。" />
@@ -636,12 +634,19 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
 
           {prefs.coachShowEvidence !== false && evidence.length > 0 && (
             <div className="coach-panel coach-evidence">
-              <span className="section-kicker">资料依据</span>
+              <div className="coach-panel-head">
+                <span className="section-kicker">资料佐证</span>
+                <button className="text-btn" type="button">查看全部</button>
+              </div>
               <ul>
                 {evidence.slice(0, 3).map((item, index) => (
                   <li key={`${item.filename}-${item.page}-${index}`}>
-                    <strong>{item.filename || "资料"}{item.page ? ` · p.${item.page}` : ""}</strong>
+                    <strong>{item.filename || "资料"}</strong>
                     <p>{item.quote}</p>
+                    <div className="evidence-meta">
+                      <span>{item.heading || (item.page ? `p.${item.page}` : "")}</span>
+                      {item.match != null && <em>匹配度 {item.match}%</em>}
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -650,10 +655,15 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, showTo
 
           {latestBlindspot && (
             <div className="coach-panel coach-blindspot-card">
-              <span className="section-kicker">本轮盲区</span>
+              <span className="section-kicker">思维盲点</span>
               <h3>{latestBlindspot.title}</h3>
               <p>{latestBlindspot.problem}</p>
-              <p className="coach-blindspot-action"><strong>下一步</strong>{latestBlindspot.action}</p>
+              {latestBlindspot.items?.length ? (
+                <ul className="blind-bullets">{latestBlindspot.items.map((entry) => <li key={entry}>{entry}</li>)}</ul>
+              ) : (
+                <p className="coach-blindspot-action"><strong>下一步</strong>{latestBlindspot.action}</p>
+              )}
+              <button className="text-btn" type="button" onClick={() => navigate?.("blindspots")}>查看改进建议</button>
             </div>
           )}
         </aside>

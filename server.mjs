@@ -4,6 +4,7 @@ import cookieParser from "cookie-parser";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { embeddingStatus, retrievalServiceHealth } from "./server/embedding.mjs";
+import { getGatewayPublicStatus, isGatewayEnabled } from "./server/gateway-client.mjs";
 import { ensureLocalRetrievalService } from "./server/model-service.mjs";
 import { getPublicModelConfig } from "./server/model-config.mjs";
 import { mailStatus } from "./server/mailer.mjs";
@@ -41,15 +42,18 @@ app.use("/api", verifyRequestOrigin);
 app.use(authRouter);
 app.get("/api/health", async (_req, res) => {
   try {
+    const gateway = getGatewayPublicStatus();
     const modelConfig = await getPublicModelConfig();
+    const retrievalService = await retrievalServiceHealth();
     res.json({
       ok: true,
-      model: modelConfig.model,
-      configured: modelConfig.configured,
+      gateway,
+      model: gateway.enabled ? "gateway" : modelConfig.model,
+      configured: gateway.enabled || modelConfig.configured,
       runtime: runtimeConfigHints(),
       database: await databaseStatus(),
       embedding: embeddingStatus(),
-      retrievalService: await retrievalServiceHealth(),
+      retrievalService,
       storage: objectStorageStatus(),
       queue: queueStatus(),
       mail: mailStatus(),
@@ -103,9 +107,18 @@ process.on("unhandledRejection", (error) => {
 });
 app.listen(port, "0.0.0.0", () => {
   console.log(`Feynman Study API listening on http://127.0.0.1:${port}`);
-  getPublicModelConfig().then((config) =>
-    console.log(config.configured ? `DeepSeek ready: ${config.model}` : "Demo mode: DeepSeek API Key is not configured")
-  );
+  if (isGatewayEnabled()) {
+    const { baseUrl } = getGatewayPublicStatus();
+    console.log(`LLM Gateway mode: ${baseUrl}`);
+    retrievalServiceHealth().then((status) => {
+      if (status.ok) console.log(`Gateway capabilities: ${(status.capabilities || []).map((item) => item.name).join(", ") || "ready"}`);
+      else console.warn(`Gateway health check failed: ${status.error || "unknown"}`);
+    });
+  } else {
+    getPublicModelConfig().then((config) =>
+      console.log(config.configured ? `DeepSeek ready: ${config.model}` : "Demo mode: DeepSeek API Key is not configured")
+    );
+  }
   const hints = runtimeConfigHints();
   console.log(`Deploy mode: ${hints.deployMode}`);
   databaseStatus().then((status) => console.log(`Persistence ready: ${status.mode} + pgvector`));

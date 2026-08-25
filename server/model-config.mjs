@@ -1,3 +1,4 @@
+import { getGatewayPublicStatus } from "./gateway-client.mjs";
 import { getUserAppSetting, saveUserAppSetting } from "./storage.mjs";
 import { decryptSecret, encryptSecret } from "./secret-crypto.mjs";
 import { buildRerankerRequest } from "./reranker-client.mjs";
@@ -45,6 +46,17 @@ export function providerFromBaseUrl(baseUrl) {
 }
 
 export async function getPublicModelConfig(userId) {
+  const gateway = getGatewayPublicStatus();
+  if (gateway.enabled) {
+    return {
+      provider: "AIapiMgr 网关",
+      baseUrl: gateway.baseUrl,
+      model: "capability 路由",
+      configured: true,
+      gateway: true,
+      apiKeyMasked: ""
+    };
+  }
   const config = await getModelConfig(userId);
   return {
     provider: providerFromBaseUrl(config.baseUrl),
@@ -138,6 +150,20 @@ export async function getVisionConfig(userId) {
 }
 
 export async function getPublicVisionConfig(userId) {
+  const gateway = getGatewayPublicStatus();
+  if (gateway.enabled) {
+    return {
+      provider: "gateway",
+      providerLabel: "AIapiMgr 网关 · vision",
+      baseUrl: gateway.baseUrl,
+      model: "vision",
+      languageType: "CHN_ENG",
+      configured: true,
+      gateway: true,
+      apiKeyMasked: "",
+      secretKeyMasked: ""
+    };
+  }
   const config = await getVisionConfig(userId);
   const configured = config.provider === "baidu"
     ? Boolean(config.apiKey && config.secretKey)
@@ -273,6 +299,34 @@ export async function getEmbeddingConfig(userId) {
 }
 
 export async function getPublicEmbeddingConfig(userId) {
+  const gateway = getGatewayPublicStatus();
+  if (gateway.enabled) {
+    const dimensions = Math.max(
+      1,
+      Number(process.env.EMBEDDING_DIMENSIONS || DEFAULT_EMBEDDING_DIMENSIONS)
+    );
+    return {
+      embedding: {
+        provider: "gateway",
+        providerName: "AIapiMgr 网关 · embedding",
+        baseUrl: gateway.baseUrl,
+        model: "embedding",
+        dimensions,
+        configured: true,
+        gateway: true,
+        apiKeyMasked: ""
+      },
+      reranker: {
+        provider: "gateway",
+        providerName: "AIapiMgr 网关 · rerank",
+        baseUrl: gateway.baseUrl,
+        model: "rerank",
+        configured: true,
+        gateway: true,
+        apiKeyMasked: ""
+      }
+    };
+  }
   const { embedding, reranker } = await getEmbeddingConfig(userId);
   return {
     embedding: {

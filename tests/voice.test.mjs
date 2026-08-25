@@ -108,7 +108,9 @@ before(async () => {
       VISION_BASE_URL: mockUrl,
       DASHSCOPE_API_KEY: "",
       QWEN_API_KEY: "",
-      DEEPSEEK_API_KEY: ""
+      DEEPSEEK_API_KEY: "",
+      LLM_GATEWAY_URL: "",
+      LLM_GATEWAY_API_KEY: ""
     },
     stdio: ["ignore", "pipe", "pipe"]
   });

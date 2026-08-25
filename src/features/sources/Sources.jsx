@@ -18,7 +18,7 @@ import {
 import { formatSize } from "../../lib/format.js";
 import { outlineForSource } from "../../lib/documentOutline.js";
 import { analyzeBackground } from "../../api/ingest.js";
-import { deleteDocument, reindexProject, resummarizeProject } from "../../api/projects.js";
+import { deleteDocument, getProject, reindexProject, resummarizeProject } from "../../api/projects.js";
 import { FileTypeIcon } from "./FileTypeIcon.jsx";
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -42,6 +42,28 @@ export function Sources({
   const prevSourceCountRef = useRef(0);
   const sources = project.analysis?.sources || [];
   const hasPersistedSources = Number(project.documentCount || 0) > 0 || sources.some((source) => source.downloadUrl);
+  const mapStatus = project.analysis?.contentAnalysisStatus;
+  const mapPending = mapStatus === "pending" || mapStatus === "running";
+  const mapFailed = mapStatus === "failed";
+
+  useEffect(() => {
+    if (!mapPending || !project.id) return undefined;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const data = await getProject(project.id);
+        if (!cancelled && data.project) updateProject(data.project);
+      } catch {
+        // keep current project state
+      }
+    };
+    poll();
+    const timer = window.setInterval(poll, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [mapPending, project.id, updateProject]);
 
   useEffect(() => {
     const count = sources.length;
@@ -148,11 +170,7 @@ export function Sources({
     try {
       const data = await resummarizeProject(project.id);
       updateProject(data.project);
-      showToast(
-        data.demo
-          ? `已根据 ${data.documents} 份资料重新生成知识地图（演示模式）`
-          : `已根据 ${data.documents} 份资料重新总结知识地图`
-      );
+      showToast(`已根据 ${data.documents} 份资料重新总结知识地图`);
     } catch (error) {
       showToast(error.message);
     } finally {
@@ -188,13 +206,12 @@ export function Sources({
           ) : null}
           <button
             type="button"
-            className="source-delete-btn"
+            className="icon-btn source-delete-btn"
             aria-label={`删除资料 ${source.name}`}
-            title="删除资料并更新向量索引与知识地图"
+            title="删除资料"
             onClick={() => setDeleteSourceId(source.id)}
           >
-            <Trash2 size={14} />
-            删除
+            <Trash2 size={16} />
           </button>
         </div>
         {expanded && (
@@ -276,10 +293,27 @@ export function Sources({
           <div className="analysis-task-progress"><i style={{ width: `${analysisTask.progress || 3}%` }} /></div>
           <b>{Math.max(3, analysisTask.progress || 0)}%</b>
           <div className="analysis-stage-list">
-            {[['ocr', 'OCR'], ['embedding', 'Embedding'], ['content', '内容分析'], ['storage', '入库']].map(([stage, label]) => (
-              <span className={analysisTask.stage === stage ? "active" : ""} key={stage}>{label}</span>
+            {[['ocr', 'OCR'], ['embedding', 'Embedding'], ['storage', '入库']].map(([stage, label]) => (
+              <span className={analysisTask.stage === stage || (stage === 'storage' && analysisTask.stage === 'completed') ? "active" : ""} key={stage}>{label}</span>
             ))}
           </div>
+        </div>
+      )}
+
+      {mapPending && (
+        <div className="request-warning" role="status">
+          <Spinner />
+          <span>资料已可检索，知识地图正在后台生成（快模型）…</span>
+        </div>
+      )}
+
+      {mapFailed && (
+        <div className="request-warning">
+          <CircleAlert size={16} />
+          <span>{project.analysis?.contentAnalysisError || "知识地图生成失败，可点击重新总结重试。"}</span>
+          <button className="secondary-btn" onClick={resummarizeSources} disabled={resummarizing || loading}>
+            {resummarizing ? <Spinner /> : <Sparkles size={15} />} 重新总结知识地图
+          </button>
         </div>
       )}
 

@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { projectForPersistence } from "../src/lib/progress.mjs";
 import { deleteObject, putObject } from "./object-storage.mjs";
 import { dataDir, uploadDir, getDatabase, databaseStatus } from "./db/client.mjs";
 import { hybridSearch } from "./repos/search.mjs";
@@ -145,18 +146,19 @@ export async function deleteUserSession(token) {
 export async function listProjects(userId) {
   const db = await getDatabase();
   const result = await db.query("SELECT state FROM projects WHERE user_id = $1 ORDER BY updated_at DESC", [userId]);
-  return result.rows.map((row) => safeJson(row.state));
+  return result.rows.map((row) => projectForPersistence(safeJson(row.state)));
 }
 
 export async function getProject(projectId, userId) {
   const db = await getDatabase();
   const result = await db.query("SELECT state FROM projects WHERE id = $1 AND user_id = $2", [projectId, userId]);
-  return result.rows[0] ? safeJson(result.rows[0].state) : null;
+  return result.rows[0] ? projectForPersistence(safeJson(result.rows[0].state)) : null;
 }
 
 export async function saveProject(project) {
   if (!project?.id) throw new Error("项目缺少 id");
   if (!project?.userId) throw new Error("项目缺少 userId");
+  const payload = projectForPersistence(project);
   const db = await getDatabase();
   const result = await db.query(
     `INSERT INTO projects(id, user_id, title, mode, state, created_at, updated_at)
@@ -170,16 +172,16 @@ export async function saveProject(project) {
      WHERE projects.user_id = EXCLUDED.user_id
      RETURNING id`,
     [
-      project.id,
-      project.userId,
-      project.title || "新的学习项目",
-      project.mode || "subject",
-      JSON.stringify(project),
-      Number(project.createdAt || Date.now())
+      payload.id,
+      payload.userId,
+      payload.title || "新的学习项目",
+      payload.mode || "subject",
+      JSON.stringify(payload),
+      Number(payload.createdAt || Date.now())
     ]
   );
   if (!result.rows.length) throw new Error("学习项目不存在或不属于当前用户");
-  return project;
+  return payload;
 }
 
 export async function deleteProject(projectId, userId) {

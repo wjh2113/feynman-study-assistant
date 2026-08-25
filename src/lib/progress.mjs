@@ -5,8 +5,8 @@ export function scoreToMastery(score) {
   return 1;
 }
 
-export function recalculateMasteryAndProgress(project) {
-  const sessions = project.sessions || [];
+export function recalculateMasteryAndProgress(project, { sessions: sessionOverride } = {}) {
+  const sessions = sessionOverride ?? project.sessions ?? [];
   const bestByConcept = new Map();
   for (const session of sessions) {
     if (!session.concept || !session.score) continue;
@@ -46,4 +46,11 @@ export function recalculateMasteryAndProgress(project) {
     analysis: { ...(project.analysis || {}), modules },
     progress
   };
+}
+
+/** 持久化前剥离仅内存使用的会话摘要，避免写回项目 JSON。 */
+export function projectForPersistence(project) {
+  if (!project || typeof project !== "object") return project;
+  const { sessions, ...rest } = project;
+  return rest;
 }

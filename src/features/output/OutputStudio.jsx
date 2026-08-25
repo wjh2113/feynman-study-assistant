@@ -1,15 +1,17 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ConfirmDialog } from "../../components/ConfirmDialog.jsx";
 import { PageHeading } from "../../components/PageHeading.jsx";
 import { EmptyMini } from "../../components/EmptyMini.jsx";
 import { Spinner } from "../../components/Spinner.jsx";
 import {
+  Archive,
   BookMarked,
-  Check,
   Download,
   FileText,
   MessageCircleQuestion,
+  Pencil,
   RotateCcw,
+  Save,
   Sparkles,
   Target
 } from "../../components/icons.jsx";
@@ -22,21 +24,25 @@ function overlapsSelection(item, selectedDocumentIds = []) {
   return ids.some((id) => selectedDocumentIds.includes(id));
 }
 
-export function OutputStudio({ project, selectedDocumentIds = [], updateProject, showToast }) {
+export function OutputStudio({ project, selectedDocumentIds = [], updateProject, saveProjectPatch, refreshProject, showToast }) {
   const [loading, setLoading] = useState(false);
   const [pager, setPager] = useState(project?.onePager || null);
   const [edited, setEdited] = useState(false);
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
+  const [tab, setTab] = useState("pager");
   const sessions = (project.sessions || []).filter((item) => overlapsSelection(item, selectedDocumentIds));
   const blindspots = (project.blindspots || []).filter((item) => overlapsSelection(item, selectedDocumentIds));
-  const sessionCount = sessions.length;
-  const blindspotCount = blindspots.length;
   const practiceDocs = (project.analysis?.sources || []).filter((source) => selectedDocumentIds.includes(source.id));
   const docsLabel = practiceDocs.length
     ? practiceDocs.map((doc) => doc.name).slice(0, 2).join("、") + (practiceDocs.length > 2 ? " 等" : "")
-    : "已选资料";
+    : project.title;
 
-  if (!selectedDocumentIds.length) return <EmptyMini text="请先在上方勾选要练习的资料" />;
+  useEffect(() => {
+    setPager(project?.onePager || null);
+    setEdited(false);
+  }, [project.id, project?.onePager]);
+
+  if (!selectedDocumentIds.length) return <EmptyMini text="请先上传资料并完成解析，再生成学习成果" />;
 
   const runGenerate = async () => {
     setConfirmRegenerate(false);
@@ -49,8 +55,13 @@ export function OutputStudio({ project, selectedDocumentIds = [], updateProject,
       });
       setPager(data);
       setEdited(false);
-      updateProject({ onePager: data });
-      showToast(data.demo ? "一页纸已生成（当前为演示模式）" : "学习成果已生成");
+      if (saveProjectPatch) {
+        await saveProjectPatch({ onePager: data });
+      } else {
+        updateProject({ onePager: data });
+      }
+      await refreshProject?.(project.id);
+      showToast("学习成果已生成");
     } catch (error) {
       showToast(error.message);
     } finally {
@@ -66,9 +77,13 @@ export function OutputStudio({ project, selectedDocumentIds = [], updateProject,
     await runGenerate();
   };
 
-  const saveEdits = () => {
+  const saveEdits = async () => {
     if (!pager) return;
-    updateProject({ onePager: pager });
+    if (saveProjectPatch) {
+      await saveProjectPatch({ onePager: pager });
+    } else {
+      updateProject({ onePager: pager });
+    }
     setEdited(false);
     showToast("一页纸编辑已保存");
   };
@@ -83,49 +98,9 @@ export function OutputStudio({ project, selectedDocumentIds = [], updateProject,
     setEdited(true);
   };
 
-  const updateAction = (value) => {
-    setPager((current) => current ? { ...current, action: value } : current);
-    setEdited(true);
-  };
-
-  const updateReflection = (value) => {
-    setPager((current) => current ? { ...current, reflection: value } : current);
-    setEdited(true);
-  };
-
   const exportMarkdown = () => {
     if (!pager) return;
-    const mindMapMarkdown = (project.analysis?.modules || []).length ? `
-
-## 思维导图
-
-- ${project.title}
-${(project.analysis.modules || []).map((module) => `  - ${module.title}
-${(module.concepts || []).map((concept) => `    - ${concept.title}${concept.explanation ? `：${concept.explanation}` : ""}`).join("\n")}`).join("\n")}
-` : "";
-    const outlineMarkdown = pager.outline ? `
-
----
-
-# 专业成果大纲：${pager.outline.title}
-
-- 作品形式：${pager.outline.format}
-- 目标读者：${pager.outline.audience}
-- 核心论点：${pager.outline.coreArgument}
-
-${(pager.outline.sections || []).map((section, index) => `## ${index + 1}. ${section.title}
-
-**本章目的：** ${section.purpose}
-
-**核心论点：**
-${(section.keyPoints || []).map((item) => `- ${item}`).join("\n")}
-
-**可核对依据：**
-${(section.evidence || []).length ? section.evidence.map((item) => `- ${item}`).join("\n") : "- 待从个人实践中补充"}
-
-**写作提示：** ${section.writingPrompt}`).join("\n\n")}
-` : "";
-    const markdown = `# ${pager.title}\n\n> ${pager.thesis}\n\n## 三个关键收获\n\n${(pager.takeaways || []).map((item) => `- ${item}`).join("\n")}\n\n## 立即行动\n\n${pager.action}\n\n## 我的复盘\n\n${pager.reflection}\n${mindMapMarkdown}${outlineMarkdown}`;
+    const markdown = `# ${pager.title}\n\n> ${pager.thesis}\n\n## 三个关键收获\n\n${(pager.takeaways || []).map((item) => `- ${item}`).join("\n")}\n\n## 立即行动\n\n${pager.action}\n\n## 我的复盘\n\n${pager.reflection}\n`;
     const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -136,15 +111,41 @@ ${(section.evidence || []).length ? section.evidence.map((item) => `- ${item}`).
     showToast("Markdown 已导出");
   };
 
+  const romanLabels = ["I", "II", "III", "IV", "V", "VI"];
+
   return (
     <>
       <PageHeading
         eyebrow="第五步 · 把理解变成作品"
-        title={`学习成果 · ${docsLabel}`}
+        title={`${project.title} 的学习成果`}
         description={`把已选资料、你的解释和修正后的思考，沉淀为一份真正属于你的成果。`}
-        action={pager ? <div className="topbar-actions"><button className="secondary-btn" onClick={exportMarkdown}><Download size={16} /> 导出 Markdown</button><a className="secondary-btn" href={`/api/projects/${encodeURIComponent(project.id)}/export?format=zip`}><Download size={16} /> 导出完整档案</a></div> : null}
-        demo={project.analysis?.demo}
       />
+
+      {pager && (
+        <div className="output-hero">
+          <div className="complete-ring sm">100<small>%</small></div>
+          <div>
+            <strong>学习成果完成度</strong>
+            <p>太棒了！你已完成全部内容</p>
+            <button className="text-btn" type="button">查看生成记录 →</button>
+          </div>
+          <div className="output-hero-actions">
+            {edited && <button className="primary-btn" onClick={saveEdits}><Save size={15} /> 保存修改</button>}
+            <button className="secondary-btn" onClick={generate} disabled={loading}>{loading ? <Spinner /> : <RotateCcw size={15} />} 重新生成</button>
+            <button className="secondary-btn" onClick={exportMarkdown}><Download size={15} /> 导出 Markdown</button>
+            <a className="secondary-btn" href={`/api/projects/${encodeURIComponent(project.id)}/export?format=zip`}><Archive size={15} /> 导出完整 ZIP 档案</a>
+          </div>
+        </div>
+      )}
+
+      {pager && (
+        <div className="output-tabs">
+          <button className={tab === "pager" ? "active" : ""} onClick={() => setTab("pager")}><FileText size={15} /> 一页纸</button>
+          <button className={tab === "map" ? "active" : ""} onClick={() => setTab("map")}><Sparkles size={15} /> 思维导图</button>
+          <button className={tab === "outline" ? "active" : ""} onClick={() => setTab("outline")}><BookMarked size={15} /> 专业大纲</button>
+        </div>
+      )}
+
       {!pager ? (
         <div className="output-empty">
           <div className="paper-stack">
@@ -152,59 +153,76 @@ ${(section.evidence || []).length ? section.evidence.map((item) => `- ${item}`).
           </div>
           <span className="section-kicker">你的学习即将留下痕迹</span>
           <h2>生成「{docsLabel}」一页纸学习卡</h2>
-          <p>AI 会综合已选资料骨架、费曼对练和认知盲区，提炼核心收获与下一步行动。内容可继续编辑，也可以导出保存。</p>
+          <p>AI 会综合已选资料骨架、费曼对练和认知盲区，提炼核心收获与下一步行动。</p>
           <div className="output-source-chips">
             <span><FileText size={14} /> {practiceDocs.length || project.analysis?.sources?.length || 0} 份资料</span>
-            <span><MessageCircleQuestion size={14} /> {sessionCount} 次对练</span>
-            <span><Target size={14} /> {blindspotCount} 个盲区</span>
+            <span><MessageCircleQuestion size={14} /> {sessions.length} 次对练</span>
+            <span><Target size={14} /> {blindspots.length} 个盲区</span>
           </div>
           <button className="primary-btn large" onClick={generate} disabled={loading}>{loading ? <Spinner /> : <Sparkles size={18} />}{loading ? "正在整理你的思考…" : "生成一页纸与成果大纲"}</button>
         </div>
+      ) : tab === "pager" ? (
+        <article className="one-pager">
+          <header>
+            <span>LEARNING ONE-PAGER · {new Date().toLocaleDateString("zh-CN")}</span>
+            <h1>{pager.title}</h1>
+          </header>
+          <section className="pager-block thesis-box">
+            <span className="section-kicker">THESIS（核心论点）</span>
+            <p>{pager.thesis}</p>
+          </section>
+          <section className="pager-block">
+            <span className="section-kicker">01 关键收获</span>
+            {(pager.takeaways || []).map((item, index) => (
+              <div className="takeaway" key={index}>
+                <b>0{index + 1}</b>
+                <p contentEditable suppressContentEditableWarning onInput={(event) => updateTakeaway(index, event.currentTarget.textContent)}>{item}</p>
+                <Pencil size={13} />
+              </div>
+            ))}
+          </section>
+          <section className="pager-block">
+            <span className="section-kicker">02 立即行动</span>
+            <ul className="pager-actions">
+              {String(pager.action || "")
+                .split(/[\n；;]+/)
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .map((line, index) => <li key={index}>{line}</li>)}
+            </ul>
+          </section>
+          <section className="pager-block">
+            <span className="section-kicker">03 我的复盘</span>
+            <p className="pager-big-copy reflection-box">{pager.reflection || "记录我的思考、收获与下一步改进方向..."}</p>
+          </section>
+          <footer><span>知练 · 费曼型学习助手</span><span>资料 → 骨架 → 输出 → 能力</span></footer>
+        </article>
+      ) : tab === "map" ? (
+        <MindMap project={project} />
       ) : (
-        <div className="one-pager-shell">
-          <div className="output-documents">
-            <article className="one-pager">
-              <header><span>LEARNING ONE-PAGER · {new Date().toLocaleDateString("zh-CN")}</span><h1>{pager.title}</h1><p>{pager.thesis}</p></header>
-              <section><div className="pager-section-number">01</div><div><span className="section-kicker">关键收获</span>{(pager.takeaways || []).map((item, index) => <div className="takeaway" key={index}><b>0{index + 1}</b><p contentEditable suppressContentEditableWarning onInput={(event) => updateTakeaway(index, event.currentTarget.textContent)}>{item}</p></div>)}</div></section>
-              <section><div className="pager-section-number">02</div><div><span className="section-kicker">立即行动</span><p className="pager-big-copy" contentEditable suppressContentEditableWarning onInput={(event) => updateAction(event.currentTarget.textContent)}>{pager.action}</p></div></section>
-              <section><div className="pager-section-number">03</div><div><span className="section-kicker">我的复盘</span><p className="pager-big-copy" contentEditable suppressContentEditableWarning onInput={(event) => updateReflection(event.currentTarget.textContent)}>{pager.reflection}</p></div></section>
-              <footer><span>知练 · 费曼型学习助手</span><span>资料 → 骨架 → 输出 → 能力</span></footer>
-            </article>
-
-            <MindMap project={project} />
-
-            <article className="panel output-outline">
-              <header>
-                <span className="section-kicker">专业作品大纲</span>
-                <h2>{pager.outline?.title || "当前成果尚未生成大纲"}</h2>
-                {pager.outline ? (
-                  <>
-                    <div className="outline-meta"><span>{pager.outline.format}</span><span>面向：{pager.outline.audience}</span></div>
-                    <p>{pager.outline.coreArgument}</p>
-                  </>
-                ) : <p>点击右侧“重新生成成果与大纲”，AI 会结合资料、对练和盲区补全。</p>}
-              </header>
-              {(pager.outline?.sections || []).map((section, index) => (
-                <section className="outline-section" key={`${section.title}-${index}`}>
-                  <div className="outline-number">{String(index + 1).padStart(2, "0")}</div>
-                  <div>
-                    <h3>{section.title}</h3>
-                    <p className="outline-purpose">{section.purpose}</p>
-                    {!!section.keyPoints?.length && <ul>{section.keyPoints.map((point, pointIndex) => <li key={pointIndex}>{point}</li>)}</ul>}
-                    {!!section.evidence?.length && <div className="outline-evidence"><strong>可核对依据</strong>{section.evidence.map((item, evidenceIndex) => <span key={evidenceIndex}>{item}</span>)}</div>}
-                    <div className="outline-prompt"><strong>写作提示</strong><p>{section.writingPrompt}</p></div>
-                  </div>
-                </section>
-              ))}
-            </article>
+        <article className="panel output-outline">
+          <header className="output-outline-head">
+            <span className="section-kicker">专业大纲</span>
+            <h2>{pager.outline?.title || `${project.title}能力作品大纲`}</h2>
+          </header>
+          <div className="output-outline-body">
+            {(pager.outline?.sections || []).map((section, index) => (
+              <section className="outline-section" key={`${section.title}-${index}`}>
+                <header className="outline-section-head">
+                  <span className="outline-roman">{romanLabels[index] || index + 1}.</span>
+                  <h3 className="outline-section-title">{section.title}</h3>
+                </header>
+                {section.purpose && <p className="outline-purpose">{section.purpose}</p>}
+                {!!section.keyPoints?.length && (
+                  <ul className="outline-points">
+                    {section.keyPoints.map((point, pointIndex) => <li key={pointIndex}>{point}</li>)}
+                  </ul>
+                )}
+              </section>
+            ))}
+            {!pager.outline?.sections?.length && <EmptyMini text="重新生成一页纸后，会同步生成专业大纲。" />}
           </div>
-          <aside className="output-side">
-            <div className="concept-note"><span className="section-kicker">完成度</span><h3>学习闭环已完成</h3><p>你已经走过知识提炼、主动输出、盲区诊断和成果沉淀。</p><div className="complete-ring">100<small>%</small></div></div>
-            {edited && <button className="primary-btn full" onClick={saveEdits}><Check size={16} /> 保存修改</button>}
-            <button className="primary-btn full" onClick={exportMarkdown}><Download size={16} /> 导出 Markdown</button>
-            <button className="secondary-btn full" onClick={generate} disabled={loading}>{loading ? <Spinner /> : <RotateCcw size={16} />}{loading ? "正在重新生成…" : "重新生成成果与大纲"}</button>
-          </aside>
-        </div>
+        </article>
       )}
 
       <ConfirmDialog

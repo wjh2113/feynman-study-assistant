@@ -129,6 +129,8 @@ before(async () => {
       ...process.env,
       PORT: String(port),
       DEEPSEEK_API_KEY: "",
+      LLM_GATEWAY_URL: "",
+      LLM_GATEWAY_API_KEY: "",
       DATABASE_URL: "",
       REDIS_URL: "",
       RAG_TEST_MODE: "true",

@@ -162,7 +162,7 @@ async function main() {
   {
     const rag = await api("/api/rag", {
       method: "POST",
-      body: JSON.stringify({ projectId, question: "什么是费曼学习法？" })
+      body: JSON.stringify({ projectId, query: "什么是费曼学习法？" })
     });
     log(
       "rag ask",

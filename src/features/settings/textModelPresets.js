@@ -19,8 +19,6 @@ export const TEXT_MODEL_PRESETS = {
   cherryin: {
     name: "CherryIN",
     baseUrl: "https://open.cherryin.net/v1",
-    hint: "CherryIN 模型名必须写成「厂商/模型名」。本应用走 Chat Completions；GPT-5.x 的部分型号需要 Responses API，请优先选 Claude / Gemini / gpt-5-chat。",
-    allowCustom: true,
     models: [
       { id: "anthropic/claude-sonnet-4.5", label: "anthropic/claude-sonnet-4.5" },
       { id: "google/gemini-2.5-flash", label: "google/gemini-2.5-flash" },
@@ -31,7 +29,6 @@ export const TEXT_MODEL_PRESETS = {
   custom: {
     name: "自定义 OpenAI 兼容",
     baseUrl: "",
-    allowCustom: true,
     models: []
   }
 };
