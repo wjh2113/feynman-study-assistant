@@ -1,3 +1,9 @@
+import {
+  TARGET_COACH_QUESTION_COUNT,
+  buildConceptQuestions,
+  expandQuestionsToCount
+} from "./coach-questions.mjs";
+
 function isLegacyChapterArg(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value)
     && (value.analysis != null || value.blindspots != null || value.sessions != null || value.onePager != null));
@@ -44,26 +50,10 @@ function projectConcepts(project, chapter = null) {
   return (project?.analysis?.modules || []).flatMap((module) => module.concepts || []);
 }
 
-function buildConceptQuestions(concepts) {
-  const templates = [
-    (title) => `请不用专业术语，向一个12岁孩子解释“${title}”是什么，以及它为什么重要。`,
-    (title) => `请用一个真实例子说明“${title}”是如何发挥作用的。`,
-    (title) => `“${title}”在什么情况下会失效？请给出一个反例。`
-  ];
-  return concepts.map((concept, index) => ({
-    id: `legacy-q-${concept.id || index}`,
-    question: templates[index % templates.length](concept.title),
-    conceptId: concept.id,
-    concept: concept.title,
-    why: "检验是否真正理解资料中的核心逻辑",
-    sourceRefs: concept.sourceRefs || []
-  }));
-}
-
 export function questionsForProject(project, secondArg = null) {
   const { documentIds, chapter } = resolveOptions(secondArg);
-  const chapterQuestions = chapter?.analysis?.questions;
   const concepts = projectConcepts(project, chapter);
+  const chapterQuestions = chapter?.analysis?.questions;
   let questions;
   if (Array.isArray(chapterQuestions) && chapterQuestions.length) {
     questions = chapterQuestions;
@@ -73,15 +63,20 @@ export function questionsForProject(project, secondArg = null) {
     questions = buildConceptQuestions(concepts);
   }
 
-  if (!documentIds.length) return questions;
-  const selectedNames = selectedSourceNames(project, documentIds);
-  if (!selectedNames.size) return questions;
+  if (documentIds.length) {
+    const selectedNames = selectedSourceNames(project, documentIds);
+    if (selectedNames.size) {
+      const filtered = questions.filter((question) => questionMatchesDocuments(question, selectedNames));
+      if (filtered.length) {
+        questions = filtered;
+      } else {
+        const scopedConcepts = concepts.filter((concept) => conceptMatchesDocuments(concept, selectedNames));
+        if (scopedConcepts.length) {
+          questions = buildConceptQuestions(scopedConcepts);
+        }
+      }
+    }
+  }
 
-  const filtered = questions.filter((question) => questionMatchesDocuments(question, selectedNames));
-  if (filtered.length) return filtered;
-
-  const scopedConcepts = concepts.filter((concept) => conceptMatchesDocuments(concept, selectedNames));
-  if (scopedConcepts.length) return buildConceptQuestions(scopedConcepts);
-
-  return questions;
+  return expandQuestionsToCount(questions, concepts, TARGET_COACH_QUESTION_COUNT);
 }

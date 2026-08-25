@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { dedupeAnalysisSources } from "../../src/lib/analysis-sources.mjs";
+import { expandQuestionsToCount, buildConceptQuestions } from "../../src/lib/coach-questions.mjs";
 import { chunkSources } from "../chunking.mjs";
 import { embedTexts, embeddingStatus } from "../embedding.mjs";
 import { getEmbeddingConfig } from "../model-config.mjs";
@@ -110,7 +111,7 @@ export function contentAnalysisMessages(title, corpus, { resummarize = false } =
     : `请分析学习项目《${title}》。`;
   const extra = resummarize
     ? "要求：只使用当前资料；2-4个模块；不要引用已删除文件；保持 JSON 紧凑。"
-    : "要求：为每个原文件单独生成一份 documentSummaries；2-4个模块，每模块1-3个概念；3条高价值知识；2个场景题；5个费曼问题。无依据则写“资料未覆盖”。保持 JSON 紧凑，explanation/detail 各不超过80字。";
+    : "要求：为每个原文件单独生成一份 documentSummaries；2-4个模块，每模块1-3个概念；3条高价值知识；2个场景题；10个费曼问题。无依据则写“资料未覆盖”。保持 JSON 紧凑，explanation/detail 各不超过80字。";
   return [
     {
       role: "system",
@@ -584,41 +585,30 @@ export function demoAnalysis(title, sources) {
 
 export function questionsFromAnalysis(analysis) {
   const concepts = (analysis?.modules || []).flatMap((module) => module.concepts || []);
-  const prompts = [
-    (title) => `请不用专业术语，向一个12岁孩子解释“${title}”是什么，以及它为什么重要。`,
-    (title) => `请用一个来自真实工作或生活的例子说明“${title}”是如何发挥作用的。`,
-    (title) => `“${title}”在什么情况下会失效？请说出关键前提和一个反例。`,
-    (title) => `如果资源和时间都减少一半，你会如何运用“${title}”解决问题？`,
-    (title) => `请比较“${title}”与一个容易混淆的做法，并说明你会如何做出选择。`
-  ];
-  return concepts.slice(0, 8).map((concept, index) => ({
-    id: `q-${concept.id || index + 1}`,
-    question: prompts[index % prompts.length](concept.title),
-    conceptId: concept.id,
-    concept: concept.title,
-    why: concept.importance === "核心" ? "检验是否真正掌握核心逻辑" : "检验能否迁移和应用",
-    sourceRefs: concept.sourceRefs || []
-  }));
+  return buildConceptQuestions(concepts);
 }
 
 export function normalizeQuestions(questions, analysis) {
   const concepts = (analysis?.modules || []).flatMap((module) => module.concepts || []);
   const input = Array.isArray(questions) && questions.length ? questions : questionsFromAnalysis(analysis);
-  return input.slice(0, 10).map((question, index) => {
-    const matched = concepts.find(
-      (concept) =>
-        concept.id === question.conceptId ||
-        concept.title === question.concept
-    );
-    return {
-      id: question.id || `q-${index + 1}`,
-      question: question.question || `请用自己的话解释“${matched?.title || question.concept || "这个知识点"}”。`,
-      conceptId: question.conceptId || matched?.id || "",
-      concept: question.concept || matched?.title || "综合理解",
-      why: question.why || "检验是否真正理解资料中的核心逻辑",
-      sourceRefs: question.sourceRefs?.length ? question.sourceRefs : matched?.sourceRefs || []
-    };
-  });
+  return expandQuestionsToCount(
+    input.map((question, index) => {
+      const matched = concepts.find(
+        (concept) =>
+          concept.id === question.conceptId ||
+          concept.title === question.concept
+      );
+      return {
+        id: question.id || `q-${index + 1}`,
+        question: question.question || `请用自己的话解释“${matched?.title || question.concept || "这个知识点"}”。`,
+        conceptId: question.conceptId || matched?.id || "",
+        concept: question.concept || matched?.title || "综合理解",
+        why: question.why || "检验是否真正理解资料中的核心逻辑",
+        sourceRefs: question.sourceRefs?.length ? question.sourceRefs : matched?.sourceRefs || []
+      };
+    }),
+    concepts
+  );
 }
 
 export async function analyzeFiles({

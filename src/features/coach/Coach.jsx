@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { PageHeading } from "../../components/PageHeading.jsx";
 import { EmptyMini } from "../../components/EmptyMini.jsx";
 import { NoAnalysis } from "../../components/NoAnalysis.jsx";
@@ -75,11 +75,11 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
   const bootQuestion = useMemo(() => resolveInitialQuestion(baseQuestions, stored), [baseQuestions, stored]);
   const selectionKey = selectedDocumentIds.join(",");
 
-  const [questionList] = useState(() => {
+  const questionList = useMemo(() => {
     if (!bootQuestion) return baseQuestions;
     if (baseQuestions.some((item) => item.id === bootQuestion.id)) return baseQuestions;
     return [bootQuestion, ...baseQuestions];
-  });
+  }, [baseQuestions, bootQuestion]);
   const [question, setQuestion] = useState(bootQuestion);
   const concept =
     concepts.find((item) => item.id === question?.conceptId || item.title === question?.concept) ||
@@ -113,12 +113,16 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
   ));
   const [sessionId, setSessionId] = useState(null);
   const [sessionsCache, setSessionsCache] = useState(null);
+  const voiceSubmittedRef = useRef(false);
 
   const maxTurns = prefs.coachMaxTurns || 3;
   const roleLocked = prefs.coachRoleMode === "auto";
 
   useEffect(() => {
-    getPreferences()
+    voiceSubmittedRef.current = false;
+  }, [question?.id, selectionKey]);
+
+  useEffect(() => {
       .then((data) => setPrefs((current) => ({ ...current, ...data })))
       .catch(() => {})
       .finally(() => setPrefsReady(true));
@@ -613,14 +617,31 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
               <span>{completed ? "本轮不会继续追问" : "⌘ Enter 换行，Enter 发送"}</span>
               <div className="answer-foot-actions">
                 <VoiceInputButton
+                  asyncMode
                   disabled={loading || completed}
                   showToast={showToast}
                   title="语音输入"
-                  tip="录音时实时显示浏览器转写，结束后自动交给 AI 修正"
+                  tip="录音结束后会立即填入并提交，AI 识别在后台继续优化"
                   placeholder="用人话解释概念… 识别结果会出现在这里"
                   confirmLabel="确认"
                   purpose="费曼对练解释"
-                  onTranscript={(text) => setAnswer((current) => `${current}${current.trim() ? " " : ""}${text}`)}
+                  onTranscript={(text, meta) => {
+                    setAnswer(text);
+                    if (meta?.phase === "draft") {
+                      voiceSubmittedRef.current = true;
+                      showToast("语音已提交，教练正在后台回复…");
+                      void submit(text);
+                      return;
+                    }
+                    if (meta?.phase === "final") {
+                      if (meta?.refined) setAnswer(text);
+                      if (!voiceSubmittedRef.current) {
+                        voiceSubmittedRef.current = true;
+                        showToast("语音识别完成，正在提交给教练…");
+                        void submit(text);
+                      }
+                    }
+                  }}
                 />
                 <button className="answer-send-btn" onClick={() => submit()} disabled={!answer.trim() || loading || completed}>
                   <Send size={16} /> 发送

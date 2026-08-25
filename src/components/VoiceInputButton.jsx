@@ -14,7 +14,8 @@ export function VoiceInputButton({
   tip = "点击录音，说完后由 AI 识别并修正",
   placeholder = "识别结果会出现在这里，也可以手动修改…",
   confirmLabel = "确认",
-  purpose = ""
+  purpose = "",
+  asyncMode = false
 }) {
   const [open, setOpen] = useState(false);
 
@@ -40,7 +41,8 @@ export function VoiceInputButton({
         placeholder={placeholder}
         confirmLabel={confirmLabel}
         purpose={purpose}
-        onConfirm={(text) => onTranscript?.(text)}
+        asyncMode={asyncMode}
+        onConfirm={(text, meta) => onTranscript?.(text, meta)}
       />
     </>
   );

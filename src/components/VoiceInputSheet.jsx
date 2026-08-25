@@ -23,6 +23,7 @@ export function VoiceInputSheet({
   confirmLabel = "确认填入",
   cancelLabel = "取消",
   purpose = "",
+  asyncMode = false,
   onConfirm
 }) {
   const recorderRef = useRef(null);
@@ -290,15 +291,38 @@ export function VoiceInputSheet({
     }
   };
 
-  const pushToTarget = (text, { close = false } = {}) => {
+  const pushToTarget = (text, { close = false, phase = "final" } = {}) => {
     const value = String(text || "").trim();
     if (!value) return false;
-    onConfirm?.(value);
+    onConfirm?.(value, { phase });
     filledRef.current = true;
     setFilled(true);
     showToast?.(close ? "语音识别完成，已填入" : "识别结果已显示，并写入输入框");
     if (close) onClose?.();
     return true;
+  };
+
+  const refineAudioInBackground = async (blob, browserDraft, session, mimeType) => {
+    if (!blob?.size) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const data = await transcribeVoice(blob, { purpose, signal: controller.signal });
+      if (cancelledRef.current || session !== sessionRef.current) return;
+      const text = String(data.text || data.raw || "").trim() || browserDraft;
+      if (!text) return;
+      onConfirm?.(text, { phase: "final", refined: Boolean(data.refined) });
+      showToast?.(data.refined ? "AI 已优化语音识别结果" : "语音识别完成");
+    } catch (error) {
+      if (error?.name === "AbortError" || cancelledRef.current || session !== sessionRef.current) return;
+      if (browserDraft) {
+        onConfirm?.(browserDraft, { phase: "final", refined: false });
+      } else {
+        showToast?.(error.message || "语音识别失败");
+      }
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+    }
   };
 
   const stopRecording = async () => {
@@ -375,14 +399,33 @@ export function VoiceInputSheet({
       setProcessingSafe(false);
       busyRef.current = false;
       if (browserDraft) {
-        setTranscriptSafe(browserDraft);
-        setVoiceTip("没有录到音频文件，已保留下方转写。可点确认填入");
-        setStatusLine("识别结果（浏览器转写）");
-        focusTranscript();
+        if (asyncMode) {
+          pushToTarget(browserDraft, { close: true, phase: "draft" });
+          void refineAudioInBackground(null, browserDraft, session, mimeType);
+        } else {
+          setTranscriptSafe(browserDraft);
+          setVoiceTip("没有录到音频文件，已保留下方转写。可点确认填入");
+          setStatusLine("识别结果（浏览器转写）");
+          focusTranscript();
+        }
       } else {
         setVoiceTip("没有录到有效声音，请靠近麦克风多说几秒后再结束");
         setStatusLine("");
       }
+      return;
+    }
+
+    if (asyncMode) {
+      setProcessingSafe(false);
+      busyRef.current = false;
+      if (browserDraft) {
+        pushToTarget(browserDraft, { close: true, phase: "draft" });
+      } else {
+        showToast?.("正在后台识别语音…");
+        onClose?.();
+        resetUi();
+      }
+      void refineAudioInBackground(blob, browserDraft, session, mimeType);
       return;
     }
 
