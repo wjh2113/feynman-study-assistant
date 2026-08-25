@@ -396,7 +396,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
   return (
     <div className="coach-page">
       <PageHeading
-        title={isVariant ? `复测 · ${blindspotTitle || "盲区"}` : "第三步 · 费曼输出"}
+        title={isVariant ? `复测 · ${blindspotTitle || "盲区"}` : "费曼对练"}
         action={<button className="primary-btn" onClick={finish}><Check size={16} /> 结束并保存</button>}
       />
 

@@ -116,7 +116,7 @@ export function OutputStudio({ project, selectedDocumentIds = [], updateProject,
   return (
     <>
       <PageHeading
-        eyebrow="第五步 · 把理解变成作品"
+        eyebrow="把理解变成作品"
         title={`${project.title} 的学习成果`}
         description={`把已选资料、你的解释和修正后的思考，沉淀为一份真正属于你的成果。`}
       />

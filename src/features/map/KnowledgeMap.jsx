@@ -234,7 +234,7 @@ export function KnowledgeMap({ project, selectedDocumentIds = [], navigate }) {
   return (
     <div className="knowledge-map-page">
       <PageHeading
-        eyebrow="第二步 · 先骨架，后细节"
+        eyebrow="先骨架，后细节"
         title="知识地图"
         action={<button className="primary-btn" type="button" onClick={() => navigate("coach")}>开始费曼对练 <ArrowRight size={16} /></button>}
       />

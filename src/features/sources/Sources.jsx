@@ -269,7 +269,7 @@ export function Sources({
   return (
     <>
       <PageHeading
-        eyebrow="第一步 · 构建专属语料库"
+        eyebrow="构建专属语料库"
         title="学科资料"
         description="上传课件与笔记。解析完成后会展示资料大纲，便于核对是否解析完整；再进入知识地图。练习时再勾选要使用的资料。"
         action={<button className="primary-btn" onClick={analyze} disabled={loading}>{loading ? <Spinner /> : <Sparkles size={17} />}{loading ? "正在提炼…" : files.length ? `分析 ${files.length} 份新资料` : "查看知识地图"}</button>}

@@ -61,7 +61,7 @@ export function Blindspots({ project, selectedDocumentIds = [], updateProject, s
   return (
     <div className="blindspots-page">
       <PageHeading
-        eyebrow="第四步 · 哪里不会补哪里"
+        eyebrow="哪里不会补哪里"
         title="盲区与复测"
         description="基于已选练习资料：每个被问住的地方，都是下一次能力提升最短的路径。"
       />
