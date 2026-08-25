@@ -623,12 +623,12 @@ test("删除资料会同步清理原始文件、项目记录和向量分块", as
     `${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/documents/${encodeURIComponent(target.id)}`,
     { method: "DELETE" }
   );
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 202, await response.clone().text());
   const data = await response.json();
   assert.equal(data.deleted.id, target.id);
-  assert.ok(Number(data.deleted.chunksDeleted || 0) >= Number(target.chunks || 0) || Number(data.deleted.chunksDeleted || 0) >= 0);
   assert.equal(data.project.analysis.sources.some((item) => item.id === target.id), false);
   assert.equal(data.mapCleared, true);
+  assert.equal(data.queued, true);
   assert.equal(Array.isArray(data.project.analysis.modules), true);
   if (data.project.analysis.sources.length === 0) {
     assert.equal(data.project.analysis.modules.length, 0);
@@ -636,16 +636,20 @@ test("删除资料会同步清理原始文件、项目记录和向量分块", as
   } else if (data.resummarize?.queued) {
     assert.equal(data.project.analysis.modules.length, 0);
     assert.ok(["pending", "running"].includes(data.project.analysis.contentAnalysisStatus));
-  } else if (data.resummarize?.error) {
-    assert.equal(data.project.analysis.modules.length, 0);
-    assert.equal(data.needsResummarize, true);
   } else {
     assert.equal(data.project.analysis.modules.length, 0);
     assert.equal(data.needsResummarize, true);
   }
 
-  const originalFile = await authFetch(`${baseUrl}${target.downloadUrl}`);
-  assert.equal(originalFile.status, 404);
+  const deadline = Date.now() + 20_000;
+  let fileStatus = 0;
+  while (Date.now() < deadline) {
+    const originalFile = await authFetch(`${baseUrl}${target.downloadUrl}`);
+    fileStatus = originalFile.status;
+    if (fileStatus === 404) break;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  assert.equal(fileStatus, 404);
 
   const ragResponse = await authFetch(`${baseUrl}/api/rag`, {
     method: "POST",
@@ -686,10 +690,9 @@ test("未入库的分析资料也可删除，并清理知识地图", async () =>
     `${baseUrl}/api/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent("src-1")}`,
     { method: "DELETE" }
   );
-  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(response.status, 202, await response.clone().text());
   const data = await response.json();
   assert.equal(data.deleted.id, "src-1");
-  assert.equal(data.project.analysis.sources.some((item) => item.id === "src-1"), false);
   assert.equal(data.project.analysis.sources.length, 1);
   assert.equal(data.project.analysis.sources[0].id, "src-2");
   assert.equal(data.mapCleared, true);

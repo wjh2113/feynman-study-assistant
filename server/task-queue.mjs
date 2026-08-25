@@ -32,8 +32,22 @@ export async function enqueueTask(name, payload, localHandler) {
   if (redisEnabled()) {
     handlers.set(name, localHandler);
     ensureWorker();
-    const job = await bullQueue().add(name, payload, { attempts: 3, backoff: { type: "exponential", delay: 2000 }, removeOnComplete: 500, removeOnFail: 500 });
-    return { id: String(job.id), name, status: "waiting", backend: "redis" };
+    try {
+      const job = await Promise.race([
+        bullQueue().add(name, payload, {
+          attempts: 3,
+          backoff: { type: "exponential", delay: 2000 },
+          removeOnComplete: 500,
+          removeOnFail: 500
+        }),
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error("Redis 任务队列响应超时")), Number(process.env.TASK_QUEUE_ENQUEUE_TIMEOUT_MS || 2500));
+        })
+      ]);
+      return { id: String(job.id), name, status: "waiting", backend: "redis" };
+    } catch {
+      // Redis unavailable or slow — fall back to in-process queue so API stays fast.
+    }
   }
   const id = randomUUID();
   const job = { id, name, userId: payload.userId, payload, status: "waiting", progress: 0, createdAt: Date.now(), backend: "memory" };
@@ -50,6 +64,11 @@ export async function enqueueTask(name, payload, localHandler) {
     }
   });
   return job;
+}
+
+/** Fire-and-forget enqueue; never blocks the HTTP response on queue connectivity. */
+export function enqueueTaskLater(name, payload, localHandler) {
+  void enqueueTask(name, payload, localHandler).catch(() => {});
 }
 
 export async function getTask(id) {

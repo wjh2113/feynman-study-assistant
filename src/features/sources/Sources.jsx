@@ -130,22 +130,21 @@ export function Sources({
   };
 
   const deleteSource = async (source) => {
+    setDeleteSourceId(null);
     setDeletingSourceId(source.id);
+    showToast(`正在删除「${source.name}」…`);
     try {
       const data = await deleteDocument(project.id, source.id);
       updateProject(data.project);
       if (openSource === source.id) setOpenSource(null);
-      setDeleteSourceId(null);
-      if (data.resummarize?.queued) {
-        showToast(`已删除“${source.name}”，正在后台重嵌剩余资料并重建知识地图`);
-      } else if (data.resummarize?.resummarized) {
-        showToast(`已删除“${source.name}”，向量分块已清理，知识地图已按剩余资料重新总结`);
+      if (data.queued || data.resummarize?.queued) {
+        showToast(`已移除「${source.name}」，正在后台清理向量并重建知识地图`);
       } else if (data.mapCleared && data.needsResummarize) {
-        showToast(`已删除“${source.name}”及向量分块，知识地图已清空，请重新总结剩余资料`);
+        showToast(`已删除「${source.name}」，知识地图已清空，请重新总结剩余资料`);
       } else if (data.mapCleared) {
-        showToast(`已删除“${source.name}”及向量分块，知识地图已清空`);
+        showToast(`已删除「${source.name}」及向量分块，知识地图已清空`);
       } else {
-        showToast(`已删除“${source.name}”及其检索分块`);
+        showToast(`已删除「${source.name}」`);
       }
     } catch (error) {
       showToast(error.message);
@@ -210,7 +209,8 @@ export function Sources({
             type="button"
             className="icon-btn source-delete-btn"
             aria-label={`删除资料 ${source.name}`}
-            title="删除资料"
+            title={deletingSourceId === source.id ? "正在删除…" : "删除资料"}
+            disabled={deletingSourceId === source.id}
             onClick={() => setDeleteSourceId(source.id)}
           >
             <Trash2 size={16} />
@@ -374,7 +374,7 @@ export function Sources({
         tone="danger"
         title={`确认删除「${sources.find((item) => item.id === deleteSourceId)?.name || "这份资料"}」？`}
         description="将删除原文件与对应向量；剩余资料会在后台重新分块嵌入，并重建知识地图。此操作无法撤销。"
-        confirmLabel={deletingSourceId ? "正在删除…" : "确认删除"}
+        confirmLabel="确认删除"
         cancelLabel="取消"
         onCancel={() => {
           if (!deletingSourceId) setDeleteSourceId(null);

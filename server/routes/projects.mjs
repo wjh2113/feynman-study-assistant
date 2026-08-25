@@ -4,10 +4,7 @@ import { randomUUID } from "node:crypto";
 import { projectForPersistence } from "../../src/lib/progress.mjs";
 import { getObject } from "../object-storage.mjs";
 import {
-  countDocumentChunks,
   deleteChapter,
-  deleteChunksByFilename,
-  deleteDocument,
   deleteProject,
   ensureDefaultChapter,
   findProjectDocument,
@@ -22,8 +19,8 @@ import {
   saveChapter,
   saveProject
 } from "../storage.mjs";
-import { resummarizeProject } from "../services/resummarize.mjs";
-import { enqueueTask } from "../task-queue.mjs";
+import { completeDocumentDelete } from "../services/document-delete.mjs";
+import { enqueueTaskLater } from "../task-queue.mjs";
 
 const router = Router();
 
@@ -175,20 +172,13 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
       documentId: source.id,
       filename: source.name
     });
-    const removal = stored
-      ? await deleteDocument(req.params.projectId, stored.id)
-      : { deleted: false, chunksDeleted: 0 };
-    const extraChunks = await deleteChunksByFilename(req.params.projectId, source.name);
     const remainingSources = sources.filter((item) => item.id !== source.id && item.name !== source.name);
     const deletedName = String(source.name || "");
     const removedIds = new Set([source.id, stored?.id, req.params.documentId].filter(Boolean));
     const practiceDocumentIds = (project.practiceDocumentIds || []).filter((id) => !removedIds.has(id));
-    const remainingChunks = await countDocumentChunks(req.params.projectId);
-
-    // Subject knowledge map is derived from all materials together — clear it and
-    // rebuild asynchronously so delete stays fast (no waiting on LLM/embedding).
     const remainingDocuments = await listDocumentsForProject(req.params.projectId, req.userId);
-    const willQueueMap = remainingDocuments.length > 0;
+    const willQueueRebuild = Boolean(stored?.id) || remainingDocuments.length > 0;
+
     const analysis = {
       ...(project.analysis || {}),
       sources: remainingSources,
@@ -201,24 +191,24 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
       documentSummaries: (project.analysis?.documentSummaries || []).filter(
         (item) => String(item.filename || item.name || "") !== deletedName
       ),
-      needsResummarize: remainingSources.length > 0 && !willQueueMap,
-      contentAnalysisStatus: willQueueMap ? "pending" : "ready",
+      needsResummarize: remainingSources.length > 0 && !willQueueRebuild,
+      contentAnalysisStatus: willQueueRebuild ? "pending" : "ready",
       contentAnalysisError: null,
       retrieval: {
         ...(project.analysis?.retrieval || {}),
-        chunks: remainingChunks
+        chunks: Number(project.analysis?.retrieval?.chunks || 0)
       }
     };
 
-    let nextProject = {
+    const nextProject = {
       ...project,
       userId: req.userId,
       analysis,
       practiceDocumentIds,
       onePager: null,
       description: remainingSources.length
-        ? (willQueueMap
-          ? "资料已变更，正在后台重嵌剩余资料并重建知识地图…"
+        ? (willQueueRebuild
+          ? "资料已变更，正在后台清理向量并重建知识地图…"
           : "资料已变更，知识地图已清空，请重新总结剩余资料。")
         : (project.learningPlan?.summary || "上传学习资料后，AI 将生成学科知识地图。"),
       progress: remainingSources.length ? Math.min(Number(project.progress || 0), 15) : 0,
@@ -228,44 +218,48 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
         return !String(item.source || "").startsWith(deletedName);
       })
     };
-    const chunksDeleted = Number(removal.chunksDeleted || 0) + Number(extraChunks || 0);
+
     await saveProject(nextProject);
     await recordEvent(req.userId, req.params.projectId, "document_deleted", {
       documentId: stored?.id || source.id,
       filename: source.name,
       mapCleared: true,
       needsResummarize: analysis.needsResummarize,
-      mapQueued: willQueueMap,
-      chunksDeleted
+      async: true
     });
 
-    let resummarize = null;
-    if (willQueueMap) {
-      // Full rebuild: re-parse + re-embed remaining docs, then regenerate the map.
-      // Kept async so the delete API itself stays fast.
-      const job = await enqueueTask(
-        "resummarize",
-        { projectId: req.params.projectId, userId: req.userId, mapOnly: false },
-        ({ projectId, userId, mapOnly }, progress) =>
-          resummarizeProject(projectId, userId, progress, { mapOnly: Boolean(mapOnly) })
-      );
-      resummarize = { queued: true, mapOnly: false, job };
-    }
+    enqueueTaskLater(
+      "document-delete",
+      {
+        projectId: req.params.projectId,
+        userId: req.userId,
+        sourceId: source.id,
+        sourceName: source.name,
+        storedId: stored?.id || null,
+        filename: source.name
+      },
+      (payload, progress) => completeDocumentDelete(payload, progress)
+    );
 
-    res.json({
+    const nextDocumentCount = stored
+      ? Math.max(0, remainingDocuments.length - 1)
+      : remainingDocuments.length;
+
+    res.status(202).json({
       project: {
         ...nextProject,
-        documentCount: remainingDocuments.length
+        documentCount: nextDocumentCount
       },
       deleted: {
         id: source.id,
         storedId: stored?.id || null,
         name: source.name,
-        chunksDeleted
+        pending: true
       },
       mapCleared: true,
       needsResummarize: Boolean(nextProject.analysis?.needsResummarize),
-      resummarize
+      queued: true,
+      resummarize: willQueueRebuild ? { queued: true, async: true } : null
     });
   } catch (error) {
     res.status(400).json({ error: error.message || "删除资料失败" });
