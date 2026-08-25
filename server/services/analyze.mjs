@@ -23,7 +23,7 @@ import { deepseek } from "./llm.mjs";
 import { getUserPreferences } from "../user-preferences.mjs";
 
 const INGEST_CORPUS_BUDGET = Number(process.env.INGESTION_CORPUS_CHARS || 48_000);
-const INGEST_LLM_TIMEOUT_MS = Number(process.env.INGESTION_GENERATION_TIMEOUT_MS || 180_000);
+const INGEST_LLM_TIMEOUT_MS = Number(process.env.INGESTION_GENERATION_TIMEOUT_MS || 300_000);
 const SPLIT_PART_BUDGET = Number(process.env.INGESTION_SPLIT_PART_CHARS || 18_000);
 const SPLIT_CONCURRENCY = Math.max(1, Math.min(3, Number(process.env.INGESTION_SPLIT_CONCURRENCY || 2)));
 
@@ -829,6 +829,35 @@ export async function analyzeFiles({
         await onProgress({ percent: 100, stage: "completed", label: "资料解析完成" });
       }
     } else {
+      analysis = {
+        ...demo,
+        documentSummaries: heuristicSummaries,
+        sources: mergeAnalysisSources(existingAnalysis.sources, interimSources),
+        questions: normalizeQuestions(null, demo),
+        projectId,
+        needsResummarize: false,
+        contentAnalysisStatus: "ready",
+        contentAnalysisError: null,
+        retrieval: interimAnalysis.retrieval,
+        demo: true
+      };
+      await saveProject({
+        ...(existingProject || {}),
+        userId,
+        id: projectId,
+        title,
+        mode,
+        createdAt: existingProject?.createdAt || Date.now(),
+        progress: 22,
+        description: analysis.summary,
+        analysis,
+        blindspots: existingProject?.blindspots || [],
+        sessions: existingProject?.sessions || [],
+        onePager: existingProject?.onePager || null,
+        learningPlan: existingProject?.learningPlan || null,
+        goal: existingProject?.goal,
+        level: existingProject?.level
+      });
       await onProgress({ percent: 100, stage: "completed", label: "资料解析完成（演示模式）" });
     }
     return analysis;

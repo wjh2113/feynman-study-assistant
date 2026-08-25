@@ -35,12 +35,17 @@ export function getGatewayPublicStatus() {
 }
 
 function gatewayError(status, detail = "") {
-  const snippet = String(detail || "").slice(0, 200);
+  const raw = String(detail || "");
+  const isHtml = /<!DOCTYPE|<html/i.test(raw);
+  const snippet = (isHtml ? raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : raw).slice(0, 160);
   if (status === 401) return new Error(`LLM 网关鉴权失败（401），请检查 LLM_GATEWAY_API_KEY${snippet ? `：${snippet}` : ""}`);
   if (status === 402) return new Error("LLM 网关积分不足（402），请联系管理员充值");
   if (status === 403) return new Error(`LLM 网关数据级别受限（403）${snippet ? `：${snippet}` : ""}`);
   if (status === 404) return new Error(`LLM 网关能力不存在（404）${snippet ? `：${snippet}` : ""}`);
   if (status === 503) return new Error("LLM 网关暂无可用模型路由（503）");
+  if (status === 504 || /gateway time-?out/i.test(raw)) {
+    return new Error("LLM 网关超时（504）。知识地图生成较慢，请稍后点「重新总结」重试；若反复失败请缩短资料或调高网关 quality-chat 超时");
+  }
   return new Error(`LLM 网关返回 ${status}${snippet ? `：${snippet}` : ""}`);
 }
 
