@@ -633,11 +633,15 @@ test("删除资料会同步清理原始文件、项目记录和向量分块", as
   if (data.project.analysis.sources.length === 0) {
     assert.equal(data.project.analysis.modules.length, 0);
     assert.equal(data.needsResummarize, false);
+  } else if (data.resummarize?.queued) {
+    assert.equal(data.project.analysis.modules.length, 0);
+    assert.ok(["pending", "running"].includes(data.project.analysis.contentAnalysisStatus));
   } else if (data.resummarize?.error) {
     assert.equal(data.project.analysis.modules.length, 0);
     assert.equal(data.needsResummarize, true);
   } else {
-    assert.equal(data.project.analysis.needsResummarize, false);
+    assert.equal(data.project.analysis.modules.length, 0);
+    assert.equal(data.needsResummarize, true);
   }
 
   const originalFile = await authFetch(`${baseUrl}${target.downloadUrl}`);

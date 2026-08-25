@@ -23,6 +23,7 @@ import {
   saveProject
 } from "../storage.mjs";
 import { resummarizeProject } from "../services/resummarize.mjs";
+import { enqueueTask } from "../task-queue.mjs";
 
 const router = Router();
 
@@ -184,8 +185,10 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
     const practiceDocumentIds = (project.practiceDocumentIds || []).filter((id) => !removedIds.has(id));
     const remainingChunks = await countDocumentChunks(req.params.projectId);
 
-    // Subject knowledge map is derived from all materials together — clear it so
-    // remaining files can be re-summarized without stale modules/concepts.
+    // Subject knowledge map is derived from all materials together — clear it and
+    // rebuild asynchronously so delete stays fast (no waiting on LLM/embedding).
+    const remainingDocuments = await listDocumentsForProject(req.params.projectId, req.userId);
+    const willQueueMap = remainingDocuments.length > 0;
     const analysis = {
       ...(project.analysis || {}),
       sources: remainingSources,
@@ -198,7 +201,9 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
       documentSummaries: (project.analysis?.documentSummaries || []).filter(
         (item) => String(item.filename || item.name || "") !== deletedName
       ),
-      needsResummarize: remainingSources.length > 0,
+      needsResummarize: remainingSources.length > 0 && !willQueueMap,
+      contentAnalysisStatus: willQueueMap ? "pending" : "ready",
+      contentAnalysisError: null,
       retrieval: {
         ...(project.analysis?.retrieval || {}),
         chunks: remainingChunks
@@ -212,7 +217,9 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
       practiceDocumentIds,
       onePager: null,
       description: remainingSources.length
-        ? "资料已变更，知识地图已清空，请重新总结剩余资料。"
+        ? (willQueueMap
+          ? "资料已变更，知识地图正在后台重新生成…"
+          : "资料已变更，知识地图已清空，请重新总结剩余资料。")
         : (project.learningPlan?.summary || "上传学习资料后，AI 将生成学科知识地图。"),
       progress: remainingSources.length ? Math.min(Number(project.progress || 0), 15) : 0,
       blindspots: (project.blindspots || []).filter((item) => {
@@ -228,19 +235,19 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
       filename: source.name,
       mapCleared: true,
       needsResummarize: analysis.needsResummarize,
+      mapQueued: willQueueMap,
       chunksDeleted
     });
 
     let resummarize = null;
-    const remainingDocuments = await listDocumentsForProject(req.params.projectId, req.userId);
-    if (remainingDocuments.length) {
-      try {
-        resummarize = await resummarizeProject(req.params.projectId, req.userId);
-        nextProject = resummarize.project;
-      } catch (error) {
-        // Keep cleared map; client can retry via /resummarize
-        resummarize = { error: error.message || "重新总结失败", resummarized: false };
-      }
+    if (willQueueMap) {
+      const job = await enqueueTask(
+        "resummarize",
+        { projectId: req.params.projectId, userId: req.userId, mapOnly: true },
+        ({ projectId, userId, mapOnly }, progress) =>
+          resummarizeProject(projectId, userId, progress, { mapOnly: Boolean(mapOnly) })
+      );
+      resummarize = { queued: true, mapOnly: true, job };
     }
 
     res.json({

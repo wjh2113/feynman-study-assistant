@@ -136,7 +136,9 @@ export function Sources({
       updateProject(data.project);
       if (openSource === source.id) setOpenSource(null);
       setDeleteSourceId(null);
-      if (data.resummarize?.resummarized) {
+      if (data.resummarize?.queued) {
+        showToast(`已删除“${source.name}”，向量已清理，知识地图正在后台重建`);
+      } else if (data.resummarize?.resummarized) {
         showToast(`已删除“${source.name}”，向量分块已清理，知识地图已按剩余资料重新总结`);
       } else if (data.mapCleared && data.needsResummarize) {
         showToast(`已删除“${source.name}”及向量分块，知识地图已清空，请重新总结剩余资料`);
@@ -367,7 +369,7 @@ export function Sources({
         open={Boolean(deleteSourceId)}
         tone="danger"
         title={`确认删除「${sources.find((item) => item.id === deleteSourceId)?.name || "这份资料"}」？`}
-        description="将删除原文件、对应向量分块与检索索引，并按剩余资料重新生成知识地图。此操作无法撤销。"
+        description="将删除原文件、对应向量分块与检索索引；知识地图会在后台按剩余资料重建。此操作无法撤销。"
         confirmLabel={deletingSourceId ? "正在删除…" : "确认删除"}
         cancelLabel="取消"
         onCancel={() => {
