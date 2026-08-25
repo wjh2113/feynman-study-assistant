@@ -123,6 +123,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
   }, [question?.id, selectionKey]);
 
   useEffect(() => {
+    getPreferences()
       .then((data) => setPrefs((current) => ({ ...current, ...data })))
       .catch(() => {})
       .finally(() => setPrefsReady(true));
