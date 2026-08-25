@@ -691,6 +691,53 @@ export async function generateVariantQuestion(project, blindspot, concept, userI
   };
 }
 
+function slimProjectForOnePager(project, practice, selectedDocs = []) {
+  const sources = (selectedDocs.length
+    ? selectedDocs
+    : (project?.analysis?.sources || [])
+  ).slice(0, 8).map((source) => ({
+    id: source.id,
+    name: source.name || source.filename || source.title,
+    summary: source.summary?.summary || source.summary || undefined
+  }));
+  return {
+    title: project?.title,
+    goal: project?.goal,
+    level: project?.level,
+    analysis: {
+      summary: project?.analysis?.summary,
+      highValue: (project?.analysis?.highValue || []).slice(0, 5),
+      modules: (project?.analysis?.modules || []).slice(0, 6).map((module) => ({
+        title: module.title,
+        description: module.description,
+        concepts: (module.concepts || []).slice(0, 4).map((concept) => ({
+          title: concept.title,
+          explanation: String(concept.explanation || "").slice(0, 220),
+          importance: concept.importance,
+          mastery: concept.mastery,
+          sourceRefs: (concept.sourceRefs || []).slice(0, 2)
+        }))
+      })),
+      tacitKnowledge: (project?.analysis?.tacitKnowledge || []).slice(0, 4).map((item) => ({
+        title: item.title,
+        type: item.type,
+        detail: String(item.detail || "").slice(0, 180)
+      })),
+      sources
+    },
+    blindspots: (practice?.blindspots || []).slice(0, 6).map((item) => ({
+      title: item.title,
+      action: item.action,
+      detail: String(item.detail || item.why || "").slice(0, 180)
+    })),
+    sessions: (practice?.sessions || []).slice(0, 8).map((item) => ({
+      concept: item.concept,
+      score: item.score,
+      summary: item.summary || item.reflection
+    }))
+  };
+}
+
 export async function generateOnePager({ userId, project, chapter = null, documentIds = [], practiceDocs = null }) {
   try {
     if (!project || typeof project !== "object") {
@@ -793,23 +840,43 @@ export async function generateOnePager({ userId, project, chapter = null, docume
       if (project?.id) await recordEvent(userId, project.id, "one_pager_generated", payload);
       return { body: payload };
     }
-    const result = await deepseek([
-      {
-        role: "system",
-        content:
-          "你负责把学习过程沉淀为简洁的一页纸和可直接写作的专业成果大纲。优先使用上传资料、知识地图、用户对练与盲区中形成的观点，不虚构资料、引文或用户经历。大纲必须体现底层逻辑、实战判断和认知修正，不要只罗列知识点。只输出JSON。"
-      },
-      {
-        role: "user",
-        content: `根据以下项目数据生成“一页纸学习卡 + 深度复盘/项目拆解文章大纲”：
-${JSON.stringify(project ?? {}).slice(0, 120000)}
+    const slimProject = slimProjectForOnePager(project, practice, selectedDocs);
+    const onePagerTimeoutMs = Number(process.env.ONE_PAGER_TIMEOUT_MS || process.env.GENERATION_TIMEOUT_MS || 180_000);
+    let result;
+    try {
+      result = await deepseek([
+        {
+          role: "system",
+          content:
+            "你负责把学习过程沉淀为简洁的一页纸和可直接写作的专业成果大纲。优先使用上传资料、知识地图、用户对练与盲区中形成的观点，不虚构资料、引文或用户经历。大纲必须体现底层逻辑、实战判断和认知修正，不要只罗列知识点。只输出JSON。"
+        },
+        {
+          role: "user",
+          content: `根据以下项目数据生成“一页纸学习卡 + 深度复盘/项目拆解文章大纲”：
+${JSON.stringify(slimProject)}
 返回：
 {"title":"","thesis":"","takeaways":["","",""],"action":"","reflection":"",
 "outline":{"title":"","format":"深度复盘 / 项目拆解文章","audience":"","coreArgument":"",
 "sections":[{"title":"","purpose":"","keyPoints":[""],"evidence":["仅填写项目数据中真实存在的文件、页码、对练或盲区"],"writingPrompt":""}]}}
-要求 outline.sections 为5至7章，每章都说明写作目的、2至4个核心论点、可核对依据和具体写作提示。`
-      }
-    ], 0.35, userId);
+要求 outline.sections 为5至7章，每章都说明写作目的、2至4个核心论点、可核对依据和具体写作提示。若对练/盲区为 0，可写“待补充”，不要编造。`
+        }
+      ], 0.35, userId, onePagerTimeoutMs);
+    } catch (error) {
+      // Prefer a usable local outline over a hard failure when the gateway is slow.
+      const payload = {
+        title: `${subjectTitle}${docsLabel}` || "学习一页纸",
+        thesis: project?.analysis?.summary || "先掌握骨架，再通过输出和追问把知识变成能力。",
+        takeaways: project?.analysis?.highValue || [],
+        action: "明天选择一个真实问题，用“问题—假设—验证”的结构完成一次15分钟分析。",
+        reflection: "我最大的变化，是从收集答案转向验证自己的理解。",
+        outline: fallbackOutline,
+        demo: false,
+        degraded: true,
+        notice: error.message || "模型生成超时，已使用本地大纲"
+      };
+      if (project?.id) await recordEvent(userId, project.id, "one_pager_degraded", { error: error.message });
+      return { body: payload };
+    }
     if (!result || typeof result !== "object") throw new Error("文本模型没有返回有效的学习成果结构");
     const normalized = {
       ...result,

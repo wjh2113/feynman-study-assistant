@@ -61,7 +61,7 @@ export function OutputStudio({ project, selectedDocumentIds = [], updateProject,
         updateProject({ onePager: data });
       }
       await refreshProject?.(project.id);
-      showToast("学习成果已生成");
+      showToast(data.notice || (data.degraded ? "模型较慢，已先生成可用大纲" : "学习成果已生成"));
     } catch (error) {
       showToast(error.message);
     } finally {

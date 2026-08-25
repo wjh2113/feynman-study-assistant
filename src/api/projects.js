@@ -1,4 +1,4 @@
-import { apiFetch } from "./client.js";
+import { apiFetch, fetchJsonWithTimeout } from "./client.js";
 
 export function listProjects() {
   return apiFetch("/api/projects");
@@ -100,8 +100,9 @@ export function variantQuestion(projectId, blindspotId, { chapterId, documentIds
 }
 
 export function generateOnePager(project, { chapter, documentIds, practiceDocumentIds, practiceDocs } = {}) {
-  return apiFetch("/api/one-pager", {
+  return fetchJsonWithTimeout("/api/one-pager", {
     method: "POST",
+    credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       project,
@@ -110,7 +111,7 @@ export function generateOnePager(project, { chapter, documentIds, practiceDocume
       practiceDocumentIds,
       practiceDocs
     })
-  });
+  }, 200_000, "一页纸生成");
 }
 
 export function generateLearningPlan({ title, goal, level }) {
