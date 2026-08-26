@@ -64,4 +64,7 @@ sudo pm2 status zhifan-feynman-study
 rm -rf "\${STAGING}"
 REMOTE
 
+echo "==> Ensure nginx upload limits for study.aidigitcloud.cn"
+"${ROOT}/scripts/ensure-nginx-study.sh"
+
 echo "==> Done"
