@@ -93,6 +93,23 @@ export function Sources({
   const mapFailed = mapStatus === "failed";
   const mapBusy = mapPending || resummarizing;
   const resummarizeLabel = mapBusy ? "正在生成知识地图…" : "重新总结知识地图";
+  const persistedSourceNames = useMemo(() => new Set(sources.map((source) => source.name)), [sources]);
+  const ingestingFilenames = useMemo(() => {
+    if (!analysisTask?.filenames?.length) return [];
+    return analysisTask.filenames.filter((name) => !persistedSourceNames.has(name));
+  }, [analysisTask, persistedSourceNames]);
+  const ingestingStageLabel = useMemo(() => {
+    const labels = {
+      queued: "排队中",
+      ocr: "OCR 解析中",
+      embedding: "生成向量中",
+      storage: "写入索引中",
+      content: "生成知识地图中",
+      completed: "即将完成"
+    };
+    return labels[analysisTask?.stage] || "后台解析中";
+  }, [analysisTask?.stage]);
+  const listSourceCount = sources.length + ingestingFilenames.length;
 
   useEffect(() => {
     if (mapPending) setResummarizing(false);
@@ -129,6 +146,25 @@ export function Sources({
       window.clearInterval(timer);
     };
   }, [mapPending, project.id, updateProject, showToast]);
+
+  useEffect(() => {
+    if (!analysisTask || !project.id) return undefined;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const data = await getProject(project.id);
+        if (!cancelled && data.project) updateProject(data.project);
+      } catch {
+        // keep current project state
+      }
+    };
+    poll();
+    const timer = window.setInterval(poll, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [analysisTask?.id, project.id, updateProject]);
 
   useEffect(() => {
     if (!project.id || !hasDuplicateSources) return undefined;
@@ -275,6 +311,17 @@ export function Sources({
       setResummarizing(false);
     }
   };
+
+  const renderPendingIngestion = (filename, index) => (
+    <div className="file-row file-row-pending" key={`ingesting-${filename}-${index}`}>
+      <FileTypeIcon name={filename} />
+      <div className="file-copy">
+        <strong>{filename}</strong>
+        <span>{ingestingStageLabel} · 入库完成后可展开查看大纲</span>
+      </div>
+      <span className="source-pending-badge"><Spinner /> 解析中</span>
+    </div>
+  );
 
   const renderSource = (source) => {
     const expanded = openSource === source.id;
@@ -478,7 +525,10 @@ export function Sources({
 
       <section className="panel file-panel">
         <div className="panel-head">
-          <div><span className="section-kicker">{hasPersistedSources ? "已入库" : "资料列表"}</span><h3>{sources.length} 份资料</h3></div>
+          <div>
+            <span className="section-kicker">{hasPersistedSources ? "已入库" : ingestingFilenames.length ? "解析中 / 已入库" : "资料列表"}</span>
+            <h3>{listSourceCount} 份资料{ingestingFilenames.length ? `（${ingestingFilenames.length} 份解析中）` : ""}</h3>
+          </div>
           <div className="source-panel-actions">
             {hasPersistedSources && !!sources.length && (
               <button className="secondary-btn" onClick={resummarizeSources} disabled={mapBusy || loading}>
@@ -496,7 +546,11 @@ export function Sources({
           </div>
         </div>
         {sources.map(renderSource)}
-        {!sources.length && <EmptyMini text="还没有已解析的资料。" />}
+        {ingestingFilenames.map(renderPendingIngestion)}
+        {!listSourceCount && <EmptyMini text="还没有已解析的资料。" />}
+        {!sources.length && ingestingFilenames.length > 0 && (
+          <p className="source-list-hint">资料尚未入库，解析完成后会自动出现在列表中。</p>
+        )}
       </section>
       <ConfirmDialog
         open={Boolean(deleteSourceId)}

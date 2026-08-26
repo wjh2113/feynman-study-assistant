@@ -1951,6 +1951,10 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 .analysis-stage-list { grid-column: 2 / -1; display: flex; gap: 6px; }
 .analysis-stage-list span { border-radius: 10px; padding: 3px 7px; color: #87938b; background: #e5eee7; font-size: 8px; }
 .analysis-stage-list span.active { color: white; background: var(--green); }
+.file-row-pending { opacity: .92; }
+.file-row-pending .file-copy span { color: #6a8f74; }
+.source-pending-badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 10px; padding: 4px 8px; color: var(--green); background: #e8f2ea; font-size: 8px; white-space: nowrap; }
+.source-list-hint { margin: 0 14px 14px; color: #8a938c; font-size: 8px; line-height: 1.6; }
 .notification-shell { position: relative; }
 .notification-button { position: relative; }
 .notification-button em { position: absolute; right: -3px; top: -4px; min-width: 15px; height: 15px; border-radius: 8px; padding: 0 4px; display: grid; place-items: center; color: white; background: #b45246; font-size: 8px; font-style: normal; }
