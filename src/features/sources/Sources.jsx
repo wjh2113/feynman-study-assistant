@@ -73,6 +73,7 @@ export function Sources({
 }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [openSource, setOpenSource] = useState(null);
   const [deleteSourceId, setDeleteSourceId] = useState(null);
   const [deletingSourceId, setDeletingSourceId] = useState(null);
@@ -186,13 +187,16 @@ export function Sources({
     }
     if (analysisTask) return showToast("当前项目已有资料正在后台解析");
     setLoading(true);
+    setUploadProgress(0);
     try {
       const body = new FormData();
       selectedFiles.forEach((file) => body.append("files", file));
       body.append("projectId", project.id);
       body.append("title", project.title);
       body.append("mode", project.mode);
-      const data = await analyzeBackground(body);
+      const data = await analyzeBackground(body, {
+        onUploadProgress: (percent) => setUploadProgress(percent)
+      });
       if (!data.task?.id) throw new Error("后台任务创建失败");
       onTaskStarted(data.task, project.id, selectedFiles.map((file) => file.name), data.ingestionId);
       showToast("资料已上传，正在后台解析；完成后会通知你");
@@ -201,6 +205,7 @@ export function Sources({
       showToast(error.message);
     } finally {
       setLoading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -364,7 +369,7 @@ export function Sources({
         eyebrow="构建专属语料库"
         title="学科资料"
         description="上传课件与笔记。解析完成后会展示资料大纲，便于核对是否解析完整；再进入知识地图。练习时再勾选要使用的资料。"
-        action={<button className="primary-btn" onClick={analyze} disabled={loading}>{loading ? <Spinner /> : <Sparkles size={17} />}{loading ? "正在提炼…" : files.length ? `分析 ${files.length} 份新资料` : "查看知识地图"}</button>}
+        action={<button className="primary-btn" onClick={analyze} disabled={loading || !!analysisTask}>{loading ? <Spinner /> : <Sparkles size={17} />}{loading ? "正在上传…" : analysisTask ? "后台解析中" : files.length ? `分析 ${files.length} 份新资料` : "查看知识地图"}</button>}
       />
 
       <div
@@ -380,7 +385,27 @@ export function Sources({
         <div className="upload-hint"><Zap size={14} /> PDF 扫描页、文档截图和单独图片会进入 OCR 识别流程</div>
       </div>
 
-      {analysisTask && (
+      {loading && (
+        <div className="analysis-task-card" role="status">
+          <Spinner />
+          <div>
+            <strong>{uploadProgress > 0 ? `正在上传资料（${uploadProgress}%）` : "正在上传资料…"}</strong>
+            <span>{files.length} 份 · 上传完成后将自动进入后台解析，可继续使用其他功能</span>
+          </div>
+          <div className={`analysis-task-progress${uploadProgress > 0 ? "" : " is-indeterminate"}`}>
+            <i style={{ width: `${Math.max(uploadProgress, uploadProgress > 0 ? uploadProgress : 35)}%` }} />
+          </div>
+          <b>{uploadProgress > 0 ? `${uploadProgress}%` : "…"}</b>
+          <div className="analysis-stage-list">
+            <span className="active">上传</span>
+            <span>OCR</span>
+            <span>Embedding</span>
+            <span>入库</span>
+          </div>
+        </div>
+      )}
+
+      {!loading && analysisTask && (
         <div className="analysis-task-card" role="status">
           <Spinner />
           <div><strong>{analysisTask.label || "资料正在后台解析"}</strong><span>可以继续使用其他功能，完成后会发送通知</span></div>

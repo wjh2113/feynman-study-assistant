@@ -1941,6 +1941,11 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 .analysis-task-card > div:nth-child(2) strong { font-size: 10px; }
 .analysis-task-card > div:nth-child(2) span { margin-top: 3px; color: #738078; font-size: 8px; }
 .analysis-task-progress { height: 6px; overflow: hidden; border-radius: 6px; background: #dce9df; }
+.analysis-task-progress.is-indeterminate i { width: 35% !important; animation: analysis-progress-indeterminate 1.4s ease-in-out infinite; }
+@keyframes analysis-progress-indeterminate {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}
 .analysis-task-progress i { display: block; height: 100%; border-radius: inherit; background: var(--green); transition: width .35s ease; }
 .analysis-task-card > b { font-size: 9px; }
 .analysis-stage-list { grid-column: 2 / -1; display: flex; gap: 6px; }
