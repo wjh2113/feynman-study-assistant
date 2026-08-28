@@ -19,6 +19,7 @@ import { formatSize } from "../../lib/format.js";
 import { outlineForSource } from "../../lib/documentOutline.js";
 import { dedupeAnalysisSources } from "../../lib/analysis-sources.mjs";
 import { resolveMapAvailability } from "../../lib/map-availability.js";
+import { decodeUploadName } from "../../lib/filename-encoding.js";
 import { analyzeBackground } from "../../api/ingest.js";
 import { deleteDocument, getProject, reindexProject, resummarizeProjectBackground, syncProjectSources } from "../../api/projects.js";
 import { FileTypeIcon } from "./FileTypeIcon.jsx";
@@ -96,7 +97,9 @@ export function Sources({
   const persistedSourceNames = useMemo(() => new Set(sources.map((source) => source.name)), [sources]);
   const ingestingFilenames = useMemo(() => {
     if (!analysisTask?.filenames?.length) return [];
-    return analysisTask.filenames.filter((name) => !persistedSourceNames.has(name));
+    return analysisTask.filenames
+      .map((name) => decodeUploadName(name))
+      .filter((name) => !persistedSourceNames.has(name));
   }, [analysisTask, persistedSourceNames]);
   const ingestingStageLabel = useMemo(() => {
     const labels = {

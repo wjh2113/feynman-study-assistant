@@ -18,6 +18,7 @@ import { rateLimit } from "../middleware/security.mjs";
 import { analyzeFiles, enqueueAnalysis } from "../services/analyze.mjs";
 import { reindexProject } from "../services/reindex.mjs";
 import { resummarizeProject } from "../services/resummarize.mjs";
+import { decodeUploadName } from "../document-parser.mjs";
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
@@ -26,19 +27,28 @@ const upload = multer({
   limits: { fileSize: MAX_UPLOAD_BYTES, files: 12 }
 });
 
+function normalizeUploadedFilenames(req, _res, next) {
+  for (const file of req.files || []) {
+    file.originalname = decodeUploadName(file.originalname);
+  }
+  next();
+}
+
 function uploadAnalyzeFiles(req, res, next) {
   upload.array("files", 12)(req, res, (error) => {
-    if (!error) return next();
-    if (error instanceof multer.MulterError) {
-      if (error.code === "LIMIT_FILE_SIZE") {
-        return res.status(413).json({ error: "单个文件不能超过 100 MB，请压缩或拆分后再上传" });
+    if (error) {
+      if (error instanceof multer.MulterError) {
+        if (error.code === "LIMIT_FILE_SIZE") {
+          return res.status(413).json({ error: "单个文件不能超过 100 MB，请压缩或拆分后再上传" });
+        }
+        if (error.code === "LIMIT_FILE_COUNT") {
+          return res.status(400).json({ error: "一次最多上传 12 个文件" });
+        }
+        return res.status(400).json({ error: `上传失败：${error.message}` });
       }
-      if (error.code === "LIMIT_FILE_COUNT") {
-        return res.status(400).json({ error: "一次最多上传 12 个文件" });
-      }
-      return res.status(400).json({ error: `上传失败：${error.message}` });
+      return res.status(400).json({ error: error.message || "上传失败" });
     }
-    return res.status(400).json({ error: error.message || "上传失败" });
+    return normalizeUploadedFilenames(req, res, next);
   });
 }
 
@@ -177,7 +187,7 @@ router.get("/api/ingestions/:ingestionId", async (req, res) => {
     stage: ingestion.stage,
     progress: Number(ingestion.progress || 0),
     error: ingestion.error,
-    filenames: (ingestion.payload.files || []).map((file) => file.originalname)
+    filenames: (ingestion.payload.files || []).map((file) => decodeUploadName(file.originalname))
   } });
 });
 

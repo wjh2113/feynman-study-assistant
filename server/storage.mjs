@@ -5,6 +5,7 @@ import { projectForPersistence } from "../src/lib/progress.mjs";
 import { deleteObject, putObject } from "./object-storage.mjs";
 import { dataDir, uploadDir, getDatabase, databaseStatus } from "./db/client.mjs";
 import { hybridSearch } from "./repos/search.mjs";
+import { decodeUploadName } from "./document-parser.mjs";
 
 export { dataDir, uploadDir, getDatabase, databaseStatus, hybridSearch };
 
@@ -598,7 +599,7 @@ export async function listIngestionJobs(userId, statuses = ["waiting", "active"]
         stage: row.stage,
         progress: Number(row.progress || 0),
         error: row.error,
-        filenames: (payload.files || []).map((file) => file.originalname),
+        filenames: (payload.files || []).map((file) => decodeUploadName(file.originalname)),
         createdAt: row.created_at,
         updatedAt: row.updated_at
       };

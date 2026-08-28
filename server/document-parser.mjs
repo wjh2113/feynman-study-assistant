@@ -296,9 +296,15 @@ async function parseImage(file, filename, ext, userId) {
   };
 }
 
-function decodeUploadName(filename) {
-  const decoded = Buffer.from(filename, "latin1").toString("utf8");
-  return decoded.includes("\uFFFD") ? filename : decoded;
+/** Multer often gives UTF-8 filenames as latin1 bytes; restore readable Chinese names. */
+export function decodeUploadName(filename) {
+  const raw = String(filename || "");
+  if (!raw) return raw;
+  const decoded = Buffer.from(raw, "latin1").toString("utf8");
+  if (decoded.includes("\uFFFD")) return raw;
+  // Prefer decoded form when it recovers CJK / non-ASCII that looked garbled.
+  if (decoded !== raw && /[^\u0000-\u007f]/.test(decoded)) return decoded;
+  return raw;
 }
 
 export async function parseFile(file, userId) {
