@@ -76,7 +76,7 @@ export function Sources({
   const [loading, setLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [openSource, setOpenSource] = useState(null);
-  const [bankFocusId, setBankFocusId] = useState(null);
+  const [bankViewerId, setBankViewerId] = useState(null);
   const [deleteSourceId, setDeleteSourceId] = useState(null);
   const [deletingSourceId, setDeletingSourceId] = useState(null);
   const [reindexing, setReindexing] = useState(false);
@@ -174,15 +174,18 @@ export function Sources({
   }, [bankPending]);
 
   useEffect(() => {
-    if (!bankFocusId || openSource !== bankFocusId) return undefined;
-    const timer = window.setTimeout(() => {
-      document.getElementById(`question-bank-${bankFocusId}`)?.scrollIntoView({
-        behavior: "smooth",
-        block: "nearest"
-      });
-    }, 80);
-    return () => window.clearTimeout(timer);
-  }, [bankFocusId, openSource]);
+    if (!bankViewerId) return undefined;
+    const onKey = (event) => {
+      if (event.key === "Escape") setBankViewerId(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [bankViewerId]);
+
+  const bankViewerSource = useMemo(
+    () => sources.find((source) => source.id === bankViewerId) || null,
+    [sources, bankViewerId]
+  );
 
   useEffect(() => {
     if (!analysisTask || !project.id) return undefined;
@@ -384,10 +387,6 @@ export function Sources({
       outline.completeness === "complete" ? "解析较完整"
         : outline.completeness === "empty" ? "未提取到文本"
           : "解析可能不完整";
-    const openBank = () => {
-      setOpenSource(source.id);
-      setBankFocusId(source.id);
-    };
     return (
       <div className={`source-item ${expanded ? "expanded" : ""}`} key={source.id}>
         <div className="file-row">
@@ -401,14 +400,11 @@ export function Sources({
               {" · "}{bankStatusLabel}
             </span>
           </div>
-          <button type="button" className="parse-toggle" onClick={() => {
-            setBankFocusId(null);
-            setOpenSource(expanded ? null : source.id);
-          }}>
+          <button type="button" className="parse-toggle" onClick={() => setOpenSource(expanded ? null : source.id)}>
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
             {expanded ? "收起" : "查看大纲"}
           </button>
-          <button type="button" className="parse-toggle bank-toggle" onClick={openBank}>
+          <button type="button" className="parse-toggle bank-toggle" onClick={() => setBankViewerId(source.id)}>
             <Sparkles size={14} />
             查看题库{bank.length ? `（${bank.length}）` : ""}
           </button>
@@ -463,43 +459,16 @@ export function Sources({
               )}
               <p className="verification-note">{source.summary?.verificationNote}</p>
             </div>
-
-            <div
-              className={`parse-question-bank${bankFocusId === source.id ? " is-focused" : ""}`}
-              id={`question-bank-${source.id}`}
-            >
-              <div className="parse-outline-head">
+            <div className="parse-question-bank-entry">
+              <div>
                 <span className="section-kicker">费曼题库</span>
-                <b>{bankStatusLabel}</b>
+                <p>{bankStatusLabel} · 对练时按所选资料抽题</p>
               </div>
-              <p className="parse-outline-tip">
-                上传入库后为每份资料生成 10–30 道题；费曼对练时会按所选资料从这些题库中随机抽取。
-                {bankMeta.capability ? ` 当前生成能力：${bankMeta.capability}` : ""}
-                {bankMeta.fallback ? "（含本地兜底题）" : ""}
-              </p>
-              {bankPendingLlm && (
-                <div className="request-warning" role="status" style={{ margin: "0 0 12px" }}>
-                  <Spinner />
-                  <span>正式题库正在后台生成，可先查看临时题目。</span>
-                </div>
-              )}
-              {bank.length ? (
-                <ol className="question-bank-list">
-                  {bank.map((item, index) => (
-                    <li key={item.id || `${source.id}-q-${index}`}>
-                      <strong>{index + 1}. {item.question}</strong>
-                      <span>
-                        {item.concept ? `概念：${item.concept}` : "概念：未标注"}
-                        {item.why ? ` · ${item.why}` : ""}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <p className="parse-outline-empty">本题库尚未生成。解析完成后会自动出现，也可稍后再刷新页面。</p>
-              )}
+              <button type="button" className="parse-toggle bank-toggle" onClick={() => setBankViewerId(source.id)}>
+                <Sparkles size={14} />
+                打开题库
+              </button>
             </div>
-
             {(!!report.warnings?.length || !!outline.notes?.length) && (
               <div className="parse-warning"><CircleAlert size={15} /><div>{[...(report.warnings || []), ...(outline.notes || []).filter((note) => !(report.warnings || []).includes(note))].map((warning) => <p key={warning}>{warning}</p>)}</div></div>
             )}
@@ -672,6 +641,69 @@ export function Sources({
           <p className="source-list-hint">资料尚未入库，解析完成后会自动出现在列表中。</p>
         )}
       </section>
+      {bankViewerSource ? (
+        <div className="modal-backdrop" onMouseDown={() => setBankViewerId(null)}>
+          <div
+            className="modal question-bank-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="question-bank-modal-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <div>
+                <span id="question-bank-modal-title">费曼题库</span>
+                <small>
+                  {bankViewerSource.name}
+                  {" · "}
+                  {bankViewerSource.questionBankMeta?.pendingLlm
+                    ? `${(bankViewerSource.questionBank || []).length} 题 · 正式题生成中`
+                    : bankViewerSource.questionBankMeta?.generated
+                      ? `${(bankViewerSource.questionBank || []).length} 题`
+                      : (bankViewerSource.questionBank || []).length
+                        ? `${(bankViewerSource.questionBank || []).length} 题 · 临时`
+                        : "暂无题目"}
+                </small>
+              </div>
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="关闭题库"
+                title="关闭"
+                onClick={() => setBankViewerId(null)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="question-bank-modal-body">
+              {bankViewerSource.questionBankMeta?.pendingLlm && (
+                <div className="request-warning" role="status">
+                  <Spinner />
+                  <span>正式题库正在后台生成，可先查看临时题目。</span>
+                </div>
+              )}
+              {(bankViewerSource.questionBank || []).length ? (
+                <ol className="question-bank-list">
+                  {bankViewerSource.questionBank.map((item, index) => (
+                    <li key={item.id || `${bankViewerSource.id}-modal-q-${index}`}>
+                      <strong>{index + 1}. {item.question}</strong>
+                      <span>
+                        {item.concept ? `概念：${item.concept}` : "概念：未标注"}
+                        {item.why ? ` · ${item.why}` : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="parse-outline-empty">本题库尚未生成。解析完成后会自动出现。</p>
+              )}
+            </div>
+            <div className="modal-foot">
+              <button type="button" className="secondary-btn" onClick={() => setBankViewerId(null)}>关闭</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <ConfirmDialog
         open={Boolean(deleteSourceId)}
         tone="danger"

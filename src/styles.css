@@ -409,22 +409,36 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 .parse-outline { margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid #e2e5df; }
 .parse-outline-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
 .parse-outline-tip { margin: 0 0 10px; color: #7b8179; font-size: 11px; line-height: 1.5; }
-.parse-question-bank {
+.parse-question-bank-entry {
   margin: 0 0 16px;
-  padding: 14px 14px 12px;
+  padding: 12px 14px;
   border-radius: 10px;
   border: 1px solid #e7ebe4;
   background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
-.parse-question-bank.is-focused {
-  border-color: #d4b48a;
-  box-shadow: 0 0 0 3px rgba(196, 149, 90, 0.18);
+.parse-question-bank-entry p {
+  margin: 4px 0 0;
+  color: #7b8179;
+  font-size: 11px;
+}
+.question-bank-modal {
+  width: min(720px, 100%);
+  max-height: min(84vh, 820px);
+  display: flex;
+  flex-direction: column;
+}
+.question-bank-modal-body {
+  padding: 8px 22px 18px;
+  overflow: auto;
+  min-height: 180px;
 }
 .question-bank-list {
   margin: 0;
   padding: 0 0 0 18px;
-  max-height: 360px;
-  overflow: auto;
 }
 .question-bank-list li {
   margin: 0 0 12px;
