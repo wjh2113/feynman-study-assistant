@@ -17,7 +17,7 @@ export const PREFERENCE_DEFAULTS = {
   coachRoleMode: "auto",
   coachShowEvidence: true,
   coachBlindspotThreshold: 60,
-  practiceQuestionCapability: "quality-chat",
+  practiceQuestionCapability: "fast-chat",
   ocrEnabled: true,
   ocrMaxImages: DEFAULT_OCR_MAX_IMAGES,
   splitAnalysisChars: DEFAULT_SPLIT_ANALYSIS_CHARS

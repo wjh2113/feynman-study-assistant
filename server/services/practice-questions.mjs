@@ -8,7 +8,7 @@ import { questionsForProject } from "../../src/lib/questions.js";
 
 const PRACTICE_QUESTION_TIMEOUT_MS = Number(process.env.GENERATION_TIMEOUT_MS || 90_000);
 const PRACTICE_QUESTION_FAST_TIMEOUT_MS = Number(process.env.FAST_CHAT_TIMEOUT_MS || 60_000);
-const CORPUS_BUDGET = 18_000;
+const CORPUS_BUDGET = 10_000;
 export const PRACTICE_QUESTION_MIN = 5;
 export const PRACTICE_QUESTION_MAX = 15;
 /** Roughly one extra question per this many content characters. */

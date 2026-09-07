@@ -11,7 +11,7 @@ const DEFAULTS = {
   coachRoleMode: "auto",
   coachShowEvidence: true,
   coachBlindspotThreshold: 60,
-  practiceQuestionCapability: "quality-chat",
+  practiceQuestionCapability: "fast-chat",
   ocrEnabled: true,
   ocrMaxImages: 40,
   splitAnalysisChars: 24000
@@ -155,10 +155,10 @@ export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
                           practiceQuestionCapability: event.target.value
                         }))}
                       >
-                        <option value="quality-chat">quality-chat · 更准，稍慢</option>
-                        <option value="fast-chat">fast-chat · 更快，适合快速换资料</option>
+                        <option value="fast-chat">fast-chat · 更快（推荐，默认）</option>
+                        <option value="quality-chat">quality-chat · 更准，通常要等 1 分钟左右</option>
                       </select>
-                      <small>勾选练习资料后会调用该能力重新生成问题。追问评分仍固定走 quality-chat。</small>
+                      <small>勾选练习资料后会调用该能力重新生成问题。生产上 quality-chat 常需 60–90 秒；追问评分仍固定走 quality-chat。</small>
                     </label>
 
                     <label>

@@ -140,17 +140,37 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
       return undefined;
     }
     let cancelled = false;
-    setQuestionsLoading(true);
-    setLiveQuestions(null);
+    const local = questionsForProject(project, { documentIds: selectedDocumentIds });
+    // Show local bank immediately so production quality-chat (60–90s) does not blank the page.
+    setLiveQuestions(local);
+    const firstLocal = resolveInitialQuestion(local, readStoredConcept()) || local[0];
+    if (firstLocal) {
+      setQuestion(firstLocal);
+      setTurn(1);
+      setCompleted(false);
+      setRole(prefs.coachRoleMode === "expert" ? "expert" : "child");
+      setEvaluation(null);
+      setEvaluationNotes(null);
+      setEvidence([]);
+      setLatestBlindspot(null);
+      setDiagnosis(null);
+      setMessages([{ from: "ai", text: firstLocal.question }]);
+    }
     setSessionId(null);
+    setQuestionsLoading(true);
     const timer = window.setTimeout(async () => {
       try {
         const data = await generatePracticeQuestions(project.id, selectedDocumentIds);
         if (cancelled) return;
         const next = Array.isArray(data.questions) ? data.questions : [];
-        const resolved = next.length ? next : questionsForProject(project, { documentIds: selectedDocumentIds });
-        setLiveQuestions(resolved);
-        const first = resolveInitialQuestion(resolved, readStoredConcept()) || resolved[0];
+        if (!next.length || !data.generated) {
+          if (data.fallback && data.error) {
+            showToast(`出题降级为本地题库：${data.error}`);
+          }
+          return;
+        }
+        setLiveQuestions(next);
+        const first = next[0];
         if (first) {
           setQuestion(first);
           setTurn(1);
@@ -162,20 +182,11 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
           setLatestBlindspot(null);
           setDiagnosis(null);
           setMessages([{ from: "ai", text: first.question }]);
-        }
-        if (data.fallback && data.error) {
-          showToast(`出题降级为本地题库：${data.error}`);
+          setSessionId(null);
         }
       } catch (error) {
         if (cancelled) return;
-        const local = questionsForProject(project, { documentIds: selectedDocumentIds });
-        setLiveQuestions(local);
-        const first = resolveInitialQuestion(local, readStoredConcept()) || local[0];
-        if (first) {
-          setQuestion(first);
-          setMessages([{ from: "ai", text: first.question }]);
-        }
-        showToast(`按所选资料出题失败，已使用本地题库：${error.message}`);
+        showToast(`按所选资料出题失败，已保留本地题库：${error.message}`);
       } finally {
         if (!cancelled) setQuestionsLoading(false);
       }
@@ -187,7 +198,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
   }, [selectionKey, project.id, mapAvailability.kind, showToast, prefs.coachRoleMode]);
 
   useEffect(() => {
-    if (!prefsReady || !selectedDocumentIds.length || questionsLoading || !liveQuestions?.length || !bootQuestion) {
+    if (!prefsReady || !selectedDocumentIds.length || !liveQuestions?.length || !bootQuestion) {
       return undefined;
     }
     let cancelled = false;
@@ -244,7 +255,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
     };
     load();
     return () => { cancelled = true; };
-  }, [prefsReady, project.id, selectionKey, bootQuestion?.id, questionsLoading, liveQuestions, showToast]);
+  }, [prefsReady, project.id, selectionKey, bootQuestion?.id, liveQuestions, showToast]);
 
   useEffect(() => {
     sessionStorage.removeItem("zhifan-selected-concept");
@@ -261,11 +272,6 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
   if (!selectedDocumentIds.length) return <EmptyMini text="请先在上方勾选要练习的资料" />;
   if (!prefsReady) return <EmptyMini text="正在读取对练偏好…" />;
   if (mapAvailability.kind !== "ready") return <NoAnalysis project={project} navigate={navigate} />;
-  if (questionsLoading) {
-    return (
-      <EmptyMini text={<span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><Spinner /> 正在根据所选资料重新生成问题…</span>} />
-    );
-  }
   if (!baseQuestions.length) {
     return <EmptyMini text="当前所选资料暂无可练问题，请换选资料或在「学习资料」重新总结知识地图。" />;
   }
@@ -489,6 +495,13 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
         title={isVariant ? `复测 · ${blindspotTitle || "盲区"}` : "费曼对练"}
         action={<button className="primary-btn" onClick={finish}><Check size={16} /> 结束并保存</button>}
       />
+
+      {questionsLoading && (
+        <div className="request-warning" role="status">
+          <Spinner />
+          <span>正在按所选资料重新生成题目，可先用当前题目开练；完成后「换题」列表会自动更新。</span>
+        </div>
+      )}
 
       <div className="coach-layout">
         <section className="coach-main">
