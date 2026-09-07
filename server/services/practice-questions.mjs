@@ -3,12 +3,16 @@ import { getProject } from "../storage.mjs";
 import { getUserPreferences } from "../user-preferences.mjs";
 import { deepseek, fastJson } from "./llm.mjs";
 import { normalizeQuestions } from "./analyze.mjs";
-import { TARGET_COACH_QUESTION_COUNT } from "../../src/lib/coach-questions.mjs";
+import { expandQuestionsToCount } from "../../src/lib/coach-questions.mjs";
 import { questionsForProject } from "../../src/lib/questions.js";
 
 const PRACTICE_QUESTION_TIMEOUT_MS = Number(process.env.GENERATION_TIMEOUT_MS || 90_000);
 const PRACTICE_QUESTION_FAST_TIMEOUT_MS = Number(process.env.FAST_CHAT_TIMEOUT_MS || 60_000);
 const CORPUS_BUDGET = 18_000;
+export const PRACTICE_QUESTION_MIN = 5;
+export const PRACTICE_QUESTION_MAX = 15;
+/** Roughly one extra question per this many content characters. */
+const CHARS_PER_EXTRA_QUESTION = 2_000;
 
 function selectedSources(project, documentIds = []) {
   const ids = new Set((documentIds || []).map((id) => String(id || "").trim()).filter(Boolean));
@@ -38,6 +42,35 @@ function scopedModules(project, nameSet) {
     .filter((module) => (module.concepts || []).length);
 }
 
+/** Estimate selected material size for question budgeting. */
+export function measurePracticeContentChars(sources = []) {
+  return (sources || []).reduce((sum, source) => {
+    const summary = source?.summary?.summary || source?.summary || "";
+    const keyPoints = Array.isArray(source?.summary?.keyPoints)
+      ? source.summary.keyPoints.join("")
+      : "";
+    const preview = source?.parsedPreview || "";
+    return sum
+      + String(summary).length
+      + String(keyPoints).length
+      + String(preview).length;
+  }, 0);
+}
+
+/**
+ * Scale question count by selected material length (and lightly by file count).
+ * Always clamped to [5, 15].
+ */
+export function resolvePracticeQuestionCount(sources = [], concepts = []) {
+  const files = Math.max(1, (sources || []).length);
+  const chars = measurePracticeContentChars(sources);
+  const conceptBonus = Math.min(3, Math.floor((concepts || []).filter((item) => item?.title).length / 4));
+  const fromChars = Math.floor(chars / CHARS_PER_EXTRA_QUESTION);
+  const fromFiles = Math.max(0, files - 1);
+  const raw = PRACTICE_QUESTION_MIN + fromChars + fromFiles + conceptBonus;
+  return Math.max(PRACTICE_QUESTION_MIN, Math.min(PRACTICE_QUESTION_MAX, raw));
+}
+
 /** Build a compact corpus from selected practice sources for question generation. */
 export function buildPracticeCorpus(sources = [], { maxChars = CORPUS_BUDGET } = {}) {
   const budget = Math.max(2_000, Number(maxChars) || CORPUS_BUDGET);
@@ -63,13 +96,14 @@ export function buildPracticeCorpus(sources = [], { maxChars = CORPUS_BUDGET } =
   return blocks.join("\n\n");
 }
 
-function practiceQuestionMessages(project, sources, concepts) {
+function practiceQuestionMessages(project, sources, concepts, targetCount) {
   const names = sources.map((source) => source.name || source.filename).filter(Boolean);
   const conceptLines = (concepts || [])
-    .slice(0, 16)
+    .slice(0, 24)
     .map((concept) => `- ${concept.title}${concept.explanation ? `：${String(concept.explanation).slice(0, 80)}` : ""}`)
     .join("\n");
   const corpus = buildPracticeCorpus(sources);
+  const count = Math.max(PRACTICE_QUESTION_MIN, Math.min(PRACTICE_QUESTION_MAX, Number(targetCount) || PRACTICE_QUESTION_MIN));
   return [
     {
       role: "system",
@@ -83,11 +117,11 @@ function practiceQuestionMessages(project, sources, concepts) {
 相关概念：
 ${conceptLines || "（无现成概念列表，请从资料提炼）"}
 
-请基于上述资料生成 ${TARGET_COACH_QUESTION_COUNT} 道费曼对练题，要求：
+请基于上述资料生成恰好 ${count} 道费曼对练题（不少于 ${PRACTICE_QUESTION_MIN}、不多于 ${PRACTICE_QUESTION_MAX}，本次目标 ${count} 题），要求：
 1. 问题必须能检验真实理解（解释、举例、边界、对比、失效条件等），不要只考死记硬背
 2. 每题明确对应一个概念名
 3. sourceRefs.file 必须是上面练习资料中的原文件名
-4. 覆盖所选资料的主要知识点，避免重复
+4. 覆盖所选资料的主要知识点，避免重复；资料越短题越少、越长题越多
 
 返回 JSON：
 {
@@ -110,6 +144,7 @@ ${corpus || "（资料缺少可引用正文，请基于摘要与概念谨慎出�
 /**
  * Regenerate Feynman practice questions for the currently selected documents.
  * Capability comes from user preference: quality-chat (default) or fast-chat.
+ * Question count scales with selected material length (5–15).
  * Falls back to local filtered/template questions when the model is unavailable.
  */
 export async function generatePracticeQuestions({ userId, projectId, documentIds = [] }) {
@@ -125,7 +160,13 @@ export async function generatePracticeQuestions({ userId, projectId, documentIds
   const nameSet = selectedNames(sources);
   const modules = scopedModules(project, nameSet);
   const concepts = modules.flatMap((module) => module.concepts || []);
-  const fallback = questionsForProject(project, { documentIds: ids });
+  const targetCount = resolvePracticeQuestionCount(sources, concepts);
+  const contentChars = measurePracticeContentChars(sources);
+  const fallback = expandQuestionsToCount(
+    questionsForProject(project, { documentIds: ids }),
+    concepts,
+    targetCount
+  );
   const scopedAnalysis = {
     modules: modules.length ? modules : project.analysis?.modules || [],
     sources
@@ -139,6 +180,8 @@ export async function generatePracticeQuestions({ userId, projectId, documentIds
         questions: fallback,
         generated: false,
         capability: null,
+        targetCount,
+        contentChars,
         documentIds: ids,
         filenames: [...nameSet]
       }
@@ -146,11 +189,11 @@ export async function generatePracticeQuestions({ userId, projectId, documentIds
   }
 
   try {
-    const messages = practiceQuestionMessages(project, sources, concepts);
+    const messages = practiceQuestionMessages(project, sources, concepts, targetCount);
     const result = capability === "fast-chat"
       ? await fastJson(messages, 0.4, userId, PRACTICE_QUESTION_FAST_TIMEOUT_MS)
       : await deepseek(messages, 0.4, userId, PRACTICE_QUESTION_TIMEOUT_MS);
-    const questions = normalizeQuestions(result?.questions, scopedAnalysis);
+    const questions = normalizeQuestions(result?.questions, scopedAnalysis, targetCount);
     if (!questions.length) {
       return {
         body: {
@@ -158,6 +201,8 @@ export async function generatePracticeQuestions({ userId, projectId, documentIds
           generated: false,
           capability,
           fallback: true,
+          targetCount,
+          contentChars,
           documentIds: ids,
           filenames: [...nameSet]
         }
@@ -168,6 +213,8 @@ export async function generatePracticeQuestions({ userId, projectId, documentIds
         questions,
         generated: true,
         capability,
+        targetCount,
+        contentChars,
         documentIds: ids,
         filenames: [...nameSet]
       }
@@ -179,6 +226,8 @@ export async function generatePracticeQuestions({ userId, projectId, documentIds
         generated: false,
         capability,
         fallback: true,
+        targetCount,
+        contentChars,
         error: error.message || "出题失败，已使用本地题库",
         documentIds: ids,
         filenames: [...nameSet]

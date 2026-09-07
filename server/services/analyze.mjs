@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { dedupeAnalysisSources } from "../../src/lib/analysis-sources.mjs";
-import { expandQuestionsToCount, buildConceptQuestions } from "../../src/lib/coach-questions.mjs";
+import { expandQuestionsToCount, buildConceptQuestions, TARGET_COACH_QUESTION_COUNT } from "../../src/lib/coach-questions.mjs";
 import { chunkSources } from "../chunking.mjs";
 import { embedTexts, embeddingStatus } from "../embedding.mjs";
 import { getEmbeddingConfig } from "../model-config.mjs";
@@ -588,9 +588,10 @@ export function questionsFromAnalysis(analysis) {
   return buildConceptQuestions(concepts);
 }
 
-export function normalizeQuestions(questions, analysis) {
+export function normalizeQuestions(questions, analysis, target = TARGET_COACH_QUESTION_COUNT) {
   const concepts = (analysis?.modules || []).flatMap((module) => module.concepts || []);
   const input = Array.isArray(questions) && questions.length ? questions : questionsFromAnalysis(analysis);
+  const goal = Math.max(1, Math.min(20, Number(target) || TARGET_COACH_QUESTION_COUNT));
   return expandQuestionsToCount(
     input.map((question, index) => {
       const matched = concepts.find(
@@ -607,7 +608,8 @@ export function normalizeQuestions(questions, analysis) {
         sourceRefs: question.sourceRefs?.length ? question.sourceRefs : matched?.sourceRefs || []
       };
     }),
-    concepts
+    concepts,
+    goal
   );
 }
 
