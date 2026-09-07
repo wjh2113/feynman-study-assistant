@@ -15,12 +15,13 @@ import {
   Sparkles,
   User
 } from "../../components/icons.jsx";
-import { askCoach, diagnoseCoach } from "../../api/coach.js";
+import { askCoach, diagnoseCoach, generatePracticeQuestions } from "../../api/coach.js";
 import { createSession, listSessions, updateSession } from "../../api/projects.js";
 import { getPreferences } from "../../api/settings.js";
 import { questionsForProject } from "../../lib/questions.js";
 import { resolveMapAvailability } from "../../lib/map-availability.js";
 import { ScoreBar } from "./ScoreBar.jsx";
+import { Spinner } from "../../components/Spinner.jsx";
 
 const SCORE_LABELS = {
   clarity: "说人话",
@@ -67,13 +68,16 @@ function resolveInitialQuestion(baseQuestions, stored) {
 export function Coach({ project, selectedDocumentIds = [], updateProject, saveProjectPatch, refreshProject, showToast, navigate }) {
   const mapAvailability = resolveMapAvailability(project);
   const concepts = (project.analysis?.modules || []).flatMap((module) => module.concepts || []);
-  const baseQuestions = useMemo(
+  const fallbackQuestions = useMemo(
     () => questionsForProject(project, { documentIds: selectedDocumentIds }),
     [project, selectedDocumentIds]
   );
+  const selectionKey = selectedDocumentIds.join(",");
+  const [liveQuestions, setLiveQuestions] = useState(null);
+  const [questionsLoading, setQuestionsLoading] = useState(false);
+  const baseQuestions = liveQuestions?.length ? liveQuestions : fallbackQuestions;
   const stored = useMemo(() => readStoredConcept(), []);
   const bootQuestion = useMemo(() => resolveInitialQuestion(baseQuestions, stored), [baseQuestions, stored]);
-  const selectionKey = selectedDocumentIds.join(",");
 
   const questionList = useMemo(() => {
     if (!bootQuestion) return baseQuestions;
@@ -130,16 +134,74 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
   }, []);
 
   useEffect(() => {
-    if (!prefsReady || !selectedDocumentIds.length) return undefined;
+    if (!selectedDocumentIds.length || mapAvailability.kind !== "ready") {
+      setLiveQuestions(null);
+      setQuestionsLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setQuestionsLoading(true);
+    setLiveQuestions(null);
+    setSessionId(null);
+    const timer = window.setTimeout(async () => {
+      try {
+        const data = await generatePracticeQuestions(project.id, selectedDocumentIds);
+        if (cancelled) return;
+        const next = Array.isArray(data.questions) ? data.questions : [];
+        const resolved = next.length ? next : questionsForProject(project, { documentIds: selectedDocumentIds });
+        setLiveQuestions(resolved);
+        const first = resolveInitialQuestion(resolved, readStoredConcept()) || resolved[0];
+        if (first) {
+          setQuestion(first);
+          setTurn(1);
+          setCompleted(false);
+          setRole(prefs.coachRoleMode === "expert" ? "expert" : "child");
+          setEvaluation(null);
+          setEvaluationNotes(null);
+          setEvidence([]);
+          setLatestBlindspot(null);
+          setDiagnosis(null);
+          setMessages([{ from: "ai", text: first.question }]);
+        }
+        if (data.fallback && data.error) {
+          showToast(`出题降级为本地题库：${data.error}`);
+        }
+      } catch (error) {
+        if (cancelled) return;
+        const local = questionsForProject(project, { documentIds: selectedDocumentIds });
+        setLiveQuestions(local);
+        const first = resolveInitialQuestion(local, readStoredConcept()) || local[0];
+        if (first) {
+          setQuestion(first);
+          setMessages([{ from: "ai", text: first.question }]);
+        }
+        showToast(`按所选资料出题失败，已使用本地题库：${error.message}`);
+      } finally {
+        if (!cancelled) setQuestionsLoading(false);
+      }
+    }, 350);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [selectionKey, project.id, mapAvailability.kind, showToast, prefs.coachRoleMode]);
+
+  useEffect(() => {
+    if (!prefsReady || !selectedDocumentIds.length || questionsLoading || !liveQuestions?.length || !bootQuestion) {
+      return undefined;
+    }
     let cancelled = false;
     const load = async () => {
       try {
         const data = await listSessions(project.id, { documentIds: selectedDocumentIds });
         if (cancelled) return;
         setSessionsCache(data.sessions || []);
+        const targetConcept = concepts.find(
+          (item) => item.id === bootQuestion?.conceptId || item.title === bootQuestion?.concept
+        );
         const existing = (data.sessions || []).find((item) =>
           item.questionId === bootQuestion?.id &&
-          item.conceptId === concept?.id &&
+          item.conceptId === targetConcept?.id &&
           !item.status
         );
         if (existing) {
@@ -158,8 +220,8 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
         } else {
           const createdData = await createSession(project.id, {
             documentIds: selectedDocumentIds,
-            conceptId: concept?.id,
-            concept: concept?.title,
+            conceptId: targetConcept?.id || bootQuestion?.conceptId,
+            concept: targetConcept?.title || bootQuestion?.concept,
             questionId: bootQuestion?.id,
             question: bootQuestion?.question,
             meta: {
@@ -167,7 +229,8 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
               isVariant,
               blindspotId,
               blindspotTitle,
-              practiceDocumentIds: selectedDocumentIds
+              practiceDocumentIds: selectedDocumentIds,
+              regeneratedFromSelection: true
             }
           });
           if (!cancelled) {
@@ -181,19 +244,11 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
     };
     load();
     return () => { cancelled = true; };
-  }, [prefsReady, project.id, selectionKey, bootQuestion?.id, showToast]);
+  }, [prefsReady, project.id, selectionKey, bootQuestion?.id, questionsLoading, liveQuestions, showToast]);
 
   useEffect(() => {
     sessionStorage.removeItem("zhifan-selected-concept");
   }, []);
-
-  useEffect(() => {
-    if (!baseQuestions.length) return;
-    setQuestion((current) => {
-      if (current && baseQuestions.some((item) => item.id === current.id)) return current;
-      return resolveInitialQuestion(baseQuestions, readStoredConcept()) || baseQuestions[0];
-    });
-  }, [baseQuestions, selectionKey]);
 
   useEffect(() => {
     if (mapAvailability.kind !== "generating" || !project.id || !refreshProject) return undefined;
@@ -206,6 +261,11 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
   if (!selectedDocumentIds.length) return <EmptyMini text="请先在上方勾选要练习的资料" />;
   if (!prefsReady) return <EmptyMini text="正在读取对练偏好…" />;
   if (mapAvailability.kind !== "ready") return <NoAnalysis project={project} navigate={navigate} />;
+  if (questionsLoading) {
+    return (
+      <EmptyMini text={<span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><Spinner /> 正在根据所选资料重新生成问题…</span>} />
+    );
+  }
   if (!baseQuestions.length) {
     return <EmptyMini text="当前所选资料暂无可练问题，请换选资料或在「学习资料」重新总结知识地图。" />;
   }

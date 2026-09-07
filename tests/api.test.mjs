@@ -733,6 +733,89 @@ test("费曼教练会针对黑话追问", async () => {
   assert.ok(data.evaluation.clarity < 70);
 });
 
+test("按所选资料可生成练习问题", async () => {
+  const projectId = `practice-questions-${port}`;
+  const sourceId = "pq-src-1";
+  const created = await authFetch(`${baseUrl}/api/projects/${projectId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: "练习出题",
+      mode: "subject",
+      progress: 30,
+      analysis: {
+        contentAnalysisStatus: "ready",
+        sources: [{
+          id: sourceId,
+          name: "日语-第3课.md",
+          summary: { summary: "一类形容词与二类形容词", keyPoints: ["修饰名词"] },
+          parsedPreview: "一类形容词修饰名词时用连体形，做谓语时用终止形。"
+        }],
+        modules: [{
+          id: "m1",
+          title: "形容词",
+          concepts: [{
+            id: "c1",
+            title: "形容词分类与修饰",
+            explanation: "区分一类/二类形容词",
+            sourceRefs: [{ file: "日语-第3课.md", page: 1, quote: "连体形" }]
+          }]
+        }],
+        questions: [{
+          id: "q-old",
+          question: "旧问题",
+          conceptId: "c1",
+          concept: "形容词分类与修饰",
+          sourceRefs: [{ file: "日语-第3课.md" }]
+        }]
+      },
+      blindspots: [],
+      sessions: []
+    })
+  });
+  assert.equal(created.status, 200, await created.clone().text());
+
+  const response = await authFetch(
+    `${baseUrl}/api/projects/${encodeURIComponent(projectId)}/practice-questions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ documentIds: [sourceId] })
+    }
+  );
+  assert.equal(response.status, 200, await response.clone().text());
+  const data = await response.json();
+  assert.ok(Array.isArray(data.questions));
+  assert.ok(data.questions.length >= 1);
+  assert.ok(data.questions[0].question);
+  assert.deepEqual(data.documentIds, [sourceId]);
+});
+
+test("未选择资料时练习出题返回 400", async () => {
+  const projectId = `practice-questions-empty-${port}`;
+  const created = await authFetch(`${baseUrl}/api/projects/${projectId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: "空选题",
+      mode: "subject",
+      analysis: { sources: [], modules: [], questions: [] },
+      blindspots: [],
+      sessions: []
+    })
+  });
+  assert.equal(created.status, 200);
+  const response = await authFetch(
+    `${baseUrl}/api/projects/${encodeURIComponent(projectId)}/practice-questions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ documentIds: [] })
+    }
+  );
+  assert.equal(response.status, 400);
+});
+
 test("费曼教练会话可创建、追加并读取", async () => {
   const create = await authFetch(`${baseUrl}/api/projects/${encodeURIComponent(ragProjectId)}/sessions`, {
     method: "POST",

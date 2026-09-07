@@ -15,6 +15,7 @@ import {
 import { rateLimit } from "../middleware/security.mjs";
 import { generateOnePager, generateVariantQuestion, diagnoseCoachSession, runCoachTurn } from "../services/coach.mjs";
 import { generateLearningPlan } from "../services/learning-plan.mjs";
+import { generatePracticeQuestions } from "../services/practice-questions.mjs";
 
 const router = Router();
 
@@ -78,6 +79,23 @@ router.post("/api/coach/diagnosis", rateLimit({ windowMs: 60_000, max: 20, keyPr
   });
   res.status(result.status || 200).json(result.body);
 });
+
+router.post(
+  "/api/projects/:projectId/practice-questions",
+  rateLimit({ windowMs: 60_000, max: 12, keyPrefix: "practice-questions" }),
+  async (req, res) => {
+    try {
+      const result = await generatePracticeQuestions({
+        userId: req.userId,
+        projectId: req.params.projectId,
+        documentIds: normalizeDocumentIds(req.body?.documentIds)
+      });
+      res.status(result.status || 200).json(result.body);
+    } catch (error) {
+      res.status(500).json({ error: error.message || "根据所选资料生成问题失败" });
+    }
+  }
+);
 
 router.get("/api/projects/:projectId/sessions", async (req, res) => {
   try {
