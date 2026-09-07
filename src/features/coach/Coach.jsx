@@ -262,9 +262,9 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
   if (!prefsReady) return <EmptyMini text="正在读取对练偏好…" />;
   if (mapAvailability.kind !== "ready") return <NoAnalysis project={project} navigate={navigate} />;
   if (questionsLoading) {
-        return (
-          <EmptyMini text={<span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><Spinner /> 正在根据所选资料重新生成问题…</span>} />
-        );
+    return (
+      <EmptyMini text={<span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><Spinner /> 正在根据所选资料重新生成问题…</span>} />
+    );
   }
   if (!baseQuestions.length) {
     return <EmptyMini text="当前所选资料暂无可练问题，请换选资料或在「学习资料」重新总结知识地图。" />;
