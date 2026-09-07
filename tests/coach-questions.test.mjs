@@ -15,7 +15,7 @@ test("expandQuestionsToCount fills up to ten coach questions", () => {
   assert.equal(expanded.length, TARGET_COACH_QUESTION_COUNT);
 });
 
-test("questionsForProject returns ten selectable questions", () => {
+test("questionsForProject draws 5–15 practice questions for selected documents", () => {
   const project = {
     analysis: {
       sources: [{ id: "doc-a", name: "notes.md" }],
@@ -34,5 +34,25 @@ test("questionsForProject returns ten selectable questions", () => {
     }
   };
   const questions = questionsForProject(project, { documentIds: ["doc-a"] });
-  assert.equal(questions.length, 10);
+  assert.ok(questions.length >= 5);
+  assert.ok(questions.length <= 15);
+});
+
+test("questionsForProject samples from per-document question banks", () => {
+  const bank = Array.from({ length: 12 }, (_, index) => ({
+    id: `qb-${index}`,
+    question: `题库问题 ${index + 1}`,
+    concept: "五十音",
+    sourceRefs: [{ file: "notes.md" }]
+  }));
+  const project = {
+    analysis: {
+      sources: [{ id: "doc-a", name: "notes.md", questionBank: bank, parsedPreview: "内容".repeat(100) }],
+      questions: [],
+      modules: []
+    }
+  };
+  const questions = questionsForProject(project, { documentIds: ["doc-a"] });
+  assert.ok(questions.length >= 5);
+  assert.ok(questions.every((item) => String(item.question).includes("题库问题")));
 });

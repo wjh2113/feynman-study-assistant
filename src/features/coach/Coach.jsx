@@ -141,7 +141,6 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
     }
     let cancelled = false;
     const local = questionsForProject(project, { documentIds: selectedDocumentIds });
-    // Show local bank immediately so production quality-chat (60–90s) does not blank the page.
     setLiveQuestions(local);
     const firstLocal = resolveInitialQuestion(local, readStoredConcept()) || local[0];
     if (firstLocal) {
@@ -163,12 +162,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
         const data = await generatePracticeQuestions(project.id, selectedDocumentIds);
         if (cancelled) return;
         const next = Array.isArray(data.questions) ? data.questions : [];
-        if (!next.length || !data.generated) {
-          if (data.fallback && data.error) {
-            showToast(`出题降级为本地题库：${data.error}`);
-          }
-          return;
-        }
+        if (!next.length) return;
         setLiveQuestions(next);
         const first = next[0];
         if (first) {
@@ -184,13 +178,16 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
           setMessages([{ from: "ai", text: first.question }]);
           setSessionId(null);
         }
+        if (data.bankPending) {
+          showToast("部分资料题库仍在后台生成，当前先用已有题目开练");
+        }
       } catch (error) {
         if (cancelled) return;
-        showToast(`按所选资料出题失败，已保留本地题库：${error.message}`);
+        showToast(`抽取练习题失败，已使用本地题库：${error.message}`);
       } finally {
         if (!cancelled) setQuestionsLoading(false);
       }
-    }, 350);
+    }, 200);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
@@ -499,7 +496,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
       {questionsLoading && (
         <div className="request-warning" role="status">
           <Spinner />
-          <span>正在按所选资料重新生成题目，可先用当前题目开练；完成后「换题」列表会自动更新。</span>
+          <span>正在从所选资料题库抽取练习题…</span>
         </div>
       )}
 

@@ -147,18 +147,18 @@ export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
                     </label>
 
                     <label>
-                      <span>按所选资料重新出题</span>
+                      <span>资料入库题库生成</span>
                       <select
-                        value={form.practiceQuestionCapability || "quality-chat"}
+                        value={form.practiceQuestionCapability || "fast-chat"}
                         onChange={(event) => setForm((current) => ({
                           ...current,
                           practiceQuestionCapability: event.target.value
                         }))}
                       >
-                        <option value="fast-chat">fast-chat · 更快（推荐，默认）</option>
-                        <option value="quality-chat">quality-chat · 更准，通常要等 1 分钟左右</option>
+                        <option value="fast-chat">fast-chat · 更快（推荐）</option>
+                        <option value="quality-chat">quality-chat · 更准，入库出题更慢</option>
                       </select>
-                      <small>勾选练习资料后会调用该能力重新生成问题。生产上 quality-chat 常需 60–90 秒；追问评分仍固定走 quality-chat。</small>
+                      <small>上传资料后会为每份资料生成 10–30 道题库存档；费曼对练只从题库随机抽 5–15 题，不再实时调用大模型出题。</small>
                     </label>
 
                     <label>

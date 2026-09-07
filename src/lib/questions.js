@@ -3,6 +3,11 @@ import {
   buildConceptQuestions,
   expandQuestionsToCount
 } from "./coach-questions.mjs";
+import {
+  PRACTICE_DRAW_MIN,
+  resolvePracticeDrawCount,
+  sampleQuestionsFromSources
+} from "./document-question-bank.mjs";
 
 function isLegacyChapterArg(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value)
@@ -34,10 +39,14 @@ function conceptMatchesDocuments(concept, selectedNames) {
   return refs.some((ref) => selectedNames.has(String(ref?.file || "").trim()));
 }
 
+function selectedSources(project, documentIds = []) {
+  const ids = new Set((documentIds || []).map((id) => String(id || "").trim()).filter(Boolean));
+  return (project?.analysis?.sources || []).filter((source) => ids.has(String(source.id || "")));
+}
+
 function selectedSourceNames(project, documentIds = []) {
   return new Set(
-    (project?.analysis?.sources || [])
-      .filter((source) => documentIds.includes(source.id))
+    selectedSources(project, documentIds)
       .map((source) => String(source.name || source.filename || "").trim())
       .filter(Boolean)
   );
@@ -50,8 +59,7 @@ function projectConcepts(project, chapter = null) {
   return (project?.analysis?.modules || []).flatMap((module) => module.concepts || []);
 }
 
-export function questionsForProject(project, secondArg = null) {
-  const { documentIds, chapter } = resolveOptions(secondArg);
+function legacyQuestionsForProject(project, documentIds, chapter) {
   const concepts = projectConcepts(project, chapter);
   const chapterQuestions = chapter?.analysis?.questions;
   let questions;
@@ -64,13 +72,13 @@ export function questionsForProject(project, secondArg = null) {
   }
 
   if (documentIds.length) {
-    const selectedNames = selectedSourceNames(project, documentIds);
-    if (selectedNames.size) {
-      const filtered = questions.filter((question) => questionMatchesDocuments(question, selectedNames));
+    const names = selectedSourceNames(project, documentIds);
+    if (names.size) {
+      const filtered = questions.filter((question) => questionMatchesDocuments(question, names));
       if (filtered.length) {
         questions = filtered;
       } else {
-        const scopedConcepts = concepts.filter((concept) => conceptMatchesDocuments(concept, selectedNames));
+        const scopedConcepts = concepts.filter((concept) => conceptMatchesDocuments(concept, names));
         if (scopedConcepts.length) {
           questions = buildConceptQuestions(scopedConcepts);
         }
@@ -78,5 +86,42 @@ export function questionsForProject(project, secondArg = null) {
     }
   }
 
-  return expandQuestionsToCount(questions, concepts, TARGET_COACH_QUESTION_COUNT);
+  const sources = selectedSources(project, documentIds);
+  const drawCount = sources.length
+    ? resolvePracticeDrawCount(sources)
+    : TARGET_COACH_QUESTION_COUNT;
+  return expandQuestionsToCount(questions, concepts, drawCount);
+}
+
+/**
+ * Prefer per-document question banks created at upload time; randomly draw 5–15.
+ * Fall back to map/template questions when banks are not ready yet.
+ */
+export function questionsForProject(project, secondArg = null) {
+  const { documentIds, chapter } = resolveOptions(secondArg);
+  const sources = documentIds.length
+    ? selectedSources(project, documentIds)
+    : (project?.analysis?.sources || []);
+
+  if (sources.length) {
+    const drawCount = resolvePracticeDrawCount(sources);
+    const sampled = sampleQuestionsFromSources(sources, drawCount);
+    if (sampled.length >= PRACTICE_DRAW_MIN || sampled.length >= Math.min(drawCount, sources.length)) {
+      return sampled;
+    }
+    if (sampled.length) {
+      const legacy = legacyQuestionsForProject(project, documentIds, chapter);
+      const seen = new Set(sampled.map((item) => item.id || item.question));
+      for (const question of legacy) {
+        const key = question.id || question.question;
+        if (seen.has(key)) continue;
+        sampled.push(question);
+        seen.add(key);
+        if (sampled.length >= drawCount) break;
+      }
+      return sampled.slice(0, drawCount);
+    }
+  }
+
+  return legacyQuestionsForProject(project, documentIds, chapter);
 }

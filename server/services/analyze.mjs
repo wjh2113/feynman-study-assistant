@@ -9,6 +9,8 @@ import { parseFile } from "../document-parser.mjs";
 import { buildDocumentOutline } from "../document-outline.mjs";
 import { getObject } from "../object-storage.mjs";
 import { enqueueTask } from "../task-queue.mjs";
+import { enqueueDocumentQuestionBanksLater } from "./document-question-bank.mjs";
+import { buildHeuristicDocumentBank, resolveDocumentBankSize } from "../../src/lib/document-question-bank.mjs";
 import {
   getChapter,
   getIngestionJob,
@@ -727,13 +729,29 @@ export async function analyzeFiles({
           chunkCount: stored.chunks || sources[index]?.outline?.stats?.chunkCount || 0,
           indexedCharacters: sources[index]?.outline?.stats?.indexedCharacters || 0
         });
-      return {
+      const mergedSource = {
         ...stored,
         summary: heuristicSummaries[index],
         parseReport: sources[index].parseReport,
         parsedPreview: sources[index].parsedPreview,
-        outline
+        outline,
+        pages: sources[index]?.pages
       };
+      // Seed a local heuristic bank immediately; LLM bank job will replace it shortly.
+      if (!Array.isArray(mergedSource.questionBank) || !mergedSource.questionBank.length) {
+        const targetCount = resolveDocumentBankSize(mergedSource);
+        mergedSource.questionBank = buildHeuristicDocumentBank(mergedSource, targetCount);
+        mergedSource.questionBankMeta = {
+          generated: false,
+          capability: null,
+          pendingLlm: Boolean(modelConfigured),
+          targetCount,
+          generatedAt: Date.now()
+        };
+      }
+      // Do not persist raw page text on analysis.sources (parsedPreview is enough).
+      delete mergedSource.pages;
+      return mergedSource;
     });
     await Promise.all(
       interimSources.map((source) => updateDocumentInsights(source.id, source.summary, source.parseReport))
@@ -789,6 +807,14 @@ export async function analyzeFiles({
       contentAnalysisDeferred: Boolean(deferContentAnalysis && modelConfigured)
     });
     await onProgress({ percent: 88, stage: "storage", label: "资料已入库，可检索" });
+
+    if (interimSources.length) {
+      enqueueDocumentQuestionBanksLater({
+        userId,
+        projectId,
+        documentIds: interimSources.map((source) => source.id).filter(Boolean)
+      });
+    }
 
     let analysis = interimAnalysis;
     if (modelConfigured) {
