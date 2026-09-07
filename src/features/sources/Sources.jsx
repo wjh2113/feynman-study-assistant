@@ -76,6 +76,7 @@ export function Sources({
   const [loading, setLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [openSource, setOpenSource] = useState(null);
+  const [bankFocusId, setBankFocusId] = useState(null);
   const [deleteSourceId, setDeleteSourceId] = useState(null);
   const [deletingSourceId, setDeletingSourceId] = useState(null);
   const [reindexing, setReindexing] = useState(false);
@@ -83,6 +84,7 @@ export function Sources({
   const fileInput = useRef();
   const prevSourceCountRef = useRef(0);
   const mapNotifyRef = useRef(null);
+  const bankNotifyRef = useRef(null);
   const rawSources = project.analysis?.sources || [];
   const sources = useMemo(() => dedupeAnalysisSources(rawSources), [rawSources]);
   const mapAvailability = useMemo(() => resolveMapAvailability(project), [project]);
@@ -113,6 +115,14 @@ export function Sources({
     return labels[analysisTask?.stage] || "后台解析中";
   }, [analysisTask?.stage]);
   const listSourceCount = sources.length + ingestingFilenames.length;
+  const bankPending = useMemo(
+    () => sources.some((source) => source.questionBankMeta?.pendingLlm),
+    [sources]
+  );
+  const bankTotal = useMemo(
+    () => sources.reduce((sum, source) => sum + (Array.isArray(source.questionBank) ? source.questionBank.length : 0), 0),
+    [sources]
+  );
 
   useEffect(() => {
     if (mapPending) setResummarizing(false);
@@ -123,7 +133,7 @@ export function Sources({
   }, [mapPending]);
 
   useEffect(() => {
-    if (!mapPending || !project.id) return undefined;
+    if ((!mapPending && !bankPending) || !project.id) return undefined;
     let cancelled = false;
     const poll = async () => {
       try {
@@ -131,12 +141,21 @@ export function Sources({
         if (cancelled || !data.project) return;
         updateProject(data.project);
         const nextStatus = data.project.analysis?.contentAnalysisStatus;
-        if (nextStatus === "ready" && mapNotifyRef.current !== "ready") {
-          mapNotifyRef.current = "ready";
-          showToast("知识地图已重新生成，可前往查看");
-        } else if (nextStatus === "failed" && mapNotifyRef.current !== "failed") {
-          mapNotifyRef.current = "failed";
-          showToast(data.project.analysis?.contentAnalysisError || "知识地图生成失败，请重试");
+        if (mapPending) {
+          if (nextStatus === "ready" && mapNotifyRef.current !== "ready") {
+            mapNotifyRef.current = "ready";
+            showToast("知识地图已重新生成，可前往查看");
+          } else if (nextStatus === "failed" && mapNotifyRef.current !== "failed") {
+            mapNotifyRef.current = "failed";
+            showToast(data.project.analysis?.contentAnalysisError || "知识地图生成失败，请重试");
+          }
+        }
+        const stillPending = (data.project.analysis?.sources || []).some(
+          (source) => source.questionBankMeta?.pendingLlm
+        );
+        if (bankPending && !stillPending && bankNotifyRef.current !== "ready") {
+          bankNotifyRef.current = "ready";
+          showToast("资料题库已生成，可在资料列表中点击「查看题库」");
         }
       } catch {
         // keep current project state
@@ -148,7 +167,22 @@ export function Sources({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [mapPending, project.id, updateProject, showToast]);
+  }, [mapPending, bankPending, project.id, updateProject, showToast]);
+
+  useEffect(() => {
+    if (bankPending) bankNotifyRef.current = null;
+  }, [bankPending]);
+
+  useEffect(() => {
+    if (!bankFocusId || openSource !== bankFocusId) return undefined;
+    const timer = window.setTimeout(() => {
+      document.getElementById(`question-bank-${bankFocusId}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest"
+      });
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [bankFocusId, openSource]);
 
   useEffect(() => {
     if (!analysisTask || !project.id) return undefined;
@@ -331,6 +365,16 @@ export function Sources({
     const report = source.parseReport || {};
     const outline = outlineForSource(source);
     const stats = outline.stats || {};
+    const bank = Array.isArray(source.questionBank) ? source.questionBank : [];
+    const bankMeta = source.questionBankMeta || {};
+    const bankPendingLlm = Boolean(bankMeta.pendingLlm);
+    const bankStatusLabel = bankPendingLlm
+      ? `题库 ${bank.length} 题 · 正式题生成中`
+      : bankMeta.generated
+        ? `题库 ${bank.length} 题`
+        : bank.length
+          ? `题库 ${bank.length} 题 · 临时`
+          : "暂无题库";
     const ocrLabel =
       report.ocrStatus === "ready" ? `OCR ${report.imagesOcrd || 0}/${report.imagesFound || report.imagesOcrd || 0} 张`
         : report.ocrStatus === "not_configured" ? "OCR 待配置"
@@ -340,14 +384,33 @@ export function Sources({
       outline.completeness === "complete" ? "解析较完整"
         : outline.completeness === "empty" ? "未提取到文本"
           : "解析可能不完整";
+    const openBank = () => {
+      setOpenSource(source.id);
+      setBankFocusId(source.id);
+    };
     return (
       <div className={`source-item ${expanded ? "expanded" : ""}`} key={source.id}>
         <div className="file-row">
           <FileTypeIcon name={source.name} />
-          <div className="file-copy"><strong>{source.name}</strong><span>{source.type} · {source.pages || 1} 页 {source.chunks ? `· ${source.chunks} 个检索分块` : ""} · {ocrLabel}</span></div>
-          <button type="button" className="parse-toggle" onClick={() => setOpenSource(expanded ? null : source.id)}>
+          <div className="file-copy">
+            <strong>{source.name}</strong>
+            <span>
+              {source.type} · {source.pages || 1} 页
+              {source.chunks ? ` · ${source.chunks} 个检索分块` : ""}
+              {" · "}{ocrLabel}
+              {" · "}{bankStatusLabel}
+            </span>
+          </div>
+          <button type="button" className="parse-toggle" onClick={() => {
+            setBankFocusId(null);
+            setOpenSource(expanded ? null : source.id);
+          }}>
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-            {expanded ? "收起解析" : "查看大纲"}
+            {expanded ? "收起" : "查看大纲"}
+          </button>
+          <button type="button" className="parse-toggle bank-toggle" onClick={openBank}>
+            <Sparkles size={14} />
+            查看题库{bank.length ? `（${bank.length}）` : ""}
           </button>
           {source.downloadUrl ? (
             <a className="icon-btn" href={source.downloadUrl} title="下载原始资料"><Download size={17} /></a>
@@ -400,6 +463,43 @@ export function Sources({
               )}
               <p className="verification-note">{source.summary?.verificationNote}</p>
             </div>
+
+            <div
+              className={`parse-question-bank${bankFocusId === source.id ? " is-focused" : ""}`}
+              id={`question-bank-${source.id}`}
+            >
+              <div className="parse-outline-head">
+                <span className="section-kicker">费曼题库</span>
+                <b>{bankStatusLabel}</b>
+              </div>
+              <p className="parse-outline-tip">
+                上传入库后为每份资料生成 10–30 道题；费曼对练时会按所选资料从这些题库中随机抽取。
+                {bankMeta.capability ? ` 当前生成能力：${bankMeta.capability}` : ""}
+                {bankMeta.fallback ? "（含本地兜底题）" : ""}
+              </p>
+              {bankPendingLlm && (
+                <div className="request-warning" role="status" style={{ margin: "0 0 12px" }}>
+                  <Spinner />
+                  <span>正式题库正在后台生成，可先查看临时题目。</span>
+                </div>
+              )}
+              {bank.length ? (
+                <ol className="question-bank-list">
+                  {bank.map((item, index) => (
+                    <li key={item.id || `${source.id}-q-${index}`}>
+                      <strong>{index + 1}. {item.question}</strong>
+                      <span>
+                        {item.concept ? `概念：${item.concept}` : "概念：未标注"}
+                        {item.why ? ` · ${item.why}` : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="parse-outline-empty">本题库尚未生成。解析完成后会自动出现，也可稍后再刷新页面。</p>
+              )}
+            </div>
+
             {(!!report.warnings?.length || !!outline.notes?.length) && (
               <div className="parse-warning"><CircleAlert size={15} /><div>{[...(report.warnings || []), ...(outline.notes || []).filter((note) => !(report.warnings || []).includes(note))].map((warning) => <p key={warning}>{warning}</p>)}</div></div>
             )}
@@ -418,7 +518,7 @@ export function Sources({
       <PageHeading
         eyebrow="构建专属语料库"
         title="学科资料"
-        description="上传课件与笔记。解析完成后会展示资料大纲，便于核对是否解析完整；再进入知识地图。练习时再勾选要使用的资料。"
+        description="上传课件与笔记。解析完成后可展开查看大纲与费曼题库；再进入知识地图。练习时勾选资料，对练会从对应题库抽题。"
         action={<button className="primary-btn" onClick={analyze} disabled={loading || !!analysisTask}>{loading ? <Spinner /> : <Sparkles size={17} />}{loading ? "正在上传…" : analysisTask ? "后台解析中" : files.length ? `分析 ${files.length} 份新资料` : "查看知识地图"}</button>}
       />
 
@@ -479,6 +579,23 @@ export function Sources({
                 ? "正在后台重新总结知识地图…"
                 : "资料已可检索，知识地图正在后台用 quality-chat 生成…"}
           </span>
+        </div>
+      )}
+
+      {bankPending && (
+        <div className="request-warning" role="status">
+          <Spinner />
+          <span>资料题库正在后台生成正式题目，可先在资料列表中查看临时题。</span>
+        </div>
+      )}
+
+      {!bankPending && bankTotal > 0 && sources.length > 0 && (
+        <div className="question-bank-banner" role="status">
+          <Sparkles size={16} />
+          <div>
+            <strong>已入库题库共 {bankTotal} 题</strong>
+            <span>在下方每份资料点击「查看题库」即可浏览；费曼对练会按所选资料抽题。</span>
+          </div>
         </div>
       )}
 
