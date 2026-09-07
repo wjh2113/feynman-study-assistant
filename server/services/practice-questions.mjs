@@ -1,11 +1,13 @@
 import { isLlmConfigured } from "../gateway-client.mjs";
 import { getProject } from "../storage.mjs";
-import { deepseek } from "./llm.mjs";
+import { getUserPreferences } from "../user-preferences.mjs";
+import { deepseek, fastJson } from "./llm.mjs";
 import { normalizeQuestions } from "./analyze.mjs";
 import { TARGET_COACH_QUESTION_COUNT } from "../../src/lib/coach-questions.mjs";
 import { questionsForProject } from "../../src/lib/questions.js";
 
 const PRACTICE_QUESTION_TIMEOUT_MS = Number(process.env.GENERATION_TIMEOUT_MS || 90_000);
+const PRACTICE_QUESTION_FAST_TIMEOUT_MS = Number(process.env.FAST_CHAT_TIMEOUT_MS || 60_000);
 const CORPUS_BUDGET = 18_000;
 
 function selectedSources(project, documentIds = []) {
@@ -107,7 +109,8 @@ ${corpus || "（资料缺少可引用正文，请基于摘要与概念谨慎出�
 
 /**
  * Regenerate Feynman practice questions for the currently selected documents.
- * Uses gateway quality-chat (deepseek). Falls back to local filtered/template questions.
+ * Capability comes from user preference: quality-chat (default) or fast-chat.
+ * Falls back to local filtered/template questions when the model is unavailable.
  */
 export async function generatePracticeQuestions({ userId, projectId, documentIds = [] }) {
   const project = await getProject(projectId, userId);
@@ -127,6 +130,8 @@ export async function generatePracticeQuestions({ userId, projectId, documentIds
     modules: modules.length ? modules : project.analysis?.modules || [],
     sources
   };
+  const prefs = await getUserPreferences(userId);
+  const capability = prefs.practiceQuestionCapability === "fast-chat" ? "fast-chat" : "quality-chat";
 
   if (!(await isLlmConfigured(userId))) {
     return {
@@ -141,19 +146,17 @@ export async function generatePracticeQuestions({ userId, projectId, documentIds
   }
 
   try {
-    const result = await deepseek(
-      practiceQuestionMessages(project, sources, concepts),
-      0.4,
-      userId,
-      PRACTICE_QUESTION_TIMEOUT_MS
-    );
+    const messages = practiceQuestionMessages(project, sources, concepts);
+    const result = capability === "fast-chat"
+      ? await fastJson(messages, 0.4, userId, PRACTICE_QUESTION_FAST_TIMEOUT_MS)
+      : await deepseek(messages, 0.4, userId, PRACTICE_QUESTION_TIMEOUT_MS);
     const questions = normalizeQuestions(result?.questions, scopedAnalysis);
     if (!questions.length) {
       return {
         body: {
           questions: fallback,
           generated: false,
-          capability: "quality-chat",
+          capability,
           fallback: true,
           documentIds: ids,
           filenames: [...nameSet]
@@ -164,7 +167,7 @@ export async function generatePracticeQuestions({ userId, projectId, documentIds
       body: {
         questions,
         generated: true,
-        capability: "quality-chat",
+        capability,
         documentIds: ids,
         filenames: [...nameSet]
       }
@@ -174,7 +177,7 @@ export async function generatePracticeQuestions({ userId, projectId, documentIds
       body: {
         questions: fallback,
         generated: false,
-        capability: "quality-chat",
+        capability,
         fallback: true,
         error: error.message || "出题失败，已使用本地题库",
         documentIds: ids,

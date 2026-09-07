@@ -11,6 +11,7 @@ const DEFAULTS = {
   coachRoleMode: "auto",
   coachShowEvidence: true,
   coachBlindspotThreshold: 60,
+  practiceQuestionCapability: "quality-chat",
   ocrEnabled: true,
   ocrMaxImages: 40,
   splitAnalysisChars: 24000
@@ -143,6 +144,21 @@ export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
                         <option value="child">固定小白模式</option>
                         <option value="expert">固定专家模式</option>
                       </select>
+                    </label>
+
+                    <label>
+                      <span>按所选资料重新出题</span>
+                      <select
+                        value={form.practiceQuestionCapability || "quality-chat"}
+                        onChange={(event) => setForm((current) => ({
+                          ...current,
+                          practiceQuestionCapability: event.target.value
+                        }))}
+                      >
+                        <option value="quality-chat">quality-chat · 更准，稍慢</option>
+                        <option value="fast-chat">fast-chat · 更快，适合快速换资料</option>
+                      </select>
+                      <small>勾选练习资料后会调用该能力重新生成问题。追问评分仍固定走 quality-chat。</small>
                     </label>
 
                     <label>

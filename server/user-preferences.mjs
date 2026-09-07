@@ -17,6 +17,7 @@ export const PREFERENCE_DEFAULTS = {
   coachRoleMode: "auto",
   coachShowEvidence: true,
   coachBlindspotThreshold: 60,
+  practiceQuestionCapability: "quality-chat",
   ocrEnabled: true,
   ocrMaxImages: DEFAULT_OCR_MAX_IMAGES,
   splitAnalysisChars: DEFAULT_SPLIT_ANALYSIS_CHARS
@@ -32,6 +33,9 @@ export function normalizePreferences(raw = {}) {
   const roleMode = ["auto", "child", "expert"].includes(raw.coachRoleMode)
     ? raw.coachRoleMode
     : PREFERENCE_DEFAULTS.coachRoleMode;
+  const practiceQuestionCapability = ["quality-chat", "fast-chat"].includes(raw.practiceQuestionCapability)
+    ? raw.practiceQuestionCapability
+    : PREFERENCE_DEFAULTS.practiceQuestionCapability;
   return {
     coachMaxTurns: clampInt(raw.coachMaxTurns, 2, 6, PREFERENCE_DEFAULTS.coachMaxTurns),
     coachPassScore: clampInt(raw.coachPassScore, 60, 95, PREFERENCE_DEFAULTS.coachPassScore),
@@ -43,6 +47,7 @@ export function normalizePreferences(raw = {}) {
       80,
       PREFERENCE_DEFAULTS.coachBlindspotThreshold
     ),
+    practiceQuestionCapability,
     ocrEnabled: raw.ocrEnabled !== false,
     ocrMaxImages: clampInt(raw.ocrMaxImages, 1, 200, PREFERENCE_DEFAULTS.ocrMaxImages),
     splitAnalysisChars: clampInt(
