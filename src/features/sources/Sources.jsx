@@ -682,9 +682,9 @@ export function Sources({
                   <span>正式题库正在后台生成，可先查看临时题目。</span>
                 </div>
               )}
-              {(bankViewerSource.questionBank || []).length ? (
+              {(Array.isArray(bankViewerSource.questionBank) ? bankViewerSource.questionBank : []).length ? (
                 <ol className="question-bank-list">
-                  {bankViewerSource.questionBank.map((item, index) => (
+                  {(Array.isArray(bankViewerSource.questionBank) ? bankViewerSource.questionBank : []).map((item, index) => (
                     <li key={item.id || `${bankViewerSource.id}-modal-q-${index}`}>
                       <strong>{index + 1}. {item.question}</strong>
                       <span>
