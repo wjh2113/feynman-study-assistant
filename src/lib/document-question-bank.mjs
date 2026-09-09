@@ -1,11 +1,12 @@
 import { COACH_QUESTION_TEMPLATES } from "./coach-questions.mjs";
 
-export const DOCUMENT_BANK_MIN = 10;
-export const DOCUMENT_BANK_MAX = 30;
+export const DOCUMENT_BANK_MIN = 30;
+export const DOCUMENT_BANK_MAX = 100;
 export const PRACTICE_DRAW_MIN = 5;
 export const PRACTICE_DRAW_MAX = 15;
 
-const BANK_CHARS_PER_EXTRA = 1_200;
+/** Extra question roughly every N chars beyond the minimum bank size. */
+const BANK_CHARS_PER_EXTRA = 800;
 const DRAW_CHARS_PER_EXTRA = 2_000;
 
 function clamp(value, min, max) {
@@ -28,7 +29,7 @@ export function measureSourceChars(source = {}) {
     + String(preview).length;
 }
 
-/** 10–30 questions per uploaded document, scaled by content length. */
+/** 30–100 questions per uploaded document, scaled by content length. */
 export function resolveDocumentBankSize(source = {}) {
   const chars = measureSourceChars(source);
   return clamp(

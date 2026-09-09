@@ -158,7 +158,7 @@ export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
                         <option value="fast-chat">fast-chat · 更快（推荐）</option>
                         <option value="quality-chat">quality-chat · 更准，入库出题更慢</option>
                       </select>
-                      <small>上传资料后会为每份资料生成 10–30 道题库存档；费曼对练只从题库随机抽 5–15 题，不再实时调用大模型出题。</small>
+                      <small>上传资料后会为每份资料生成 30–100 道题库存档；费曼对练只从题库随机抽 5–15 题，不再实时调用大模型出题。</small>
                     </label>
 
                     <label>

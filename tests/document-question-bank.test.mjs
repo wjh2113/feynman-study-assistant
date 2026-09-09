@@ -11,7 +11,7 @@ import {
   sampleQuestionsFromSources
 } from "../src/lib/document-question-bank.mjs";
 
-test("resolveDocumentBankSize stays between 10 and 30", () => {
+test("resolveDocumentBankSize stays between 30 and 100", () => {
   const short = resolveDocumentBankSize({
     name: "短.md",
     summary: { summary: "短" },
@@ -22,7 +22,7 @@ test("resolveDocumentBankSize stays between 10 and 30", () => {
   const long = resolveDocumentBankSize({
     name: "长.md",
     summary: { summary: "s".repeat(500), keyPoints: ["a", "b", "c"] },
-    parsedPreview: "p".repeat(40_000)
+    parsedPreview: "p".repeat(80_000)
   });
   assert.equal(long, DOCUMENT_BANK_MAX);
 });
@@ -48,12 +48,12 @@ test("sampleQuestionsFromSources draws without duplicates from banks", () => {
     {
       id: "d1",
       name: "一课.md",
-      questionBank: buildHeuristicDocumentBank({ id: "d1", name: "一课.md", summary: { keyPoints: ["形容词"] } }, 12)
+      questionBank: buildHeuristicDocumentBank({ id: "d1", name: "一课.md", summary: { keyPoints: ["形容词"] } }, 32)
     },
     {
       id: "d2",
       name: "二课.md",
-      questionBank: buildHeuristicDocumentBank({ id: "d2", name: "二课.md", summary: { keyPoints: ["动词"] } }, 12)
+      questionBank: buildHeuristicDocumentBank({ id: "d2", name: "二课.md", summary: { keyPoints: ["动词"] } }, 32)
     }
   ];
   const drawn = sampleQuestionsFromSources(sources, 8, () => 0.42);

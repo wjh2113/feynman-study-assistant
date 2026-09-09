@@ -15,7 +15,9 @@ import {
 
 const BANK_TIMEOUT_MS = Number(process.env.GENERATION_TIMEOUT_MS || 90_000);
 const BANK_FAST_TIMEOUT_MS = Number(process.env.FAST_CHAT_TIMEOUT_MS || 60_000);
-const CORPUS_BUDGET = 12_000;
+const CORPUS_BUDGET = 18_000;
+/** Ask the model in chunks so 30–100 题 requests stay reliable. */
+const BANK_BATCH_SIZE = 25;
 
 function sourceCorpus(source) {
   const name = String(source.name || source.filename || "未命名资料").trim();
@@ -33,9 +35,13 @@ function sourceCorpus(source) {
   ].filter(Boolean).join("\n");
 }
 
-function bankMessages(source, targetCount) {
+function bankMessages(source, batchCount, existingQuestions = []) {
   const name = String(source.name || source.filename || "未命名资料").trim();
-  const count = Math.max(DOCUMENT_BANK_MIN, Math.min(DOCUMENT_BANK_MAX, Number(targetCount) || DOCUMENT_BANK_MIN));
+  const count = Math.max(1, Math.min(BANK_BATCH_SIZE, Number(batchCount) || DOCUMENT_BANK_MIN));
+  const avoid = existingQuestions
+    .slice(0, 40)
+    .map((item, index) => `${index + 1}. ${String(item.question || "").slice(0, 80)}`)
+    .filter(Boolean);
   return [
     {
       role: "system",
@@ -43,11 +49,12 @@ function bankMessages(source, targetCount) {
     },
     {
       role: "user",
-      content: `请为下面这一份资料生成恰好 ${count} 道费曼对练题（范围 ${DOCUMENT_BANK_MIN}-${DOCUMENT_BANK_MAX}，本次目标 ${count}）。
+      content: `请为下面这一份资料再生成恰好 ${count} 道费曼对练题（整份资料题库目标范围 ${DOCUMENT_BANK_MIN}-${DOCUMENT_BANK_MAX}，本批 ${count} 道）。
 要求：
 1. 只围绕本文件内容，可覆盖解释、举例、边界、对比、失效条件、应用场景
 2. sourceRefs.file 必须是「${name}」
 3. 避免重复，尽量覆盖不同知识点
+${avoid.length ? `4. 不要与下列已有题目重复或高度相似：\n${avoid.join("\n")}` : ""}
 
 返回 JSON：
 {
@@ -66,6 +73,19 @@ ${sourceCorpus(source) || "（正文不足，请基于文件名与摘要谨慎�
   ];
 }
 
+function mergeUniqueQuestions(existing, incoming, source, limit) {
+  const seen = new Set(existing.map((item) => item.question));
+  const merged = [...existing];
+  for (const question of incoming) {
+    if (merged.length >= limit) break;
+    const normalized = normalizeBankQuestion(question, source, merged.length);
+    if (!normalized.question || seen.has(normalized.question)) continue;
+    seen.add(normalized.question);
+    merged.push(normalized);
+  }
+  return merged;
+}
+
 export async function generateQuestionBankForSource(source, userId, capability = "fast-chat") {
   const targetCount = resolveDocumentBankSize(source);
   if (!(await isLlmConfigured(userId))) {
@@ -82,22 +102,29 @@ export async function generateQuestionBankForSource(source, userId, capability =
   }
 
   try {
-    const messages = bankMessages(source, targetCount);
-    const result = capability === "quality-chat"
-      ? await deepseek(messages, 0.35, userId, BANK_TIMEOUT_MS)
-      : await fastJson(messages, 0.35, userId, BANK_FAST_TIMEOUT_MS);
-    const raw = Array.isArray(result?.questions) ? result.questions : [];
-    const questionBank = raw
-      .map((question, index) => normalizeBankQuestion(question, source, index))
-      .filter((question) => question.question)
-      .slice(0, DOCUMENT_BANK_MAX);
-    if (questionBank.length < Math.min(DOCUMENT_BANK_MIN, targetCount)) {
-      const filled = [
-        ...questionBank,
-        ...buildHeuristicDocumentBank(source, targetCount).filter(
-          (item) => !questionBank.some((existing) => existing.question === item.question)
-        )
-      ].slice(0, targetCount);
+    let questionBank = [];
+    let batches = 0;
+    const maxBatches = Math.ceil(targetCount / BANK_BATCH_SIZE) + 1;
+    while (questionBank.length < targetCount && batches < maxBatches) {
+      const need = Math.min(BANK_BATCH_SIZE, targetCount - questionBank.length);
+      const messages = bankMessages(source, need, questionBank);
+      const result = capability === "quality-chat"
+        ? await deepseek(messages, 0.35, userId, BANK_TIMEOUT_MS)
+        : await fastJson(messages, 0.35, userId, BANK_FAST_TIMEOUT_MS);
+      const raw = Array.isArray(result?.questions) ? result.questions : [];
+      const before = questionBank.length;
+      questionBank = mergeUniqueQuestions(questionBank, raw, source, targetCount);
+      batches += 1;
+      if (questionBank.length <= before) break;
+    }
+
+    if (questionBank.length < targetCount) {
+      const filled = mergeUniqueQuestions(
+        questionBank,
+        buildHeuristicDocumentBank(source, targetCount),
+        source,
+        targetCount
+      );
       return {
         questionBank: filled,
         questionBankMeta: {
@@ -105,17 +132,20 @@ export async function generateQuestionBankForSource(source, userId, capability =
           fallback: true,
           capability,
           targetCount,
+          batches,
           contentChars: measureSourceChars(source),
           generatedAt: Date.now()
         }
       };
     }
+
     return {
       questionBank: questionBank.slice(0, targetCount),
       questionBankMeta: {
         generated: true,
         capability,
         targetCount,
+        batches,
         contentChars: measureSourceChars(source),
         generatedAt: Date.now()
       }
