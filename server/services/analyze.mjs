@@ -11,6 +11,7 @@ import { getObject } from "../object-storage.mjs";
 import { enqueueTask } from "../task-queue.mjs";
 import { enqueueDocumentQuestionBanksLater } from "./document-question-bank.mjs";
 import { buildHeuristicDocumentBank, resolveDocumentBankSize } from "../../src/lib/document-question-bank.mjs";
+import { filterStudyKeyPoints, isStudyMetaText } from "../../src/lib/study-content.mjs";
 import {
   getChapter,
   getIngestionJob,
@@ -429,17 +430,18 @@ export function extractSentences(text) {
 
 export function buildSourceSummary(source) {
   const fullText = source.pages.map((page) => page.text).filter(Boolean).join("\n");
-  const sentences = extractSentences(fullText);
+  const sentences = extractSentences(fullText).filter((sentence) => !isStudyMetaText(sentence));
   const keyPoints = sentences.slice(1, 4).map((sentence) => sentence.slice(0, 180));
   const report = source.parseReport || {};
   const noText = !fullText.trim();
+  const summarySeed = sentences[0] || extractSentences(fullText).find((sentence) => !isStudyMetaText(sentence)) || fullText;
   return {
     summary: noText
       ? report.ocrStatus === "not_configured"
         ? "检测到图片内容，配置 OCR 视觉模型后才能生成资料总结。"
         : "本资料没有提取到可读文字，请查看解析状态和原始文件。"
-      : (sentences[0] || fullText).slice(0, 260),
-    keyPoints: keyPoints.length ? keyPoints : noText ? [] : [fullText.slice(0, 180)],
+      : String(summarySeed).slice(0, 260),
+    keyPoints: keyPoints.length ? keyPoints : noText ? [] : filterStudyKeyPoints([fullText.slice(0, 180)], 1),
     confidence: noText ? "low" : report.warnings?.length ? "medium" : "high"
   };
 }
@@ -454,10 +456,12 @@ export function normalizeDocumentSummaries(input, sources) {
     return {
       filename: source.filename,
       summary: String(matched?.summary || fallback.summary).trim(),
-      keyPoints: (matched?.keyPoints?.length ? matched.keyPoints : fallback.keyPoints)
-        .map((item) => String(item).trim())
-        .filter(Boolean)
-        .slice(0, 5),
+      keyPoints: filterStudyKeyPoints(
+        (matched?.keyPoints?.length ? matched.keyPoints : fallback.keyPoints)
+          .map((item) => String(item).trim())
+          .filter(Boolean),
+        5
+      ),
       confidence: matched?.confidence || fallback.confidence,
       verificationNote:
         matched?.verificationNote ||

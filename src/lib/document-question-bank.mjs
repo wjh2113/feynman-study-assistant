@@ -1,4 +1,9 @@
 import { COACH_QUESTION_TEMPLATES } from "./coach-questions.mjs";
+import {
+  extractStudyConceptTitles,
+  filterStudyKeyPoints,
+  isMetaDerivedQuestion
+} from "./study-content.mjs";
 
 export const DOCUMENT_BANK_MIN = 30;
 export const DOCUMENT_BANK_MAX = 100;
@@ -71,7 +76,7 @@ export function collectQuestionPool(sources = []) {
     const bank = Array.isArray(source?.questionBank) ? source.questionBank : [];
     bank.forEach((question, index) => {
       const normalized = normalizeBankQuestion(question, source, index);
-      if (!normalized.question) return;
+      if (!normalized.question || isMetaDerivedQuestion(normalized)) return;
       pool.push({
         ...normalized,
         sourceId: source.id,
@@ -102,26 +107,39 @@ export function sampleQuestionsFromSources(sources = [], count = PRACTICE_DRAW_M
 export function buildHeuristicDocumentBank(source = {}, target = DOCUMENT_BANK_MIN) {
   const size = clamp(target, DOCUMENT_BANK_MIN, DOCUMENT_BANK_MAX);
   const filename = String(source.name || source.filename || "本资料").trim();
-  const keyPoints = Array.isArray(source.summary?.keyPoints)
-    ? source.summary.keyPoints.map((item) => String(item || "").trim()).filter(Boolean)
-    : [];
-  const titles = keyPoints.length
-    ? keyPoints
-    : [filename, `${filename} 的核心概念`, `${filename} 的应用场景`, `${filename} 的易错点`];
+  const titles = extractStudyConceptTitles(source, 16);
+  const fallbackTitles = filterStudyKeyPoints(
+    Array.isArray(source.summary?.keyPoints) ? source.summary.keyPoints : [],
+    8
+  );
+  const concepts = titles.length
+    ? titles
+    : fallbackTitles.length
+      ? fallbackTitles
+      : [filename, `${filename} 的核心概念`, `${filename} 的应用场景`, `${filename} 的易错点`];
   const bank = [];
   let templateIndex = 0;
   while (bank.length < size) {
-    const title = titles[bank.length % titles.length];
+    const title = concepts[bank.length % concepts.length];
     const template = COACH_QUESTION_TEMPLATES[templateIndex % COACH_QUESTION_TEMPLATES.length];
-    bank.push(normalizeBankQuestion({
+    const question = normalizeBankQuestion({
       id: `qb-heuristic-${source.id || filename}-${bank.length + 1}`,
       question: template(title),
       concept: title,
       why: "本地题库：检验是否真正理解本资料"
-    }, source, bank.length));
+    }, source, bank.length);
+    if (!isMetaDerivedQuestion(question)) bank.push(question);
     templateIndex += 1;
+    if (templateIndex > size * 4) break;
   }
   return bank;
+}
+
+export function questionBankHasMetaPollution(bank = []) {
+  const list = Array.isArray(bank) ? bank : [];
+  if (!list.length) return false;
+  const bad = list.filter((item) => isMetaDerivedQuestion(item)).length;
+  return bad >= 3 || bad / list.length >= 0.15;
 }
 
 export function sourcesNeedQuestionBank(sources = []) {
@@ -129,8 +147,15 @@ export function sourcesNeedQuestionBank(sources = []) {
     if (!source?.id) return false;
     const bank = source.questionBank;
     if (!Array.isArray(bank) || bank.length < DOCUMENT_BANK_MIN) return true;
+    if (questionBankHasMetaPollution(bank)) return true;
     // Heuristic seed banks still need the async LLM refresh.
     if (source.questionBankMeta?.pendingLlm) return true;
     return false;
   });
 }
+
+export {
+  isMetaDerivedQuestion,
+  stripStudyMetaContent,
+  extractStudyConceptTitles
+} from "./study-content.mjs";

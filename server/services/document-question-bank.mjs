@@ -7,11 +7,14 @@ import {
   DOCUMENT_BANK_MAX,
   DOCUMENT_BANK_MIN,
   buildHeuristicDocumentBank,
+  isMetaDerivedQuestion,
   measureSourceChars,
   normalizeBankQuestion,
   resolveDocumentBankSize,
-  sourcesNeedQuestionBank
+  sourcesNeedQuestionBank,
+  stripStudyMetaContent
 } from "../../src/lib/document-question-bank.mjs";
+import { filterStudyKeyPoints } from "../../src/lib/study-content.mjs";
 
 const BANK_TIMEOUT_MS = Number(process.env.GENERATION_TIMEOUT_MS || 90_000);
 const BANK_FAST_TIMEOUT_MS = Number(process.env.FAST_CHAT_TIMEOUT_MS || 60_000);
@@ -22,15 +25,21 @@ const BANK_BATCH_SIZE = 25;
 function sourceCorpus(source) {
   const name = String(source.name || source.filename || "未命名资料").trim();
   const summary = source.summary?.summary || source.summary || "";
-  const keyPoints = Array.isArray(source.summary?.keyPoints) ? source.summary.keyPoints : [];
+  const keyPoints = filterStudyKeyPoints(
+    Array.isArray(source.summary?.keyPoints) ? source.summary.keyPoints : [],
+    8
+  );
   const pagesText = Array.isArray(source.pages)
     ? source.pages.map((page) => `第 ${page.page || "?"} 页\n${page.text || ""}`).join("\n\n")
     : "";
-  const preview = String(pagesText || source.parsedPreview || "").slice(0, CORPUS_BUDGET);
+  const cleaned = stripStudyMetaContent(pagesText || source.parsedPreview || "");
+  const preview = cleaned.slice(0, CORPUS_BUDGET);
   return [
     `【文件】${name}`,
-    summary ? `摘要：${String(summary).slice(0, 500)}` : "",
-    keyPoints.length ? `要点：${keyPoints.slice(0, 8).map((item) => String(item).slice(0, 120)).join("；")}` : "",
+    summary && !/按页序转写|分隔线为原资料/.test(String(summary))
+      ? `摘要：${String(summary).slice(0, 500)}`
+      : "",
+    keyPoints.length ? `要点：${keyPoints.map((item) => String(item).slice(0, 120)).join("；")}` : "",
     preview ? `原文：\n${preview}` : ""
   ].filter(Boolean).join("\n");
 }
@@ -45,16 +54,18 @@ function bankMessages(source, batchCount, existingQuestions = []) {
   return [
     {
       role: "system",
-      content: "你是费曼学习教练出题助手。只根据这一份学习资料出题，不编造资料未覆盖的内容。只输出合法 JSON。"
+      content: "你是费曼学习教练出题助手。只根据这一份学习资料中的学科知识点出题，不编造资料未覆盖的内容。只输出合法 JSON。"
     },
     {
       role: "user",
       content: `请为下面这一份资料再生成恰好 ${count} 道费曼对练题（整份资料题库目标范围 ${DOCUMENT_BANK_MIN}-${DOCUMENT_BANK_MAX}，本批 ${count} 道）。
 要求：
-1. 只围绕本文件内容，可覆盖解释、举例、边界、对比、失效条件、应用场景
-2. sourceRefs.file 必须是「${name}」
-3. 避免重复，尽量覆盖不同知识点
-${avoid.length ? `4. 不要与下列已有题目重复或高度相似：\n${avoid.join("\n")}` : ""}
+1. 只围绕真正可学习的知识点（语法、概念、规则、用法、对比、应用场景等）
+2. 严禁把文档排版/转写说明当成知识点，例如：PDF 页数、Markdown 转写、分页分隔线「----」、页眉页脚、目录装饰、文件格式说明
+3. concept 必须是简短的学科概念名，不能是转写备注或分隔线说明
+4. sourceRefs.file 必须是「${name}」
+5. 避免重复，尽量覆盖不同知识点
+${avoid.length ? `6. 不要与下列已有题目重复或高度相似：\n${avoid.join("\n")}` : ""}
 
 返回 JSON：
 {
@@ -80,6 +91,7 @@ function mergeUniqueQuestions(existing, incoming, source, limit) {
     if (merged.length >= limit) break;
     const normalized = normalizeBankQuestion(question, source, merged.length);
     if (!normalized.question || seen.has(normalized.question)) continue;
+    if (isMetaDerivedQuestion(normalized)) continue;
     seen.add(normalized.question);
     merged.push(normalized);
   }

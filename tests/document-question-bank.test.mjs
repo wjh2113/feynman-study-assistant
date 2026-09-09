@@ -6,10 +6,17 @@ import {
   PRACTICE_DRAW_MAX,
   PRACTICE_DRAW_MIN,
   buildHeuristicDocumentBank,
+  questionBankHasMetaPollution,
   resolveDocumentBankSize,
   resolvePracticeDrawCount,
   sampleQuestionsFromSources
 } from "../src/lib/document-question-bank.mjs";
+import {
+  extractStudyConceptTitles,
+  isMetaDerivedQuestion,
+  isStudyMetaText,
+  stripStudyMetaContent
+} from "../src/lib/study-content.mjs";
 
 test("resolveDocumentBankSize stays between 30 and 100", () => {
   const short = resolveDocumentBankSize({
@@ -60,4 +67,53 @@ test("sampleQuestionsFromSources draws without duplicates from banks", () => {
   assert.equal(drawn.length, 8);
   assert.equal(new Set(drawn.map((item) => item.id)).size, 8);
   assert.ok(drawn.every((item) => item.question));
+});
+
+test("stripStudyMetaContent removes PDF conversion notes and page separators", () => {
+  const cleaned = stripStudyMetaContent(`# TRY！N5 第 2 课
+
+> 整理自《TRY！N5知识点汇总资料.pdf》（52 页），按页序转写为 Markdown。「----」分隔线为原资料分页处。
+
+## 一、「です」「ます」
+
+ます形表示礼貌语。
+----
+继续学习助词。
+`);
+  assert.match(cleaned, /です/);
+  assert.doesNotMatch(cleaned, /按页序转写/);
+  assert.doesNotMatch(cleaned, /分隔线为原资料分页/);
+  assert.equal(isStudyMetaText("「----」分隔线为原资料分页处。"), true);
+});
+
+test("heuristic bank prefers headings over conversion notes", () => {
+  const source = {
+    id: "n5",
+    name: "TRY！N5知识点汇总资料.md",
+    parsedPreview: `# TRY！N5 知识点汇总
+
+> 整理自《TRY！N5知识点汇总资料.pdf》（52 页），按页序转写为 Markdown。「----」分隔线为原资料分页处。
+
+## 动词ます形
+
+### 助词に与で
+
+一类动词变形规则。
+`,
+    summary: {
+      keyPoints: [
+        "pdf》（52 页），按页序转写为 Markdown。",
+        "「----」分隔线为原资料分页处。",
+        "动词分为一类、二类、三类"
+      ]
+    }
+  };
+  const titles = extractStudyConceptTitles(source);
+  assert.ok(titles.some((title) => /ます|助词/.test(title)));
+  assert.equal(titles.some((title) => /转写|分隔线/.test(title)), false);
+
+  const bank = buildHeuristicDocumentBank(source, 30);
+  assert.equal(bank.length, 30);
+  assert.equal(bank.some((item) => isMetaDerivedQuestion(item)), false);
+  assert.equal(questionBankHasMetaPollution(bank), false);
 });
