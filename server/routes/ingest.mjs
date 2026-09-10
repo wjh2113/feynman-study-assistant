@@ -77,7 +77,9 @@ router.post("/api/projects/:projectId/resummarize", async (req, res) => {
       const project = await getProject(req.params.projectId, req.userId);
       if (!project) return res.status(404).json({ error: "学习项目不存在" });
       const status = project.analysis?.contentAnalysisStatus;
-      if (status === "pending" || status === "running") {
+      // Only block when a job is actively running. Stale "pending" (e.g. after a
+      // crashed/overwritten queue write) must remain recoverable via 重新总结.
+      if (status === "running") {
         return res.status(202).json({ queued: true, projectId: req.params.projectId, alreadyRunning: true });
       }
       await saveProject({

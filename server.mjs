@@ -12,6 +12,7 @@ import { requestContext, metricsSnapshot } from "./server/observability.mjs";
 import { objectStorageStatus } from "./server/object-storage.mjs";
 import { assertProductionRuntimeConfig, runtimeConfigHints } from "./server/runtime-config.mjs";
 import { queueStatus } from "./server/task-queue.mjs";
+import { bootstrapTaskHandlers } from "./server/bootstrap-tasks.mjs";
 import { secretsEncryptionStatus } from "./server/secret-crypto.mjs";
 import {
   databaseStatus,
@@ -106,6 +107,7 @@ process.on("unhandledRejection", (error) => {
   console.error("[fatal] unhandledRejection", error);
 });
 app.listen(port, "0.0.0.0", () => {
+  bootstrapTaskHandlers();
   console.log(`Feynman Study API listening on http://127.0.0.1:${port}`);
   if (isGatewayEnabled()) {
     const { baseUrl } = getGatewayPublicStatus();

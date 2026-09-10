@@ -28,9 +28,15 @@ function ensureWorker() {
   }, { connection, concurrency: Number(process.env.WORKER_CONCURRENCY || 2) });
 }
 
+export function registerTaskHandler(name, localHandler) {
+  if (!name || typeof localHandler !== "function") return;
+  handlers.set(name, localHandler);
+  ensureWorker();
+}
+
 export async function enqueueTask(name, payload, localHandler) {
+  if (typeof localHandler === "function") registerTaskHandler(name, localHandler);
   if (redisEnabled()) {
-    handlers.set(name, localHandler);
     ensureWorker();
     try {
       const job = await Promise.race([
@@ -55,7 +61,9 @@ export async function enqueueTask(name, payload, localHandler) {
   queueMicrotask(async () => {
     job.status = "active";
     try {
-      job.result = await localHandler(payload, (progress) => { job.progress = progress; });
+      const handler = handlers.get(name) || localHandler;
+      if (!handler) throw new Error(`任务处理器未注册：${name}`);
+      job.result = await handler(payload, (progress) => { job.progress = progress; });
       job.progress = 100;
       job.status = "completed";
     } catch (error) {

@@ -200,12 +200,11 @@ export async function runDocumentQuestionBankJob(payload, progress = () => {}) {
 
   const prefs = await getUserPreferences(userId);
   const capability = prefs.practiceQuestionCapability === "quality-chat" ? "quality-chat" : "fast-chat";
-  const byId = new Map(sources.map((source) => [source.id, source]));
+  const bankUpdates = new Map();
   let done = 0;
   for (const source of pending) {
     const generated = await generateQuestionBankForSource(source, userId, capability);
-    byId.set(source.id, {
-      ...source,
+    bankUpdates.set(String(source.id), {
       questionBank: generated.questionBank,
       questionBankMeta: {
         ...generated.questionBankMeta,
@@ -216,16 +215,23 @@ export async function runDocumentQuestionBankJob(payload, progress = () => {}) {
     progress(Math.round((done / pending.length) * 100));
   }
 
-  const nextSources = sources.map((source) => byId.get(source.id) || source);
+  // Re-read before write so a concurrent knowledge-map job is not clobbered.
+  const latest = await getProject(projectId, userId);
+  if (!latest) throw new Error("学习项目不存在");
+  const latestSources = latest.analysis?.sources || [];
+  const nextSources = latestSources.map((source) => {
+    const update = bankUpdates.get(String(source.id));
+    return update ? { ...source, ...update } : source;
+  });
   await saveProject({
-    ...project,
+    ...latest,
     userId,
     analysis: {
-      ...(project.analysis || {}),
+      ...(latest.analysis || {}),
       sources: nextSources
     }
   });
-  return { projectId, updated: pending.length, capability };
+  return { projectId, updated: bankUpdates.size, capability };
 }
 
 export function enqueueDocumentQuestionBanks(payload) {

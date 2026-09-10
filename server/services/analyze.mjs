@@ -926,10 +926,13 @@ export async function applyContentEnrichment({
     )
   );
 
-  const existingAnalysis = existingProject?.analysis || {};
+  // Re-read before write so concurrent question-bank updates are preserved.
+  const latestProject = (await getProject(projectId, userId)) || existingProject || {};
+  const existingAnalysis = latestProject?.analysis || existingProject?.analysis || {};
   const replaceMap = Boolean(existingAnalysis.needsResummarize)
     || !(existingAnalysis.modules || []).length
-    || Boolean(existingAnalysis.demo);
+    || Boolean(existingAnalysis.demo)
+    || ["pending", "running", "failed"].includes(String(existingAnalysis.contentAnalysisStatus || ""));
   const mergedAnalysis = {
     ...demo,
     ...result,
@@ -963,21 +966,21 @@ export async function applyContentEnrichment({
   };
 
   await saveProject({
-    ...(existingProject || {}),
+    ...latestProject,
     userId,
     id: projectId,
-    title: title || existingProject?.title,
-    mode: mode || existingProject?.mode,
-    createdAt: existingProject?.createdAt || Date.now(),
-    progress: Math.max(Number(existingProject?.progress || 0), 22),
+    title: title || latestProject?.title,
+    mode: mode || latestProject?.mode,
+    createdAt: latestProject?.createdAt || Date.now(),
+    progress: Math.max(Number(latestProject?.progress || 0), 22),
     description: analysis.summary,
     analysis,
-    blindspots: existingProject?.blindspots || [],
-    sessions: existingProject?.sessions || [],
-    onePager: existingProject?.onePager || null,
-    learningPlan: existingProject?.learningPlan || null,
-    goal: existingProject?.goal,
-    level: existingProject?.level
+    blindspots: latestProject?.blindspots || [],
+    sessions: latestProject?.sessions || [],
+    onePager: latestProject?.onePager || null,
+    learningPlan: latestProject?.learningPlan || null,
+    goal: latestProject?.goal,
+    level: latestProject?.level
   });
 
   const resolvedChapterId = chapterId || null;
