@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import * as authApi from "../../api/auth.js";
+import { resolveApiUrl } from "../../lib/runtime.js";
+import { cacheAuthUser, clearCachedAuthUser, loadCachedAuthUser } from "../../lib/offline-store.js";
 
 export function useAuth() {
   const [user, setUser] = useState(null);
@@ -8,11 +10,14 @@ export function useAuth() {
   const check = async () => {
     try {
       // Keep soft parsing: unauthenticated /me may be non-OK with { user: null }.
-      const response = await fetch("/api/auth/me", { credentials: "same-origin" });
+      const response = await fetch(resolveApiUrl("/api/auth/me"), { credentials: "include" });
       const data = await response.json();
       setUser(data.user);
+      if (data.user) await cacheAuthUser(data.user);
+      else await clearCachedAuthUser();
     } catch {
-      setUser(null);
+      const cached = await loadCachedAuthUser().catch(() => null);
+      setUser(cached);
     } finally {
       setLoading(false);
     }
@@ -25,17 +30,24 @@ export function useAuth() {
   const login = async (username, password) => {
     const data = await authApi.login(username, password);
     setUser(data);
+    await cacheAuthUser(data);
     return data;
   };
 
   const register = async (username, password) => {
     const data = await authApi.register(username, password);
     setUser(data);
+    await cacheAuthUser(data);
     return data;
   };
 
   const logout = async () => {
-    await authApi.logout();
+    try {
+      await authApi.logout();
+    } catch {
+      // allow local logout when offline
+    }
+    await clearCachedAuthUser();
     setUser(null);
   };
 

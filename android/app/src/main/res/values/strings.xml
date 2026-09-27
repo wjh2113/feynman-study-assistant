@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">知练</string>
+    <string name="title_activity_main">知练</string>
+    <string name="package_name">cn.aidigitcloud.zhifan.study</string>
+    <string name="custom_url_scheme">cn.aidigitcloud.zhifan.study</string>
+</resources>

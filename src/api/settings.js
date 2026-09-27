@@ -1,4 +1,5 @@
 import { apiFetch } from "./client.js";
+import { resolveApiUrl } from "../lib/runtime.js";
 
 export function getHealth() {
   return apiFetch("/api/health");
@@ -73,7 +74,7 @@ export function testRerankerSettings(body) {
 }
 
 export async function exportModelConfig() {
-  const response = await fetch("/api/settings/config/export", { credentials: "same-origin" });
+  const response = await fetch(resolveApiUrl("/api/settings/config/export"), { credentials: "include" });
   const text = await response.text();
   let data = {};
   try {

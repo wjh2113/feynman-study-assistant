@@ -1,4 +1,5 @@
 import { apiFetch } from "./client.js";
+import { resolveApiUrl } from "../lib/runtime.js";
 
 export function listIngestions(status = "waiting,active") {
   return apiFetch(`/api/ingestions?status=${encodeURIComponent(status)}`);
@@ -30,14 +31,15 @@ function parseAnalyzeResponse(status, text) {
 }
 
 export function analyzeBackground(formData, { onUploadProgress } = {}) {
+  const analyzeUrl = resolveApiUrl("/api/analyze?background=true");
   if (typeof XMLHttpRequest === "undefined") {
-    return fetch("/api/analyze?background=true", { method: "POST", body: formData, credentials: "same-origin" })
+    return fetch(analyzeUrl, { method: "POST", body: formData, credentials: "include" })
       .then(async (response) => parseAnalyzeResponse(response.status, await response.text()));
   }
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/analyze?background=true");
+    xhr.open("POST", analyzeUrl);
     xhr.withCredentials = true;
     xhr.upload.onprogress = (event) => {
       if (!onUploadProgress) return;

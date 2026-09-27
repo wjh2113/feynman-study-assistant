@@ -1,0 +1,25 @@
+{
+  "appId": "cn.aidigitcloud.zhifan.study",
+  "appName": "知练",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "url": "https://study.aidigitcloud.cn",
+    "cleartext": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "backgroundColor": "#0c4a6e",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "style": "LIGHT",
+      "backgroundColor": "#0c4a6e"
+    }
+  },
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#f0f9ff"
+  }
+}

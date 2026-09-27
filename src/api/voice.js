@@ -1,13 +1,15 @@
+import { resolveApiUrl } from "../lib/runtime.js";
+
 export async function transcribeVoice(blob, { purpose = "", signal } = {}) {
   const body = new FormData();
   const extension = (blob.type || "").includes("mp4") ? "m4a" : "webm";
   body.append("audio", blob, `recording.${extension}`);
   if (purpose) body.append("purpose", purpose);
 
-  const response = await fetch("/api/voice/transcribe", {
+  const response = await fetch(resolveApiUrl("/api/voice/transcribe"), {
     method: "POST",
     body,
-    credentials: "same-origin",
+    credentials: "include",
     signal
   });
   const text = await response.text();

@@ -1,8 +1,17 @@
+import { resolveApiUrl } from "../lib/runtime.js";
+
+function withCredentials(options = {}) {
+  return {
+    credentials: "include",
+    ...options
+  };
+}
+
 export async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 60_000, label = "请求") {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
+    const response = await fetch(resolveApiUrl(url), { ...withCredentials(options), signal: controller.signal });
     const text = await response.text();
     let data = {};
     try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text || `${label}返回了无法识别的内容` }; }
@@ -17,7 +26,7 @@ export async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 60_000
 }
 
 export async function apiFetch(url, options = {}) {
-  const response = await fetch(url, { credentials: "same-origin", ...options });
+  const response = await fetch(resolveApiUrl(url), withCredentials(options));
   const text = await response.text();
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text || "响应无法解析" }; }

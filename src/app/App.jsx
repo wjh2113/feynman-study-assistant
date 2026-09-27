@@ -37,6 +37,9 @@ import { Coach } from "../features/coach/Coach.jsx";
 import { Blindspots } from "../features/blindspots/Blindspots.jsx";
 import { OutputStudio } from "../features/output/OutputStudio.jsx";
 import { PreferencesPage } from "../features/preferences/PreferencesPage.jsx";
+import { OfflineBanner } from "../components/OfflineBanner.jsx";
+import { cacheProjectsSnapshot, loadCachedProjects } from "../lib/offline-store.js";
+import { isLikelyOfflineError } from "../lib/runtime.js";
 
 function sourceIdsFromProject(project) {
   return dedupeAnalysisSources(project?.analysis?.sources || []).map((source) => source.id).filter(Boolean);
@@ -139,14 +142,29 @@ export function App() {
           setActiveProjectId((current) =>
             nextProjects.some((item) => item.id === current) ? current : nextProjects[0].id
           );
+          cacheProjectsSnapshot(user.id, nextProjects).catch(() => {});
         } else {
           setProjects([]);
           setActiveProjectId(null);
+          cacheProjectsSnapshot(user.id, []).catch(() => {});
         }
         dirtyProjectIdsRef.current.clear();
         if (!cancelled) setPersistenceReady(true);
       } catch (error) {
-        if (!cancelled) showToast(`持久化连接失败：${error.message}`);
+        if (cancelled) return;
+        const cached = await loadCachedProjects(user.id).catch(() => null);
+        if (cached?.length) {
+          setProjects(cached);
+          setActiveProjectId((current) =>
+            cached.some((item) => item.id === current) ? current : cached[0].id
+          );
+          setPersistenceReady(true);
+          showToast(isLikelyOfflineError(error)
+            ? "已进入离线模式，使用本机缓存的学科与题库"
+            : `网络异常，已使用本机缓存：${error.message}`);
+          return;
+        }
+        showToast(`持久化连接失败：${error.message}`);
       }
     };
     hydrate();
@@ -244,14 +262,18 @@ export function App() {
       if (data.project) {
         dirtyProjectIdsRef.current.delete(projectId);
         const enriched = await enrichProjectWithSessions(data.project, documentIds);
-        setProjects((items) => items.map((item) => (item.id === projectId ? enriched : item)));
+        setProjects((items) => {
+          const next = items.map((item) => (item.id === projectId ? enriched : item));
+          if (user?.id) cacheProjectsSnapshot(user.id, next).catch(() => {});
+          return next;
+        });
         return enriched;
       }
     } catch (error) {
-      showToast(`同步项目失败：${error.message}`);
+      if (!isLikelyOfflineError(error)) showToast(`同步项目失败：${error.message}`);
     }
     return null;
-  }, [activeProjectId, selectedDocumentIds, showToast]);
+  }, [activeProjectId, selectedDocumentIds, showToast, user?.id]);
 
   const setSelectedDocumentIds = (nextIds) => {
     const normalized = Array.isArray(nextIds) ? [...new Set(nextIds.filter(Boolean))] : [];
@@ -433,6 +455,7 @@ export function App() {
 
   return (
     <div className="app-shell">
+      <OfflineBanner />
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="brand">
           <div className="brand-mark"><span>知</span></div>

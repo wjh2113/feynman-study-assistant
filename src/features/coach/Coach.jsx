@@ -20,6 +20,7 @@ import { createSession, listSessions, updateSession } from "../../api/projects.j
 import { getPreferences } from "../../api/settings.js";
 import { questionsForProject } from "../../lib/questions.js";
 import { resolveMapAvailability } from "../../lib/map-availability.js";
+import { isLikelyOfflineError } from "../../lib/runtime.js";
 import { ScoreBar } from "./ScoreBar.jsx";
 import { Spinner } from "../../components/Spinner.jsx";
 
@@ -199,14 +200,14 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
       return undefined;
     }
     let cancelled = false;
+    const targetConcept = concepts.find(
+      (item) => item.id === bootQuestion?.conceptId || item.title === bootQuestion?.concept
+    );
     const load = async () => {
       try {
         const data = await listSessions(project.id, { documentIds: selectedDocumentIds });
         if (cancelled) return;
         setSessionsCache(data.sessions || []);
-        const targetConcept = concepts.find(
-          (item) => item.id === bootQuestion?.conceptId || item.title === bootQuestion?.concept
-        );
         const existing = (data.sessions || []).find((item) =>
           item.questionId === bootQuestion?.id &&
           item.conceptId === targetConcept?.id &&
@@ -247,7 +248,22 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
           }
         }
       } catch (error) {
-        if (!cancelled) showToast(`会话加载失败：${error.message}`);
+        if (cancelled) return;
+        if (isLikelyOfflineError(error) || navigator.onLine === false) {
+          const offlineSession = {
+            id: `offline-${Date.now()}`,
+            questionId: bootQuestion?.id,
+            conceptId: targetConcept?.id || bootQuestion?.conceptId,
+            messages: [{ from: "ai", text: bootQuestion?.question }],
+            evaluations: [],
+            meta: { maxTurns, offline: true }
+          };
+          setSessionId(offlineSession.id);
+          setSessionsCache((items) => [offlineSession, ...(items || [])]);
+          showToast("离线练习已开启：使用本地题库与本地评分");
+          return;
+        }
+        showToast(`会话加载失败：${error.message}`);
       }
     };
     load();
@@ -450,13 +466,18 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
         ...(finalDiagnosis ? { diagnosis: finalDiagnosis } : {})
       }
     };
-    if (sessionId) {
+    if (sessionId && !String(sessionId).startsWith("offline-")) {
       try {
         await updateSession(project.id, sessionId, sessionPatch);
       } catch (error) {
-        showToast(error.message);
-        return;
+        if (!isLikelyOfflineError(error) && navigator.onLine !== false) {
+          showToast(error.message);
+          return;
+        }
+        showToast("离线已完成本地对练；联网后进度可重新同步");
       }
+    } else if (String(sessionId || "").startsWith("offline-")) {
+      showToast("离线已完成本地对练；联网后请再保存一轮以同步进度");
     }
     const nextBlindspots = projectBlindspots.map((item) => {
       if (!passed) return item;
