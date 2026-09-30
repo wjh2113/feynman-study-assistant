@@ -453,6 +453,8 @@ export function App() {
     return <AuthPage onLogin={{ login, register }} />;
   }
 
+  const showDocPicker = ["coach", "blindspots", "output", "overview"].includes(activeView);
+
   return (
     <div className="app-shell">
       <OfflineBanner />
@@ -546,6 +548,12 @@ export function App() {
                 <strong>{selectedDocumentIds.length ? `${selectedDocumentIds.length} 份` : "未选择"}</strong>
               </>
             )}
+            {!coachView && showDocPicker && selectedDocumentIds.length > 0 && (
+              <>
+                <ChevronRight size={14} />
+                <strong>{selectedDocumentIds.length} 份资料</strong>
+              </>
+            )}
           </div>
           <div className="topbar-actions">
             <div className="notification-shell">
@@ -574,12 +582,12 @@ export function App() {
         <div className="page-wrap">
           {project ? (
             <>
-              {coachView && (
+              {showDocPicker && (
                 <PracticeDocumentPicker
                   sources={project.analysis?.sources || []}
                   selectedIds={selectedDocumentIds}
                   onChange={setSelectedDocumentIds}
-                  label="选择练习资料"
+                  label="练习资料"
                 />
               )}
               {activeView === "overview" && (

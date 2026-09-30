@@ -117,6 +117,109 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background: rgba(255, 255, 255, 0.9);
   box-shadow: inset 0 1px 0 #fff;
 }
+.practice-doc-picker--compact {
+  position: relative;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  z-index: 20;
+}
+.practice-doc-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.practice-doc-picker-label {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+}
+.practice-doc-select {
+  flex: 1 1 220px;
+  min-width: 0;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: #fff;
+  color: #0f172a;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .15s, box-shadow .15s;
+}
+.practice-doc-select:hover:not(:disabled),
+.practice-doc-select.open {
+  border-color: #67e8f9;
+  box-shadow: 0 0 0 3px rgba(8, 145, 178, .12);
+}
+.practice-doc-select:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.practice-doc-select-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+.practice-doc-select em {
+  flex-shrink: 0;
+  font-style: normal;
+  font-size: 11px;
+  color: #64748b;
+  background: #f1f5f9;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.practice-doc-select svg:last-child {
+  flex-shrink: 0;
+  color: #94a3b8;
+  transition: transform .15s;
+}
+.practice-doc-select.open svg:last-child {
+  transform: rotate(180deg);
+}
+.practice-doc-dropdown {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: calc(100% - 4px);
+  z-index: 30;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  max-height: min(320px, 50vh);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: #fff;
+  box-shadow: var(--shadow-bento-lg);
+}
+.practice-doc-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #334155;
+}
+.practice-doc-option:hover { background: #f8fafc; }
+.practice-doc-option.selected {
+  background: #ecfeff;
+  color: #0e7490;
+}
+.practice-doc-option input { margin-top: 2px; flex-shrink: 0; }
+.practice-doc-option span { min-width: 0; word-break: break-word; }
 .practice-doc-picker-head {
   display: flex;
   align-items: flex-start;
@@ -2329,6 +2432,12 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
   border: 1px solid #e0e2dc;
   border-radius: 12px;
   background: linear-gradient(180deg, #fbfcf9, #f4f6f1);
+}
+.practice-doc-picker--compact {
+  gap: 0;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.92);
+  border-color: var(--line);
 }
 .practice-doc-picker-head {
   display: flex;

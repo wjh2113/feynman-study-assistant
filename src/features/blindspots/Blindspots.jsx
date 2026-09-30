@@ -26,7 +26,7 @@ export function Blindspots({ project, selectedDocumentIds = [], updateProject, s
   const [filter, setFilter] = useState("all");
   const visible = blindspots.filter((item) => filter === "all" || item.status === filter);
 
-  if (!selectedDocumentIds.length) return <EmptyMini text="暂无练习资料，请先在「学习资料」上传并完成解析" />;
+  if (!selectedDocumentIds.length) return <EmptyMini text="请先在上方选择要查看的练习资料" />;
 
   const setStatus = async (id, status) => {
     const nextBlindspots = (project.blindspots || []).map((item) => item.id === id ? { ...item, status } : item);

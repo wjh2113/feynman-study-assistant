@@ -42,7 +42,7 @@ export function OutputStudio({ project, selectedDocumentIds = [], updateProject,
     setEdited(false);
   }, [project.id, project?.onePager]);
 
-  if (!selectedDocumentIds.length) return <EmptyMini text="请先上传资料并完成解析，再生成学习成果" />;
+  if (!selectedDocumentIds.length) return <EmptyMini text="请先在上方选择资料，再生成学习成果" />;
 
   const runGenerate = async () => {
     setConfirmRegenerate(false);
