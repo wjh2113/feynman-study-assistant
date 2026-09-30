@@ -194,13 +194,13 @@ export function Overview({ project, selectedDocumentIds = [], navigate, updatePr
           <section className="panel recent-learning">
             <div className="panel-head">
               <div><span className="section-kicker">最近对练记录</span><h3>让每次输出都有迹可循</h3></div>
-              <button className="text-btn" type="button" onClick={() => navigate("coach")}>查看全部 <ChevronRight size={15} /></button>
+              <button className="text-btn" type="button" onClick={() => navigate("archive")}>查看全部 <ChevronRight size={15} /></button>
             </div>
             <div className="session-list">
               {sessions.slice(0, 3).map((session) => {
                 const grade = sessionGrade(session.score);
                 return (
-                  <button className="session-row" type="button" key={session.id} onClick={() => navigate("coach")}>
+                  <button className="session-row" type="button" key={session.id} onClick={() => navigate("archive")}>
                     <span className="session-icon"><FileText size={16} /></span>
                     <div className="session-copy">
                       <strong>{session.concept}</strong>

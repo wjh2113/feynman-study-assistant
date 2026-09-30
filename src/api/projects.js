@@ -104,6 +104,16 @@ export function updateSession(projectId, sessionId, body) {
   });
 }
 
+export function getSession(projectId, sessionId) {
+  return apiFetch(`/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export function deleteSession(projectId, sessionId) {
+  return apiFetch(`/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE"
+  });
+}
+
 export function variantQuestion(projectId, blindspotId, { chapterId, documentIds } = {}) {
   const body = {};
   if (chapterId) body.chapterId = chapterId;

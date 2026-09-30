@@ -708,6 +708,15 @@ export async function getCoachSession(sessionId) {
   return rowToCoachSession(result.rows[0]);
 }
 
+export async function deleteCoachSession(sessionId, userId, projectId) {
+  const db = await getDatabase();
+  const result = await db.query(
+    "DELETE FROM coach_sessions WHERE id = $1 AND user_id = $2 AND project_id = $3 RETURNING id",
+    [sessionId, userId, projectId]
+  );
+  return Boolean(result.rows[0]);
+}
+
 export async function listCoachSessions(projectId, userId, { chapterId, documentIds } = {}) {
   const db = await getDatabase();
   const result = chapterId

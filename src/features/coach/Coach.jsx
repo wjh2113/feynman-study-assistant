@@ -402,7 +402,36 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
         showToast("发现一个新的认知盲区，已加入补漏清单");
       }
       if (data.completed) {
-        showToast("本轮对练已结束，请查看学习诊断");
+        const finalEval = data.evaluation || evaluation;
+        if (sessionId && !String(sessionId).startsWith("offline-") && finalEval) {
+          const avg = Math.round(Object.values(finalEval).reduce((a, b) => a + b, 0) / 4);
+          const passScore = Number(prefs.coachPassScore) || 75;
+          const passed = avg >= passScore;
+          const archivePatch = {
+            documentIds: selectedDocumentIds,
+            score: avg,
+            status: passed ? "passed" : "needs_review",
+            meta: {
+              maxTurns,
+              isVariant,
+              blindspotId,
+              blindspotTitle,
+              practiceDocumentIds: selectedDocumentIds,
+              evaluation: finalEval,
+              evidence: Array.isArray(data.evidence) ? data.evidence : evidence,
+              ...(data.diagnosis ? { diagnosis: data.diagnosis } : {})
+            }
+          };
+          try {
+            await updateSession(project.id, sessionId, archivePatch);
+            syncSessionCache({ id: sessionId, ...archivePatch, meta: { ...(archivePatch.meta || {}) } });
+            showToast(passed ? "本轮对练已结束并归档" : "本轮对练已归档，建议根据诊断补漏");
+          } catch {
+            showToast("本轮对练已结束，归档失败时可点「结束并保存」重试");
+          }
+        } else {
+          showToast("本轮对练已结束，请查看学习诊断");
+        }
       }
       await refreshProject?.(project.id);
     } catch (error) {
@@ -494,7 +523,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
     }
     await refreshProject?.(project.id, selectedDocumentIds);
     setCompleted(true);
-    showToast(passed ? "对练已通过，诊断已保存" : "对练已保存，请根据诊断补漏后再复测");
+    showToast(passed ? "对练已通过，已写入归档" : "对练已归档，请根据诊断补漏后再复测");
   };
 
   const currentTurn = Math.min(turn, maxTurns);
@@ -511,7 +540,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
     <div className="coach-page">
       <PageHeading
         title={isVariant ? `复测 · ${blindspotTitle || "盲区"}` : "费曼对练"}
-        action={<button className="primary-btn" onClick={finish}><Check size={16} /> 结束并保存</button>}
+        action={<button className="primary-btn" onClick={finish}><Check size={16} /> 结束并归档</button>}
       />
 
       {questionsLoading && (

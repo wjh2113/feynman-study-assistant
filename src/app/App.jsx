@@ -37,6 +37,7 @@ import { Coach } from "../features/coach/Coach.jsx";
 import { Blindspots } from "../features/blindspots/Blindspots.jsx";
 import { OutputStudio } from "../features/output/OutputStudio.jsx";
 import { PreferencesPage } from "../features/preferences/PreferencesPage.jsx";
+import { PracticeArchive } from "../features/archive/PracticeArchive.jsx";
 import { OfflineBanner } from "../components/OfflineBanner.jsx";
 import { cacheProjectsSnapshot, loadCachedProjects } from "../lib/offline-store.js";
 import { isLikelyOfflineError } from "../lib/runtime.js";
@@ -453,7 +454,7 @@ export function App() {
     return <AuthPage onLogin={{ login, register }} />;
   }
 
-  const showDocPicker = ["coach", "blindspots", "output", "overview"].includes(activeView);
+  const showDocPicker = ["coach", "archive", "blindspots", "output", "overview"].includes(activeView);
 
   return (
     <div className="app-shell">
@@ -635,6 +636,16 @@ export function App() {
                   selectedDocumentIds={selectedDocumentIds}
                   updateProject={updateProject}
                   saveProjectPatch={saveProjectPatch}
+                  refreshProject={refreshProject}
+                  showToast={showToast}
+                  navigate={changeView}
+                />
+              )}
+              {activeView === "archive" && (
+                <PracticeArchive
+                  key={`${project.id}:${selectedDocumentIds.join(",")}`}
+                  project={project}
+                  selectedDocumentIds={selectedDocumentIds}
                   refreshProject={refreshProject}
                   showToast={showToast}
                   navigate={changeView}

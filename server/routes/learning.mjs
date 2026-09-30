@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { nextReviewAt } from "../learning-schedule.mjs";
 import {
   createReminder,
+  deleteCoachSession,
   getChapter,
   getCoachSession,
   getProject,
@@ -173,6 +174,28 @@ router.put("/api/projects/:projectId/sessions/:sessionId", async (req, res) => {
     res.json({ session });
   } catch (error) {
     res.status(400).json({ error: error.message || "保存会话失败" });
+  }
+});
+
+router.get("/api/projects/:projectId/sessions/:sessionId", async (req, res) => {
+  try {
+    const session = await getCoachSession(req.params.sessionId);
+    if (!session || session.projectId !== req.params.projectId || session.userId !== req.userId) {
+      return res.status(404).json({ error: "会话不存在" });
+    }
+    res.json({ session });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "读取会话失败" });
+  }
+});
+
+router.delete("/api/projects/:projectId/sessions/:sessionId", async (req, res) => {
+  try {
+    const removed = await deleteCoachSession(req.params.sessionId, req.userId, req.params.projectId);
+    if (!removed) return res.status(404).json({ error: "会话不存在" });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "删除会话失败" });
   }
 });
 

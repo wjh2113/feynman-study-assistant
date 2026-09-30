@@ -1,4 +1,5 @@
 import {
+  Archive,
   BookMarked,
   BrainCircuit,
   FolderOpen,
@@ -17,6 +18,7 @@ export const subjectNavItems = [
 
 export const practiceNavItems = [
   { id: "coach", label: "费曼对练", icon: MessageCircleQuestion },
+  { id: "archive", label: "对练归档", icon: Archive },
   { id: "blindspots", label: "盲区与复测", icon: Target },
   { id: "output", label: "学习成果", icon: BookMarked }
 ];
