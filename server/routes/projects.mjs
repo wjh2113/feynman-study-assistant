@@ -1,5 +1,4 @@
 import { Router } from "express";
-import JSZip from "jszip";
 import { randomUUID } from "node:crypto";
 import { projectForPersistence } from "../../src/lib/progress.mjs";
 import { getObject } from "../object-storage.mjs";
@@ -22,6 +21,7 @@ import {
 import { completeDocumentDelete } from "../services/document-delete.mjs";
 import { syncProjectSourcesFromDocuments } from "../services/document-dedupe.mjs";
 import { enqueueTaskLater } from "../task-queue.mjs";
+import { buildStudyPackZip } from "../services/study-pack.mjs";
 
 const router = Router();
 
@@ -31,7 +31,24 @@ router.get("/api/projects/:projectId/export", async (req, res) => {
   const format = String(req.query.format || "markdown");
   const markdown = `# ${project.title}\n\n${project.analysis?.summary || project.description || ""}\n\n## 核心知识\n${(project.analysis?.modules || []).flatMap((module) => module.concepts || []).map((concept) => `- **${concept.title}**：${concept.explanation || ""}`).join("\n")}\n\n## 盲区\n${(project.blindspots || []).map((item) => `- ${item.title}：${item.problem || ""}`).join("\n")}`;
   if (format === "json") return res.attachment(`${project.id}.json`).type("application/json").send(JSON.stringify(project, null, 2));
-  if (format === "zip") { const zip = new JSZip(); zip.file("README.md", markdown); zip.file("project.json", JSON.stringify(project, null, 2)); return res.attachment(`${project.id}.zip`).type("application/zip").send(await zip.generateAsync({ type: "nodebuffer" })); }
+  if (format === "zip") {
+    try {
+      const documents = await listDocumentsForProject(req.params.projectId, req.userId);
+      const originalFiles = [];
+      for (const document of documents) {
+        try {
+          const buffer = await getObject({ key: document.stored_name, storagePath: document.storage_path });
+          if (buffer?.length) originalFiles.push({ name: document.filename, buffer });
+        } catch {
+          // skip missing blobs; pack builder requires at least one original
+        }
+      }
+      const zipBuffer = await buildStudyPackZip(project, originalFiles, { allowEmptyFiles: true });
+      return res.attachment(`${project.id}.zip`).type("application/zip").send(zipBuffer);
+    } catch (error) {
+      return res.status(400).json({ error: error.message || "导出学科包失败" });
+    }
+  }
   res.attachment(`${project.id}.md`).type("text/markdown; charset=utf-8").send(markdown);
 });
 

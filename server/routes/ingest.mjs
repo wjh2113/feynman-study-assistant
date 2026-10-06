@@ -16,6 +16,8 @@ import {
 } from "../storage.mjs";
 import { rateLimit } from "../middleware/security.mjs";
 import { analyzeFiles, enqueueAnalysis } from "../services/analyze.mjs";
+import { parseStudyPackZip } from "../services/study-pack.mjs";
+import { enqueueStudyPackImport } from "../services/study-pack-import.mjs";
 import { reindexProject } from "../services/reindex.mjs";
 import { resummarizeProject } from "../services/resummarize.mjs";
 import { decodeUploadName } from "../document-parser.mjs";
@@ -32,6 +34,28 @@ function normalizeUploadedFilenames(req, _res, next) {
     file.originalname = decodeUploadName(file.originalname);
   }
   next();
+}
+
+const MAX_PACK_BYTES = 1200 * 1024 * 1024;
+
+const uploadPack = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_PACK_BYTES, files: 1 }
+});
+
+function uploadStudyPack(req, res, next) {
+  uploadPack.single("pack")(req, res, (error) => {
+    if (error) {
+      if (error instanceof multer.MulterError) {
+        if (error.code === "LIMIT_FILE_SIZE") {
+          return res.status(413).json({ error: "学科包不能超过 1200 MB" });
+        }
+        return res.status(400).json({ error: `上传失败：${error.message}` });
+      }
+      return res.status(400).json({ error: error.message || "上传失败" });
+    }
+    return next();
+  });
 }
 
 function uploadAnalyzeFiles(req, res, next) {
@@ -167,7 +191,9 @@ router.post("/api/ingestions/:ingestionId/retry", async (req, res) => {
     if (!ingestion) return res.status(404).json({ error: "后台解析任务不存在" });
     if (ingestion.status !== "failed") return res.status(409).json({ error: "只有失败的解析任务可以重试" });
     await updateIngestionJob(ingestion.id, req.userId, { status: "waiting", error: null });
-    const task = await enqueueAnalysis(ingestion.payload);
+    const task = ingestion.payload?.kind === "import-pack"
+      ? await enqueueStudyPackImport(ingestion.payload)
+      : await enqueueAnalysis(ingestion.payload);
     res.status(202).json({ task, ingestionId: ingestion.id, resumedFrom: ingestion.stage });
   } catch (error) {
     res.status(400).json({ error: error.message || "重试后台解析失败" });
@@ -189,8 +215,58 @@ router.get("/api/ingestions/:ingestionId", async (req, res) => {
     stage: ingestion.stage,
     progress: Number(ingestion.progress || 0),
     error: ingestion.error,
+    kind: ingestion.payload?.kind || "analyze",
     filenames: (ingestion.payload.files || []).map((file) => decodeUploadName(file.originalname))
   } });
 });
+
+router.post(
+  "/api/projects/:projectId/import-pack",
+  rateLimit({ windowMs: 60_000, max: 6, keyPrefix: "import-pack" }),
+  uploadStudyPack,
+  async (req, res) => {
+    try {
+      if (!(await projectBelongsToUser(req.params.projectId, req.userId))) {
+        return res.status(404).json({ error: "学习项目不存在" });
+      }
+      if (!req.file?.buffer) return res.status(400).json({ error: "请上传学科包 ZIP" });
+      const existingProject = await getProject(req.params.projectId, req.userId);
+      if (!existingProject) return res.status(404).json({ error: "学习项目不存在" });
+      const busy = (await listIngestionJobs(req.userId, ["waiting", "active"]))
+        .some((job) => job.projectId === req.params.projectId);
+      if (busy) {
+        return res.status(409).json({ error: "当前项目已有资料正在后台处理，请完成后再导入学科包" });
+      }
+
+      const { manifest, pack, files } = await parseStudyPackZip(req.file.buffer);
+      const persisted = [];
+      for (const file of files) persisted.push(await persistOriginalFile(req.params.projectId, file));
+      const ingestionId = randomUUID();
+      const jobFiles = files.map((file, index) => ({
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size,
+        stored: persisted[index],
+        documentKey: randomUUID()
+      }));
+      const payload = {
+        kind: "import-pack",
+        ingestionId,
+        projectId: req.params.projectId,
+        userId: req.userId,
+        title: manifest.title || existingProject.title,
+        mode: existingProject.mode || "subject",
+        pack,
+        files: jobFiles
+      };
+      await createIngestionJob({ id: ingestionId, userId: req.userId, projectId: req.params.projectId, payload });
+      const job = await enqueueStudyPackImport(payload);
+      res.status(202).json({ task: job, ingestionId, filenames: jobFiles.map((file) => file.originalname) });
+    } catch (error) {
+      logError(error, { requestId: req.requestId, route: "import-pack", projectId: req.params.projectId, userId: req.userId });
+      res.status(400).json({ error: error.message || "导入学科包失败" });
+    }
+  }
+);
 
 export default router;

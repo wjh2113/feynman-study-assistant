@@ -494,6 +494,7 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 .upload-zone h3 { margin: 15px 0 5px; font-family: var(--serif); font-size: 16px; }
 .upload-zone p { color: #92968e; margin: 0; font-size: 10px; }
 .upload-hint { margin-top: 18px; padding: 6px 10px; border-radius: 20px; color: #8b673c; background: #f7eddf; display: flex; gap: 6px; align-items: center; font-size: 9px; }
+.pack-import-btn { margin-top: 16px; position: relative; z-index: 1; }
 .file-panel { margin-top: 20px; padding: 22px; }
 .pending-files { border-color: #a5f3fc; background: #ecfeff; }
 .filter-btn { border: 1px solid var(--line); background: white; border-radius: 7px; padding: 6px 9px; display: flex; align-items: center; gap: 5px; color: #72766f; font-size: 10px; cursor: pointer; }

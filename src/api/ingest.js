@@ -59,3 +59,33 @@ export function analyzeBackground(formData, { onUploadProgress } = {}) {
     xhr.send(formData);
   });
 }
+
+export function importStudyPackBackground(projectId, formData, { onUploadProgress } = {}) {
+  const importUrl = resolveApiUrl(`/api/projects/${encodeURIComponent(projectId)}/import-pack`);
+  if (typeof XMLHttpRequest === "undefined") {
+    return fetch(importUrl, { method: "POST", body: formData, credentials: "include" })
+      .then(async (response) => parseAnalyzeResponse(response.status, await response.text()));
+  }
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", importUrl);
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (event) => {
+      if (!onUploadProgress) return;
+      if (event.lengthComputable && event.total > 0) {
+        onUploadProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+      }
+    };
+    xhr.onload = () => {
+      try {
+        resolve(parseAnalyzeResponse(xhr.status, xhr.responseText || ""));
+      } catch (error) {
+        reject(error);
+      }
+    };
+    xhr.onerror = () => reject(new Error("学科包上传失败，请检查网络后重试"));
+    xhr.onabort = () => reject(new Error("学科包上传已取消"));
+    xhr.send(formData);
+  });
+}

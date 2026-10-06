@@ -4,6 +4,7 @@ import { EmptyMini } from "../../components/EmptyMini.jsx";
 import { Spinner } from "../../components/Spinner.jsx";
 import { ConfirmDialog } from "../../components/ConfirmDialog.jsx";
 import {
+  Archive,
   ChevronDown,
   ChevronRight,
   CircleAlert,
@@ -20,7 +21,7 @@ import { outlineForSource } from "../../lib/documentOutline.js";
 import { dedupeAnalysisSources } from "../../lib/analysis-sources.mjs";
 import { resolveMapAvailability } from "../../lib/map-availability.js";
 import { decodeUploadName } from "../../lib/filename-encoding.js";
-import { analyzeBackground } from "../../api/ingest.js";
+import { analyzeBackground, importStudyPackBackground } from "../../api/ingest.js";
 import { deleteDocument, getProject, reindexProject, resummarizeProjectBackground, syncProjectSources } from "../../api/projects.js";
 import { FileTypeIcon } from "./FileTypeIcon.jsx";
 
@@ -81,7 +82,10 @@ export function Sources({
   const [deletingSourceId, setDeletingSourceId] = useState(null);
   const [reindexing, setReindexing] = useState(false);
   const [resummarizing, setResummarizing] = useState(false);
+  const [packLoading, setPackLoading] = useState(false);
+  const [packProgress, setPackProgress] = useState(0);
   const fileInput = useRef();
+  const packInput = useRef();
   const prevSourceCountRef = useRef(0);
   const mapNotifyRef = useRef(null);
   const bankNotifyRef = useRef(null);
@@ -285,6 +289,32 @@ export function Sources({
     }
   };
 
+  const importPack = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (analysisTask || loading || packLoading) {
+      return showToast("当前项目已有资料正在处理");
+    }
+    setPackLoading(true);
+    setPackProgress(0);
+    try {
+      const body = new FormData();
+      body.append("pack", file);
+      const data = await importStudyPackBackground(project.id, body, {
+        onUploadProgress: (percent) => setPackProgress(percent)
+      });
+      if (!data.task?.id) throw new Error("后台导入任务创建失败");
+      onTaskStarted(data.task, project.id, data.filenames || [file.name], data.ingestionId, "import-pack");
+      showToast("学科包已上传，正在后台导入原文、知识地图与题库");
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      setPackLoading(false);
+      setPackProgress(0);
+    }
+  };
+
   const deleteSource = async (source) => {
     setDeleteSourceId(null);
     const previousProject = project;
@@ -371,13 +401,16 @@ export function Sources({
     const bank = Array.isArray(source.questionBank) ? source.questionBank : [];
     const bankMeta = source.questionBankMeta || {};
     const bankPendingLlm = Boolean(bankMeta.pendingLlm);
+    const importedBank = bankMeta.capability === "external-import";
     const bankStatusLabel = bankPendingLlm
       ? `题库 ${bank.length} 题 · 正式题生成中`
-      : bankMeta.generated
-        ? `题库 ${bank.length} 题`
-        : bank.length
-          ? `题库 ${bank.length} 题 · 临时`
-          : "暂无题库";
+      : importedBank
+        ? `题库 ${bank.length} 题 · 已导入`
+        : bankMeta.generated
+          ? `题库 ${bank.length} 题`
+          : bank.length
+            ? `题库 ${bank.length} 题 · 临时`
+            : "暂无题库";
     const ocrLabel =
       report.ocrStatus === "ready" ? `OCR ${report.imagesOcrd || 0}/${report.imagesFound || report.imagesOcrd || 0} 张`
         : report.ocrStatus === "not_configured" ? "OCR 待配置"
@@ -487,8 +520,8 @@ export function Sources({
       <PageHeading
         eyebrow="构建专属语料库"
         title="学科资料"
-        description="上传课件与笔记。解析完成后可展开查看大纲与费曼题库；再进入知识地图。练习时勾选资料，对练会从对应题库抽题。"
-        action={<button className="primary-btn" onClick={analyze} disabled={loading || !!analysisTask}>{loading ? <Spinner /> : <Sparkles size={17} />}{loading ? "正在上传…" : analysisTask ? "后台解析中" : files.length ? `分析 ${files.length} 份新资料` : "查看知识地图"}</button>}
+        description="上传课件与笔记，或导入外部生成的学科包（原文 + 知识地图 + 题库）。解析完成后可查看大纲与费曼题库。"
+        action={<button className="primary-btn" onClick={analyze} disabled={loading || packLoading || !!analysisTask}>{loading ? <Spinner /> : <Sparkles size={17} />}{loading ? "正在上传…" : analysisTask ? "后台解析中" : files.length ? `分析 ${files.length} 份新资料` : "查看知识地图"}</button>}
       />
 
       <div
@@ -502,7 +535,41 @@ export function Sources({
         <h3>拖入学习资料，或点击选择文件</h3>
         <p>支持 PDF、DOCX、TXT、Markdown、PNG、JPG、WebP · 单个文件不超过 100 MB</p>
         <div className="upload-hint"><Zap size={14} /> PDF 扫描页、文档截图和单独图片会进入 OCR 识别流程</div>
+        <button
+          type="button"
+          className="secondary-btn pack-import-btn"
+          disabled={loading || packLoading || !!analysisTask}
+          onClick={(event) => {
+            event.stopPropagation();
+            packInput.current?.click();
+          }}
+        >
+          {packLoading ? <Spinner /> : <Archive size={16} />}
+          {packLoading ? "正在上传学科包…" : "导入学科包"}
+        </button>
+        <input
+          ref={packInput}
+          type="file"
+          accept=".zip,application/zip"
+          hidden
+          onClick={(event) => event.stopPropagation()}
+          onChange={importPack}
+        />
       </div>
+
+      {packLoading && (
+        <div className="analysis-task-card" role="status">
+          <Spinner />
+          <div>
+            <strong>{packProgress > 0 ? `正在上传学科包（${packProgress}%）` : "正在上传学科包…"}</strong>
+            <span>上传完成后将解析原文、写入知识地图与题库，不再调用站内大模型生成</span>
+          </div>
+          <div className={`analysis-task-progress${packProgress > 0 ? "" : " is-indeterminate"}`}>
+            <i style={{ width: `${Math.max(packProgress, packProgress > 0 ? packProgress : 35)}%` }} />
+          </div>
+          <b>{packProgress > 0 ? `${packProgress}%` : "…"}</b>
+        </div>
+      )}
 
       {loading && (
         <div className="analysis-task-card" role="status">
@@ -658,11 +725,13 @@ export function Sources({
                   {" · "}
                   {bankViewerSource.questionBankMeta?.pendingLlm
                     ? `${(bankViewerSource.questionBank || []).length} 题 · 正式题生成中`
-                    : bankViewerSource.questionBankMeta?.generated
-                      ? `${(bankViewerSource.questionBank || []).length} 题`
-                      : (bankViewerSource.questionBank || []).length
-                        ? `${(bankViewerSource.questionBank || []).length} 题 · 临时`
-                        : "暂无题目"}
+                    : bankViewerSource.questionBankMeta?.capability === "external-import"
+                      ? `${(bankViewerSource.questionBank || []).length} 题 · 已导入`
+                      : bankViewerSource.questionBankMeta?.generated
+                        ? `${(bankViewerSource.questionBank || []).length} 题`
+                        : (bankViewerSource.questionBank || []).length
+                          ? `${(bankViewerSource.questionBank || []).length} 题 · 临时`
+                          : "暂无题目"}
                 </small>
               </div>
               <button

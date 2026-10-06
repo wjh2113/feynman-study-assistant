@@ -4,6 +4,7 @@ import { runDocumentQuestionBankJob } from "./services/document-question-bank.mj
 import { completeDocumentDelete } from "./services/document-delete.mjs";
 import { reindexProject } from "./services/reindex.mjs";
 import { resummarizeProject } from "./services/resummarize.mjs";
+import { runStudyPackImportJob } from "./services/study-pack-import.mjs";
 
 /** Register BullMQ handlers at boot so restarted workers can pick up queued jobs. */
 export function bootstrapTaskHandlers() {
@@ -13,4 +14,5 @@ export function bootstrapTaskHandlers() {
   registerTaskHandler("document-delete", (payload, progress) => completeDocumentDelete(payload, progress));
   registerTaskHandler("reindex", ({ projectId, userId }, progress) => reindexProject(projectId, userId, progress));
   registerTaskHandler("resummarize", ({ projectId, userId }, progress) => resummarizeProject(projectId, userId, progress));
+  registerTaskHandler("import-pack", runStudyPackImportJob);
 }

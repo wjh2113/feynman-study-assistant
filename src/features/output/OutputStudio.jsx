@@ -16,6 +16,7 @@ import {
   Target
 } from "../../components/icons.jsx";
 import { generateOnePager } from "../../api/projects.js";
+import { resolveApiUrl } from "../../lib/runtime.js";
 import { MindMap } from "./MindMap.jsx";
 
 function overlapsSelection(item, selectedDocumentIds = []) {
@@ -133,7 +134,7 @@ export function OutputStudio({ project, selectedDocumentIds = [], updateProject,
             {edited && <button className="primary-btn" onClick={saveEdits}><Save size={15} /> 保存修改</button>}
             <button className="secondary-btn" onClick={generate} disabled={loading}>{loading ? <Spinner /> : <RotateCcw size={15} />} 重新生成</button>
             <button className="secondary-btn" onClick={exportMarkdown}><Download size={15} /> 导出 Markdown</button>
-            <a className="secondary-btn" href={`/api/projects/${encodeURIComponent(project.id)}/export?format=zip`}><Archive size={15} /> 导出完整 ZIP 档案</a>
+            <a className="secondary-btn" href={resolveApiUrl(`/api/projects/${encodeURIComponent(project.id)}/export?format=zip`)}><Archive size={15} /> 导出学科包</a>
           </div>
         </div>
       )}

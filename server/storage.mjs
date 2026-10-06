@@ -600,6 +600,7 @@ export async function listIngestionJobs(userId, statuses = ["waiting", "active"]
         progress: Number(row.progress || 0),
         error: row.error,
         filenames: (payload.files || []).map((file) => decodeUploadName(file.originalname)),
+        kind: payload.kind || "analyze",
         createdAt: row.created_at,
         updatedAt: row.updated_at
       };

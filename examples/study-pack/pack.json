@@ -1,0 +1,93 @@
+{
+  "summary": "选择疑问句必须选一项作答，不能用「はい／いいえ」笼统回答。",
+  "highValue": [
+    "A か B か 必须选一边",
+    "はい／いいえ只对应是否疑问句",
+    "用完整句子点明身份或属性"
+  ],
+  "modules": [
+    {
+      "id": "m1",
+      "title": "疑问句回答",
+      "description": "是否疑问句与选择疑问句的答法不同。",
+      "concepts": [
+        {
+          "id": "c1",
+          "title": "选择疑问句回答规则",
+          "explanation": "被问「是老师还是学生」时，要说出其中一项，而不是只说是或不是。",
+          "importance": "核心",
+          "mastery": 1,
+          "map": { "links": [{ "to": "c2", "label": "相关" }] },
+          "sourceRefs": [
+            {
+              "file": "【知识点总结】日语-第0课.md",
+              "page": 1,
+              "quote": "选择疑问句不能用はい或いいえ回答"
+            }
+          ]
+        },
+        {
+          "id": "c2",
+          "title": "是否疑问句",
+          "explanation": "可以用「はい」或「いいえ」先表态，再补信息。",
+          "importance": "高价值",
+          "mastery": 1,
+          "map": { "links": [{ "to": "c1", "label": "相关" }] },
+          "sourceRefs": [
+            {
+              "file": "【知识点总结】日语-第0课.md",
+              "page": 1,
+              "quote": "是非疑问句可用はい／いいえ"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "id": "q-project-1",
+      "question": "别人问「リンさんは先生ですか、学生ですか。」时，为什么不能只说「はい」？",
+      "conceptId": "c1",
+      "concept": "选择疑问句回答规则",
+      "why": "检验是否分清两种疑问句",
+      "sourceRefs": [
+        {
+          "file": "【知识点总结】日语-第0课.md",
+          "page": 1,
+          "quote": "必须选择其中一项"
+        }
+      ]
+    }
+  ],
+  "tacitKnowledge": [],
+  "scenarios": [],
+  "sources": [
+    {
+      "name": "【知识点总结】日语-第0课.md",
+      "summary": {
+        "summary": "第0课区分是否疑问句与选择疑问句的回答方式。",
+        "keyPoints": [
+          "选择疑问句要选出一项",
+          "はい／いいえ不适合二选一"
+        ]
+      },
+      "questionBank": [
+        {
+          "id": "qb-1",
+          "question": "回答选择疑问句「リンさんは先生ですか、学生ですか。」时，为什么不能用「はい」或「いいえ」？",
+          "conceptId": "c1",
+          "concept": "选择疑问句回答规则",
+          "why": "检验是否真正理解答法差异",
+          "sourceRefs": [
+            {
+              "file": "【知识点总结】日语-第0课.md",
+              "page": 1,
+              "quote": "必须明确选择其中一项身份"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -282,11 +282,21 @@ export function App() {
     updateProject({ practiceDocumentIds: normalized });
   };
 
-  const trackAnalysisTask = (task, projectId, filenames, ingestionId) => {
+  const trackAnalysisTask = (task, projectId, filenames, ingestionId, kind = "analyze") => {
     finalizedTaskIdsRef.current.delete(task.id);
     setAnalysisTasks((items) => [
       ...items.filter((item) => item.id !== task.id),
-      { id: task.id, ingestionId, projectId, filenames, status: task.status || "waiting", progress: 0, stage: "queued", label: "等待后台任务开始" }
+      {
+        id: task.id,
+        ingestionId,
+        projectId,
+        filenames,
+        kind: kind || "analyze",
+        status: task.status || "waiting",
+        progress: 0,
+        stage: "queued",
+        label: kind === "import-pack" ? "正在导入学科包" : "等待后台任务开始"
+      }
     ]);
   };
 
@@ -300,10 +310,11 @@ export function App() {
           ingestionId: item.id,
           projectId: item.projectId,
           filenames: item.filenames || [],
+          kind: item.kind || "analyze",
           status: item.status,
           progress: item.progress || 0,
           stage: item.stage || "queued",
-          label: "正在恢复后台解析任务"
+          label: item.kind === "import-pack" ? "正在导入学科包" : "正在恢复后台解析任务"
         })));
       })
       .catch(() => {});
@@ -348,7 +359,11 @@ export function App() {
               } catch {
                 // keep previous project state if refresh fails
               }
-              notify(`资料已入库：${tracked.filenames.join("、")}，知识地图后台生成中`);
+              notify(
+                (task.kind || tracked.kind) === "import-pack"
+                  ? `学科包已导入：${tracked.filenames.join("、")}，知识地图与题库已就绪`
+                  : `资料已入库：${tracked.filenames.join("、")}，知识地图后台生成中`
+              );
             } else {
               notify(`资料解析失败：${task.error || "请检查模型配置后重试"}`, "error", {
                 ingestionId: tracked.ingestionId,
@@ -371,6 +386,7 @@ export function App() {
           setAnalysisTasks((items) => items.map((item) => item.id === tracked.id
             ? {
               ...item,
+              kind: task.kind || item.kind,
               status: task.status,
               progress: Number(progress.percent || 0),
               stage: progress.stage || item.stage,

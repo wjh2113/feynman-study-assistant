@@ -631,7 +631,8 @@ export async function analyzeFiles({
   onCheckpoint = async () => {},
   onProgress = () => {},
   deferContentAnalysis = false,
-  ingestionId = null
+  ingestionId = null,
+  skipLlm = false
 }) {
     const sources = checkpoint.sources || [];
     if (!files.length) throw new Error("请至少上传一份学习资料");
@@ -811,6 +812,20 @@ export async function analyzeFiles({
       contentAnalysisDeferred: Boolean(deferContentAnalysis && modelConfigured)
     });
     await onProgress({ percent: 88, stage: "storage", label: "资料已入库，可检索" });
+
+    if (skipLlm) {
+      await onProgress({ percent: 92, stage: "storage", label: "资料已入库，正在写入导入的知识地图" });
+      return {
+        analysis: interimAnalysis,
+        sources,
+        storedSources: interimSources,
+        embeddingMeta: {
+          chunks: allChunks.length,
+          parents: hierarchy.parents.length,
+          embedding: embeddingStatus(embeddingConfig.embedding)
+        }
+      };
+    }
 
     if (interimSources.length) {
       enqueueDocumentQuestionBanksLater({
