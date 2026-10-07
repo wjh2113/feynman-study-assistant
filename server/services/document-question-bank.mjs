@@ -18,6 +18,9 @@ import { filterStudyKeyPoints } from "../../src/lib/study-content.mjs";
 
 const BANK_TIMEOUT_MS = Number(process.env.GENERATION_TIMEOUT_MS || 90_000);
 const BANK_FAST_TIMEOUT_MS = Number(process.env.FAST_CHAT_TIMEOUT_MS || 60_000);
+/** Cap completion so quality/thinking models cannot dump 10k–20k+ tokens per batch. */
+const BANK_FAST_MAX_TOKENS = Number(process.env.BANK_FAST_MAX_TOKENS || 8_000);
+const BANK_QUALITY_MAX_TOKENS = Number(process.env.BANK_QUALITY_MAX_TOKENS || 8_000);
 const CORPUS_BUDGET = 18_000;
 /** Ask the model in chunks so 30–100 题 requests stay reliable. */
 const BANK_BATCH_SIZE = 25;
@@ -121,8 +124,8 @@ export async function generateQuestionBankForSource(source, userId, capability =
       const need = Math.min(BANK_BATCH_SIZE, targetCount - questionBank.length);
       const messages = bankMessages(source, need, questionBank);
       const result = capability === "quality-chat"
-        ? await deepseek(messages, 0.35, userId, BANK_TIMEOUT_MS)
-        : await fastJson(messages, 0.35, userId, BANK_FAST_TIMEOUT_MS);
+        ? await deepseek(messages, 0.35, userId, BANK_TIMEOUT_MS, BANK_QUALITY_MAX_TOKENS)
+        : await fastJson(messages, 0.35, userId, BANK_FAST_TIMEOUT_MS, BANK_FAST_MAX_TOKENS);
       const raw = Array.isArray(result?.questions) ? result.questions : [];
       const before = questionBank.length;
       questionBank = mergeUniqueQuestions(questionBank, raw, source, targetCount);
