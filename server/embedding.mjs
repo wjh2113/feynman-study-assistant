@@ -8,12 +8,53 @@ import { buildRerankerRequest } from "./reranker-client.mjs";
 export { embeddingDimensions };
 
 export const relevanceThreshold = Math.max(0, Math.min(1, Number(process.env.RAG_RELEVANCE_THRESHOLD || 0.28)));
+/** Hybrid may recall 20; only send the best N to paid gateway rerank. */
+export const RERANK_CANDIDATE_LIMIT = Math.max(3, Math.min(20, Number(process.env.RERANK_CANDIDATE_LIMIT || 8)));
+/** Cross-encoders rarely need full chunk text; clipping cuts token bill. */
+export const RERANK_DOC_CHARS = Math.max(160, Math.min(2_000, Number(process.env.RERANK_DOC_CHARS || 480)));
+/** Skip gateway rerank when fusion already has a clear winner (0–1 fusionRerankScore scale). */
+export const RERANK_SKIP_MIN_SCORE = Math.max(0.3, Math.min(0.95, Number(process.env.RERANK_SKIP_MIN_SCORE || 0.55)));
+export const RERANK_SKIP_MARGIN = Math.max(0.05, Math.min(0.5, Number(process.env.RERANK_SKIP_MARGIN || 0.18)));
 
 function fusionRerankScore(candidate) {
   const vector = Number(candidate.vectorScore || 0);
   const keyword = Number(candidate.keywordScore || 0);
   const fusion = Number(candidate.fusionScore || 0);
   return Math.max(vector, keyword * 1.5, Math.min(0.99, fusion * 30));
+}
+
+/** Best-first pool for gateway rerank (by hybrid fusion signal). */
+export function selectRerankPool(candidates = [], limit = RERANK_CANDIDATE_LIMIT) {
+  if (!candidates.length) return [];
+  const capped = Math.max(1, Math.min(candidates.length, Number(limit) || RERANK_CANDIDATE_LIMIT));
+  return [...candidates]
+    .sort((a, b) => fusionRerankScore(b) - fusionRerankScore(a)
+      || Number(b.fusionScore || 0) - Number(a.fusionScore || 0))
+    .slice(0, capped);
+}
+
+/**
+ * When #1 is strong and clearly ahead of #2, fusion ranking is enough — skip paid rerank.
+ */
+export function shouldSkipGatewayRerank(candidates = []) {
+  if (!candidates.length) return true;
+  if (candidates.length === 1) return hasStrongRetrievalSignal(candidates[0]);
+  const ranked = selectRerankPool(candidates, 2);
+  const top = ranked[0];
+  const second = ranked[1];
+  if (!hasStrongRetrievalSignal(top)) return false;
+  const topScore = fusionRerankScore(top);
+  const secondScore = fusionRerankScore(second);
+  if (topScore < RERANK_SKIP_MIN_SCORE) return false;
+  return (topScore - secondScore) >= RERANK_SKIP_MARGIN;
+}
+
+export function formatRerankDocument(item, maxChars = RERANK_DOC_CHARS) {
+  const heading = item?.headingPath ? `章节：${item.headingPath}\n` : "";
+  const body = String(item?.content || "").trim();
+  const budget = Math.max(80, Number(maxChars) || RERANK_DOC_CHARS);
+  const clipped = body.length <= budget ? body : `${body.slice(0, budget)}…`;
+  return `${heading}${clipped}`;
 }
 
 function hasStrongRetrievalSignal(candidate) {
@@ -118,9 +159,10 @@ export async function embedTexts(texts, config) {
 
 export async function rerankCandidates(query, candidates, topK = 5, config) {
   if (!candidates.length) return [];
+  const pool = selectRerankPool(candidates, Math.max(topK, RERANK_CANDIDATE_LIMIT));
   if (process.env.RAG_TEST_MODE === "true") {
     const queryTokens = new Set(keywordTokens(query));
-    return candidates
+    return pool
       .map((candidate) => {
         const tokens = keywordTokens(candidate.content);
         const overlap = tokens.filter((token) => queryTokens.has(token)).length;
@@ -130,12 +172,12 @@ export async function rerankCandidates(query, candidates, topK = 5, config) {
       .slice(0, topK);
   }
 
-  const documents = candidates.map((item) => `${item.headingPath ? `章节：${item.headingPath}\n` : ""}${item.content}`);
+  const documents = pool.map((item) => formatRerankDocument(item));
   if (isGatewayEnabled()) {
     const payload = await gatewayRerank({ query, documents, topN: topK });
     if (payload?.results?.length) {
       return payload.results.slice(0, topK).map((result) => ({
-        ...candidates[result.index],
+        ...pool[result.index],
         rerankScore: Number(result.relevance_score ?? result.score ?? 0)
       }));
     }
@@ -150,7 +192,7 @@ export async function rerankCandidates(query, candidates, topK = 5, config) {
   );
   const payload = await postJson(request.endpoint, request.body, apiKey);
   return request.parseResults(payload).slice(0, topK).map((result) => ({
-    ...candidates[result.index],
+    ...pool[result.index],
     rerankScore: Number(result.relevance_score || 0)
   }));
 }

@@ -1,4 +1,15 @@
-import { embedTexts, embeddingStatus, pickAnswerSources, relevanceThreshold, rerankCandidates } from "../embedding.mjs";
+import {
+  embedTexts,
+  embeddingStatus,
+  fallbackRankCandidates,
+  pickAnswerSources,
+  relevanceThreshold,
+  rerankCandidates,
+  RERANK_CANDIDATE_LIMIT,
+  RERANK_DOC_CHARS,
+  selectRerankPool,
+  shouldSkipGatewayRerank
+} from "../embedding.mjs";
 import { getEmbeddingConfig } from "../model-config.mjs";
 import { isLlmConfigured } from "../gateway-client.mjs";
 import { hybridSearch, recordEvent } from "../storage.mjs";
@@ -107,10 +118,26 @@ export async function answerRagQuery({ userId, projectId, query }) {
     stage = "精排候选片段";
     let degraded = null;
     let reranked = [];
-    try {
-      reranked = await rerankCandidates(query, candidates, 5, retrievalConfig.reranker);
-    } catch (error) {
-      degraded = `Reranker 不可用，已降级为向量与关键词融合排序：${error.message}`;
+    const rerankPool = selectRerankPool(candidates, Math.max(5, RERANK_CANDIDATE_LIMIT));
+    const rerankDebug = {
+      poolSize: rerankPool.length,
+      candidateLimit: RERANK_CANDIDATE_LIMIT,
+      docChars: RERANK_DOC_CHARS,
+      skipped: false,
+      reason: null
+    };
+    if (shouldSkipGatewayRerank(rerankPool)) {
+      reranked = fallbackRankCandidates(rerankPool, 5);
+      rerankDebug.skipped = true;
+      rerankDebug.reason = "clear-fusion-margin";
+    } else {
+      try {
+        reranked = await rerankCandidates(query, rerankPool, 5, retrievalConfig.reranker);
+      } catch (error) {
+        degraded = `Reranker 不可用，已降级为向量与关键词融合排序：${error.message}`;
+        reranked = fallbackRankCandidates(rerankPool, 5);
+        rerankDebug.reason = "reranker-error";
+      }
     }
     const picked = pickAnswerSources(candidates, reranked, relevanceThreshold);
     if (picked.warning && !degraded) degraded = picked.warning;
@@ -125,6 +152,7 @@ export async function answerRagQuery({ userId, projectId, query }) {
       queryExpansion,
       embedding: embeddingStatus(retrievalConfig.embedding),
       degraded,
+      rerank: rerankDebug,
       evidenceLimit: RAG_EVIDENCE_LIMIT,
       candidates: candidates.map((item, index) => ({
         rank: index + 1,

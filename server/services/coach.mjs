@@ -1,4 +1,10 @@
-import { embedTexts, fallbackRankCandidates, rerankCandidates } from "../embedding.mjs";
+import {
+  embedTexts,
+  fallbackRankCandidates,
+  rerankCandidates,
+  selectRerankPool,
+  shouldSkipGatewayRerank
+} from "../embedding.mjs";
 import { getEmbeddingConfig } from "../model-config.mjs";
 import { isLlmConfigured } from "../gateway-client.mjs";
 import {
@@ -278,10 +284,14 @@ async function retrieveCoachEvidence(userId, projectId, question, concept, answe
     { documentIds: Array.isArray(documentIds) ? documentIds : [] }
   );
   if (!candidates.length) return [];
+  const pool = selectRerankPool(candidates, Math.max(COACH_EVIDENCE_TOP, COACH_EVIDENCE_CANDIDATES));
+  if (shouldSkipGatewayRerank(pool)) {
+    return fallbackRankCandidates(pool, COACH_EVIDENCE_TOP);
+  }
   try {
-    return await rerankCandidates(retrievalQuery, candidates, COACH_EVIDENCE_TOP, retrievalConfig.reranker);
+    return await rerankCandidates(retrievalQuery, pool, COACH_EVIDENCE_TOP, retrievalConfig.reranker);
   } catch {
-    return fallbackRankCandidates(candidates, COACH_EVIDENCE_TOP);
+    return fallbackRankCandidates(pool, COACH_EVIDENCE_TOP);
   }
 }
 
