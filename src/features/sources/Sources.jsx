@@ -86,6 +86,7 @@ function projectAfterSourceDelete(project, source) {
 export function Sources({
   project,
   updateProject,
+  refreshProject,
   navigate,
   showToast,
   onTaskStarted,
@@ -161,7 +162,8 @@ export function Sources({
       try {
         const data = await getProject(project.id);
         if (cancelled || !data.project) return;
-        updateProject(data.project);
+        if (refreshProject) await refreshProject(project.id);
+        else updateProject(data.project);
         const nextStatus = data.project.analysis?.contentAnalysisStatus;
         if (mapPending) {
           if (nextStatus === "ready" && mapNotifyRef.current !== "ready") {
@@ -189,7 +191,7 @@ export function Sources({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [mapPending, bankPending, project.id, updateProject, showToast]);
+  }, [mapPending, bankPending, project.id, updateProject, refreshProject, showToast]);
 
   useEffect(() => {
     if (bankPending) bankNotifyRef.current = null;

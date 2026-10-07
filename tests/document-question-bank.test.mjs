@@ -9,7 +9,8 @@ import {
   questionBankHasMetaPollution,
   resolveDocumentBankSize,
   resolvePracticeDrawCount,
-  sampleQuestionsFromSources
+  sampleQuestionsFromSources,
+  sourcesNeedQuestionBank
 } from "../src/lib/document-question-bank.mjs";
 import {
   extractStudyConceptTitles,
@@ -116,4 +117,30 @@ test("heuristic bank prefers headings over conversion notes", () => {
   assert.equal(bank.length, 30);
   assert.equal(bank.some((item) => isMetaDerivedQuestion(item)), false);
   assert.equal(questionBankHasMetaPollution(bank), false);
+});
+
+test("already generated banks do not keep pending even if pendingLlm is stuck", () => {
+  const bank = Array.from({ length: 37 }, (_, index) => ({
+    id: `q-${index}`,
+    concept: `概念${index + 1}`,
+    question: `请解释概念 ${index + 1}`
+  }));
+  const pending = sourcesNeedQuestionBank([{
+    id: "d1",
+    name: "讲义.docx",
+    questionBank: bank,
+    questionBankMeta: { generated: true, pendingLlm: true, capability: "quality-chat" }
+  }]);
+  assert.deepEqual(pending, []);
+});
+
+test("heuristic seed banks still need the async LLM job", () => {
+  const source = {
+    id: "d1",
+    name: "讲义.md",
+    summary: { keyPoints: ["金字塔原理"] },
+    questionBank: buildHeuristicDocumentBank({ id: "d1", name: "讲义.md", summary: { keyPoints: ["金字塔原理"] } }, 32),
+    questionBankMeta: { generated: false, pendingLlm: true }
+  };
+  assert.equal(sourcesNeedQuestionBank([source]).length, 1);
 });

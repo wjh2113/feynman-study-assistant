@@ -179,7 +179,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
           setMessages([{ from: "ai", text: first.question }]);
           setSessionId(null);
         }
-        if (data.bankPending) {
+        if (data.bankPending && !data.fromBank) {
           showToast("部分资料题库仍在后台生成，当前先用已有题目开练");
         }
       } catch (error) {

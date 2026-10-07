@@ -145,11 +145,16 @@ export function questionBankHasMetaPollution(bank = []) {
 export function sourcesNeedQuestionBank(sources = []) {
   return (sources || []).filter((source) => {
     if (!source?.id) return false;
-    const bank = source.questionBank;
-    if (!Array.isArray(bank) || bank.length < DOCUMENT_BANK_MIN) return true;
+    const bank = Array.isArray(source.questionBank) ? source.questionBank : [];
+    const usable = bank.filter((item) => item && !isMetaDerivedQuestion(item)).length;
+    const meta = source.questionBankMeta || {};
+    // 导入或 LLM 已经产出可用题库后，不要每次对练都当成“还在生成”。
+    if (meta.generated && usable >= PRACTICE_DRAW_MIN && !questionBankHasMetaPollution(bank)) {
+      return false;
+    }
+    if (usable < DOCUMENT_BANK_MIN) return true;
     if (questionBankHasMetaPollution(bank)) return true;
-    // Heuristic seed banks still need the async LLM refresh.
-    if (source.questionBankMeta?.pendingLlm) return true;
+    if (meta.pendingLlm) return true;
     return false;
   });
 }

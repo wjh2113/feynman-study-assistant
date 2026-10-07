@@ -689,6 +689,7 @@ export function App() {
                 <Sources
                   project={project}
                   updateProject={updateProject}
+                  refreshProject={refreshProject}
                   selectedDocumentIds={selectedDocumentIds}
                   setSelectedDocumentIds={setSelectedDocumentIds}
                   navigate={changeView}
