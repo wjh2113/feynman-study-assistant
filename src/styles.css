@@ -2174,6 +2174,7 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
   border: 0;
 }
 .voice-input-btn.listening { color: #a5443c; border-color: #e2a49e; background: #fff0ed; animation: voice-pulse 1.2s ease-in-out infinite; }
+.voice-input-btn.processing { color: #5f665f; border-color: #cfd6c8; background: #f3f5f0; cursor: wait; }
 
 .voice-sheet-overlay {
   position: fixed;

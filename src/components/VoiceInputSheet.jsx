@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Mic, Square, X } from "./icons.jsx";
 import { Spinner } from "./Spinner.jsx";
@@ -13,7 +13,7 @@ function wait(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-export function VoiceInputSheet({
+export const VoiceInputSheet = forwardRef(function VoiceInputSheet({
   open,
   onClose,
   showToast,
@@ -24,8 +24,12 @@ export function VoiceInputSheet({
   cancelLabel = "取消",
   purpose = "",
   asyncMode = false,
+  /** 页内录音：不弹全屏层，由外部按钮启停，实时写入输入框 */
+  inline = false,
+  autoStart = false,
+  onRecordingChange,
   onConfirm
-}) {
+}, ref) {
   const recorderRef = useRef(null);
   const recognitionRef = useRef(null);
   const streamRef = useRef(null);
@@ -66,10 +70,12 @@ export function VoiceInputSheet({
   const setRecordingSafe = (value) => {
     recordingRef.current = Boolean(value);
     setRecording(Boolean(value));
+    onRecordingChange?.(Boolean(value), processingRef.current);
   };
   const setProcessingSafe = (value) => {
     processingRef.current = Boolean(value);
     setProcessing(Boolean(value));
+    onRecordingChange?.(recordingRef.current, Boolean(value));
   };
 
   const focusTranscript = () => {
@@ -202,6 +208,7 @@ export function VoiceInputSheet({
       const preview = `${finals}${live}`.trim();
       setLivePreviewSafe(preview);
       setTranscriptSafe(preview);
+      if (inline && preview) onConfirm?.(preview, { phase: "live" });
     };
 
     recognition.onerror = (event) => {
@@ -277,12 +284,17 @@ export function VoiceInputSheet({
       setRecordingSafe(true);
       setProcessingSafe(false);
       setVoiceTip(
-        getSpeechRecognition()
-          ? "正在录音… 下方会实时显示转写；点结束后会显示最终识别结果"
-          : "正在录音… 点结束后会在下方显示 AI 识别结果"
+        inline
+          ? (getSpeechRecognition()
+            ? "正在录音… 文字会写进输入框；再点「语音」结束"
+            : "正在录音… 再点「语音」结束，随后由 AI 识别")
+          : (getSpeechRecognition()
+            ? "正在录音… 下方会实时显示转写；点结束后会显示最终识别结果"
+            : "正在录音… 点结束后会在下方显示 AI 识别结果")
       );
+      if (inline) showToast?.("正在录音，再点「语音」结束");
       startBrowserRecognition();
-      focusTranscript();
+      if (!inline) focusTranscript();
     } catch {
       busyRef.current = false;
       setVoiceTip("麦克风权限未开启。请点击地址栏左侧图标，允许本站使用麦克风。");
@@ -297,7 +309,10 @@ export function VoiceInputSheet({
     onConfirm?.(value, { phase });
     filledRef.current = true;
     setFilled(true);
-    showToast?.(close ? "语音识别完成，已填入" : "识别结果已显示，并写入输入框");
+    // 页内 async 由调用方提示；弹层模式保留原提示
+    if (!inline) {
+      showToast?.(close ? "语音识别完成，已填入" : "识别结果已显示，并写入输入框");
+    }
     if (close) onClose?.();
     return true;
   };
@@ -481,7 +496,34 @@ export function VoiceInputSheet({
     pushToTarget(text, { close: true });
   };
 
+  useEffect(() => {
+    if (!open || !autoStart || !inline) return undefined;
+    if (recordingRef.current || processingRef.current || busyRef.current) return undefined;
+    const timer = window.setTimeout(() => {
+      void beginRecording();
+    }, 40);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, autoStart, inline]);
+
+  useImperativeHandle(ref, () => ({
+    toggleRecord() {
+      if (!openRef.current) return;
+      if (recordingRef.current) void stopRecording();
+      else if (!processingRef.current) void beginRecording();
+    },
+    stopRecord() {
+      if (recordingRef.current) void stopRecording();
+    },
+    isBusy() {
+      return recordingRef.current || processingRef.current || busyRef.current;
+    }
+  }));
+
   if (!open) return null;
+
+  // 页内模式：不渲染全屏弹层，录音状态由外部按钮展示
+  if (inline) return null;
 
   const heading = processing
     ? "识别中…"
@@ -576,4 +618,4 @@ export function VoiceInputSheet({
   );
 
   return createPortal(sheet, document.body);
-}
+});

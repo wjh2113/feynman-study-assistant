@@ -738,6 +738,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
               <span>{completed ? "本轮不会继续追问" : "⌘ Enter 换行，Enter 发送"}</span>
               <div className="answer-foot-actions">
                 <VoiceInputButton
+                  inline
                   asyncMode
                   disabled={loading || completed}
                   showToast={showToast}
@@ -747,6 +748,10 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
                   confirmLabel="确认"
                   purpose="费曼对练解释"
                   onTranscript={(text, meta) => {
+                    if (meta?.phase === "live") {
+                      setAnswer(text);
+                      return;
+                    }
                     setAnswer(text);
                     if (meta?.phase === "draft") {
                       voiceSubmittedRef.current = true;
