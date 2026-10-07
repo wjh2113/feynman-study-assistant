@@ -196,7 +196,7 @@ export function RagAssistant({ project, navigate, showToast, refreshProject }) {
                           <strong title={source.filename}>{shortFilename(source.filename)}</strong>
                           {meta ? <span>{meta}</span> : null}
                           {source.quote || source.content ? (
-                            <q>{String(source.quote || source.content).slice(0, 120)}</q>
+                            <q>{String(source.quote || source.content).trim()}</q>
                           ) : null}
                         </div>
                         <FileText size={14} className="rag-cite-icon" />
