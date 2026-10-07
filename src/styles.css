@@ -294,6 +294,26 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .project-switcher-copy strong, .project-switcher-copy span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .project-switcher-copy strong { font-size: 12px; }
 .project-switcher-copy span { font-size: 10px; margin-top: 4px; color: rgba(255,255,255,.5); }
+.project-actions { display: flex; gap: 6px; margin-top: 8px; }
+.project-actions button {
+  flex: 1;
+  min-height: 30px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 8px;
+  background: rgba(0,0,0,.14);
+  color: rgba(255,255,255,.78);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.project-actions button:hover { background: rgba(255,255,255,.08); color: #fff; }
+.project-actions button.danger:hover { color: #fecaca; border-color: rgba(248, 113, 113, .35); }
+.project-actions button:disabled { opacity: .4; cursor: not-allowed; }
+.rename-modal { width: min(420px, 100%); }
+.rename-modal .modal-body { min-height: 0; padding: 18px 24px 8px; }
 .main-nav { display: grid; gap: 4px; margin-top: 18px; }
 .main-nav button, .sidebar-foot > button { position: relative; border: 0; background: transparent; color: rgba(255,255,255,.62); padding: 10px 11px; border-radius: var(--radius-md); display: flex; gap: 11px; align-items: center; text-align: left; cursor: pointer; transition: .18s; font-size: 13px; }
 .main-nav button:hover, .sidebar-foot > button:hover { color: white; background: rgba(255,255,255,.06); }

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog.jsx";
 import { CreateProjectModal } from "../components/CreateProjectModal.jsx";
+import { RenameProjectModal } from "../components/RenameProjectModal.jsx";
 import { PracticeDocumentPicker } from "../components/PracticeDocumentPicker.jsx";
 import { Spinner } from "../components/Spinner.jsx";
 import {
@@ -11,7 +12,9 @@ import {
   ChevronRight,
   LogOut,
   Menu,
+  Pencil,
   Plus,
+  Trash2,
   X
 } from "../components/icons.jsx";
 import { dedupeAnalysisSources, mapDocumentIdsToDeduped } from "../lib/analysis-sources.mjs";
@@ -75,6 +78,9 @@ export function App() {
   const [selectedDocumentIds, setSelectedDocumentIdsState] = useState([]);
   const [activeView, setActiveView] = useState("overview");
   const [createOpen, setCreateOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [projectBusy, setProjectBusy] = useState(false);
   const [logoutOpen, setLogoutOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toast, setToast] = useState("");
@@ -441,6 +447,48 @@ export function App() {
     }
   };
 
+  const handleRenameProject = async (nextTitle) => {
+    const title = String(nextTitle || "").trim();
+    if (!project || !title) return;
+    if (title === project.title) {
+      setRenameOpen(false);
+      return;
+    }
+    setProjectBusy(true);
+    try {
+      const saved = await saveProjectPatch({ title });
+      if (saved) {
+        setRenameOpen(false);
+        showToast("学科已改名");
+      }
+    } finally {
+      setProjectBusy(false);
+    }
+  };
+
+  const handleDeleteProject = async () => {
+    if (!project || projectBusy) return;
+    const removing = project;
+    setProjectBusy(true);
+    try {
+      await deleteProject(removing.id);
+      dirtyProjectIdsRef.current.delete(removing.id);
+      const remaining = projectsRef.current.filter((item) => item.id !== removing.id);
+      setProjects(remaining);
+      if (user?.id) cacheProjectsSnapshot(user.id, remaining).catch(() => {});
+      const next = remaining[0] || null;
+      setActiveProjectId(next?.id || null);
+      setSelectedDocumentIdsState(next ? initialDocumentIds(next) : []);
+      setActiveView("overview");
+      setDeleteOpen(false);
+      showToast(`已删除「${removing.title}」`);
+    } catch (error) {
+      showToast(error.message || "删除学科失败");
+    } finally {
+      setProjectBusy(false);
+    }
+  };
+
   const handleLogout = async () => {
     setLogoutOpen(false);
     await logout();
@@ -516,6 +564,23 @@ export function App() {
             {!projects.length && <option value="">暂无学科</option>}
             {projects.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}
           </select>
+        </div>
+        <div className="project-actions">
+          <button
+            type="button"
+            disabled={!project || projectBusy}
+            onClick={() => setRenameOpen(true)}
+          >
+            <Pencil size={13} /> 改名
+          </button>
+          <button
+            type="button"
+            className="danger"
+            disabled={!project || projectBusy}
+            onClick={() => setDeleteOpen(true)}
+          >
+            <Trash2 size={13} /> 删除
+          </button>
         </div>
 
         <nav className="main-nav">
@@ -716,6 +781,24 @@ export function App() {
       </main>
 
       {createOpen && <CreateProjectModal onClose={() => setCreateOpen(false)} onCreate={handleCreate} showToast={showToast} />}
+      {renameOpen && project && (
+        <RenameProjectModal
+          title={project.title}
+          busy={projectBusy}
+          onClose={() => { if (!projectBusy) setRenameOpen(false); }}
+          onSave={handleRenameProject}
+        />
+      )}
+      <ConfirmDialog
+        open={deleteOpen}
+        tone="danger"
+        title={`删除「${project?.title || "该学科"}」？`}
+        description="将永久删除该学科下的资料、知识地图、问答记录与对练归档，无法恢复。"
+        confirmLabel={projectBusy ? "删除中…" : "确认删除"}
+        cancelLabel="取消"
+        onCancel={() => { if (!projectBusy) setDeleteOpen(false); }}
+        onConfirm={handleDeleteProject}
+      />
       <ConfirmDialog
         open={logoutOpen}
         tone="danger"

@@ -1363,3 +1363,42 @@ test("章节 CRUD 仍可用（兼容保留）", async () => {
   assert.equal(listed.status, 200);
   assert.ok((await listed.json()).chapters.some((item) => item.title === "兼容章节"));
 });
+
+test("学科可以改名并删除", async () => {
+  const projectId = `subject-rename-del-${port}`;
+  const created = await authFetch(`${baseUrl}/api/projects/${projectId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: projectId,
+      title: "待改名学科",
+      mode: "subject",
+      progress: 0,
+      analysis: { sources: [], modules: [], questions: [] },
+      blindspots: [],
+      sessions: []
+    })
+  });
+  assert.equal(created.status, 200, await created.clone().text());
+
+  const renamed = await authFetch(`${baseUrl}/api/projects/${projectId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...(await created.json()).project,
+      title: "已改名学科"
+    })
+  });
+  assert.equal(renamed.status, 200, await renamed.clone().text());
+  assert.equal((await renamed.json()).project.title, "已改名学科");
+
+  const listed = await authFetch(`${baseUrl}/api/projects`);
+  assert.equal(listed.status, 200);
+  const titles = (await listed.json()).projects.map((item) => item.title);
+  assert.ok(titles.includes("已改名学科"));
+  assert.equal(titles.includes("待改名学科"), false);
+
+  const deleted = await authFetch(`${baseUrl}/api/projects/${projectId}`, { method: "DELETE" });
+  assert.equal(deleted.status, 204, await deleted.clone().text());
+  assert.equal((await authFetch(`${baseUrl}/api/projects/${projectId}`)).status, 404);
+});
