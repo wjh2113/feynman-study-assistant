@@ -12,7 +12,7 @@ const DEFAULT_SPLIT_ANALYSIS_CHARS = Math.max(
 );
 
 export const PREFERENCE_DEFAULTS = {
-  coachMaxTurns: 3,
+  coachMaxTurns: 2,
   coachPassScore: 75,
   coachRoleMode: "auto",
   coachShowEvidence: true,

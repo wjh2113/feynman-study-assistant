@@ -13,9 +13,18 @@ import {
 } from "../storage.mjs";
 import { coachSessionsToSummaries } from "../../src/lib/coachSessions.js";
 import { getUserPreferences, resolveCoachRole } from "../user-preferences.mjs";
-import { deepseek } from "./llm.mjs";
+import { deepseek, fastJson } from "./llm.mjs";
 
 const SCORE_KEYS = ["clarity", "logic", "example", "boundary"];
+const COACH_EVIDENCE_CANDIDATES = 6;
+const COACH_EVIDENCE_TOP = 3;
+const COACH_EVIDENCE_QUOTE_CHARS = 120;
+const COACH_HISTORY_LIMIT = 4;
+const COACH_HISTORY_TEXT_CHARS = 400;
+const COACH_MID_MAX_TOKENS = 900;
+const COACH_FINAL_MAX_TOKENS = 1400;
+const COACH_DIAGNOSIS_MAX_TOKENS = 1200;
+const COACH_VARIANT_MAX_TOKENS = 400;
 
 const SCORE_LABELS = {
   clarity: "说人话",
@@ -159,23 +168,28 @@ async function generateSessionDiagnosis({
 
   try {
     const weak = weakAspectsFromEvaluation(evaluation, evaluationNotes, threshold);
+    const slimEvidence = (evidence || []).slice(0, COACH_EVIDENCE_TOP).map((item) => ({
+      filename: item.filename,
+      page: item.page,
+      quote: String(item.quote || "").slice(0, COACH_EVIDENCE_QUOTE_CHARS)
+    }));
     const result = await deepseek([
       {
         role: "system",
         content:
-          "你是费曼学习诊断教练。根据用户对练表现，给出可执行的学习诊断。必须严格依据资料片段与评分，不编造原文没有的事实。只输出合法JSON。"
+          "你是费曼学习诊断教练。根据用户对练表现，给出可执行的学习诊断。必须严格依据资料片段与评分，不编造原文没有的事实。字段尽量短：summary≤40字，各 note/detail≤40字，knowledgeGaps≤2条，knowledgeToMaster≤2条。只输出合法JSON。"
       },
       {
         role: "user",
-        content: `题目：${question?.question || ""}
+        content: `题目：${String(question?.question || "").slice(0, 240)}
 概念：${concept?.title || ""}
-概念说明：${concept?.explanation || ""}
-用户最终解释：${userAnswer}
+概念说明：${String(concept?.explanation || "").slice(0, 160)}
+用户最终解释：${String(userAnswer || "").slice(0, 500)}
 四维评分：${JSON.stringify(evaluation)}
 评分短评：${JSON.stringify(evaluationNotes || {})}
 已识别盲区：${JSON.stringify(blindspot || null)}
 偏低维度：${JSON.stringify(weak)}
-资料片段：${JSON.stringify(evidence || [])}
+资料片段：${JSON.stringify(slimEvidence)}
 
 返回：
 {
@@ -188,7 +202,7 @@ async function generateSessionDiagnosis({
   "knowledgeToMaster":[{"title":"要掌握的知识点","detail":"需要记住/理解到什么程度","source":"资料名或页码"}]
 }`
       }
-    ], 0.35, userId, Number(process.env.GENERATION_TIMEOUT_MS || 90_000));
+    ], 0.35, userId, Number(process.env.GENERATION_TIMEOUT_MS || 90_000), COACH_DIAGNOSIS_MAX_TOKENS);
 
     if (!result || typeof result !== "object") return buildFallbackDiagnosis(context);
     return normalizeDiagnosis(result, context);
@@ -197,14 +211,31 @@ async function generateSessionDiagnosis({
   }
 }
 
-function historyForPrompt(messages = [], limit = 8) {
+function historyForPrompt(messages = [], limit = COACH_HISTORY_LIMIT) {
   return (messages || [])
     .filter((item) => item?.from && item?.text)
     .slice(-limit)
     .map((item) => ({
       role: item.from === "user" ? "learner" : "coach",
-      text: String(item.text).slice(0, 800)
+      text: String(item.text).slice(0, COACH_HISTORY_TEXT_CHARS)
     }));
+}
+
+function slimQuestionForPrompt(question) {
+  if (!question || typeof question !== "object") return { question: String(question || "") };
+  return {
+    question: String(question.question || "").slice(0, 280),
+    concept: String(question.concept || "").slice(0, 80),
+    why: String(question.why || "").slice(0, 120)
+  };
+}
+
+function slimConceptForPrompt(concept) {
+  if (!concept || typeof concept !== "object") return { title: String(concept || "") };
+  return {
+    title: String(concept.title || "").slice(0, 80),
+    explanation: String(concept.explanation || "").slice(0, 160)
+  };
 }
 
 function ensureBlindspot({ evaluation, blindspot, concept, threshold, force }) {
@@ -243,14 +274,14 @@ async function retrieveCoachEvidence(userId, projectId, question, concept, answe
     userId,
     retrievalQuery,
     queryEmbedding,
-    12,
+    COACH_EVIDENCE_CANDIDATES,
     { documentIds: Array.isArray(documentIds) ? documentIds : [] }
   );
   if (!candidates.length) return [];
   try {
-    return await rerankCandidates(retrievalQuery, candidates, 4, retrievalConfig.reranker);
+    return await rerankCandidates(retrievalQuery, candidates, COACH_EVIDENCE_TOP, retrievalConfig.reranker);
   } catch {
-    return fallbackRankCandidates(candidates, 4);
+    return fallbackRankCandidates(candidates, COACH_EVIDENCE_TOP);
   }
 }
 
@@ -258,7 +289,7 @@ function mapEvidence(evidence = []) {
   return evidence.map(({ filename, page, content, rerankScore }) => ({
     filename,
     page,
-    quote: String(content || "").slice(0, 180),
+    quote: String(content || "").slice(0, COACH_EVIDENCE_QUOTE_CHARS),
     score: rerankScore == null ? null : Number(rerankScore)
   }));
 }
@@ -496,20 +527,20 @@ export async function runCoachTurn({
     }
 
     stage = "生成教练追问";
-    const result = await deepseek([
+    const coachMessages = [
       {
         role: "system",
         content:
-          `你是费曼学习教练。一轮对练最多包含${maxTurns}个问题，初始问题算第1个。前几轮不要替用户完善答案，一次只追问一个最关键的问题；发现黑话就要求用人话，发现逻辑跳跃就追问因果。第${maxTurns}轮用户回答后必须结束本轮，只给简短总结、评分和盲区，不得再提出任何问题。只输出合法JSON。`
+          `你是费曼学习教练。一轮对练最多包含${maxTurns}个问题，初始问题算第1个。前几轮不要替用户完善答案，一次只追问一个最关键的问题；发现黑话就要求用人话，发现逻辑跳跃就追问因果。第${maxTurns}轮用户回答后必须结束本轮，只给简短总结、评分和盲区，不得再提出任何问题。reply≤80字；evaluationNotes每项≤20字；blindspot各字段≤40字。只输出合法JSON。`
       },
       {
         role: "user",
-        content: `资料生成的问题：${JSON.stringify(question)}
-对应概念：${JSON.stringify(concept)}
+        content: `资料生成的问题：${JSON.stringify(slimQuestionForPrompt(question))}
+对应概念：${JSON.stringify(slimConceptForPrompt(concept))}
 当前角色：${effectiveRole === "child" ? "好奇的12岁小孩" : "严厉的行业专家"}
 对话轮次：${turnNumber}/${maxTurns}
 既有对话（含初始问题）：${JSON.stringify(historyForPrompt(priorMessages))}
-用户本轮解释：${answer}
+用户本轮解释：${String(answer || "").slice(0, 600)}
 可用于核对的资料片段：${JSON.stringify(evidencePayload)}
 本轮是否应结束：${finalTurn ? "是。不得继续追问，reply必须是陈述式总结。" : "否。reply只包含一个追问。"}
 
@@ -523,7 +554,11 @@ export async function runCoachTurn({
 返回：
 {"reply":"追问或最终总结","phase":"child|expert","completed":${finalTurn},"evaluation":{"clarity":0,"logic":0,"example":0,"boundary":0},"evaluationNotes":{"clarity":"一句短评","logic":"一句短评","example":"一句短评","boundary":"一句短评"},"blindspot":null或{"title":"","problem":"","action":""}}`
       }
-    ], 0.55, userId);
+    ];
+    // Mid turns use cheap fast-chat; final scoring turn keeps quality-chat.
+    const result = finalTurn
+      ? await deepseek(coachMessages, 0.55, userId, Number(process.env.GENERATION_TIMEOUT_MS || 90_000), COACH_FINAL_MAX_TOKENS)
+      : await fastJson(coachMessages, 0.55, userId, Number(process.env.GENERATION_TIMEOUT_MS || 90_000), COACH_MID_MAX_TOKENS);
 
     if (!result?.reply || !result?.evaluation || typeof result.evaluation !== "object") {
       throw new Error("文本模型没有返回有效的教练追问结构");
@@ -667,22 +702,22 @@ export async function generateVariantQuestion(project, blindspot, concept, userI
     why: `针对盲区：${blindspot?.title || ""}`
   };
   if (modelConfigured && blindspot?.title && blindspot?.problem) {
-    const result = await deepseek([
+    const result = await fastJson([
       {
         role: "system",
-        content: "你是费曼学习教练。根据概念和盲区，生成一个能检验该盲区的变式追问。只输出合法JSON。"
+        content: "你是费曼学习教练。根据概念和盲区，生成一个能检验该盲区的变式追问。question≤60字。只输出合法JSON。"
       },
       {
         role: "user",
         content: `概念：${concept?.title || ""}
-概念解释：${concept?.explanation || ""}
+概念解释：${String(concept?.explanation || "").slice(0, 160)}
 盲区标题：${blindspot.title}
-盲区诊断：${blindspot.problem}
-最小补漏动作：${blindspot.action || ""}
+盲区诊断：${String(blindspot.problem || "").slice(0, 200)}
+最小补漏动作：${String(blindspot.action || "").slice(0, 120)}
 
 返回：{"question":"一个具体的变式追问"}`
       }
-    ], 0.55, userId);
+    ], 0.55, userId, Number(process.env.GENERATION_TIMEOUT_MS || 90_000), COACH_VARIANT_MAX_TOKENS);
     if (result?.question) return { ...base, question: result.question };
   }
   return {

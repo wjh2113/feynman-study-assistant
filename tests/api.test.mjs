@@ -930,7 +930,7 @@ test("费曼教练能识别例子并追问边界", async () => {
   assert.ok(data.evaluation.example >= 80);
 });
 
-test("费曼教练在第三个问题回答后结束本轮且不再追问", async () => {
+test("费曼教练在默认轮次末回答后结束本轮且不再追问", async () => {
   const response = await authFetch(`${baseUrl}/api/coach`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -938,7 +938,7 @@ test("费曼教练在第三个问题回答后结束本轮且不再追问", async
       concept: { title: "能力边界" },
       answer: "这个方法依赖数据质量，数据不足时应该改由人工判断。",
       role: "expert",
-      turn: 3
+      turn: 2
     })
   });
   assert.equal(response.status, 200);
@@ -946,7 +946,7 @@ test("费曼教练在第三个问题回答后结束本轮且不再追问", async
   assert.equal(data.completed, true);
   assert.doesNotMatch(data.reply, /[？?]\s*$/);
   assert.match(data.reply, /问已完成|结束本轮/);
-  assert.equal(data.maxTurns, 3);
+  assert.equal(data.maxTurns, 2);
 });
 
 test("空回答会被拒绝", async () => {
@@ -1004,7 +1004,7 @@ test("个人偏好可保存追问轮次并影响教练结束条件", async () =>
   const restore = await authFetch(`${baseUrl}/api/settings/preferences`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ coachMaxTurns: 3, ocrMaxImages: 40, splitAnalysisChars: 24000 })
+    body: JSON.stringify({ coachMaxTurns: 2, ocrMaxImages: 40, splitAnalysisChars: 24000 })
   });
   assert.equal(restore.status, 200);
   assert.equal((await restore.json()).splitAnalysisChars, 24000);

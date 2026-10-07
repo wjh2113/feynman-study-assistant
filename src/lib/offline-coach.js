@@ -46,6 +46,6 @@ export function evaluateAnswerOffline({ answer = "", question = {}, concept = {}
     phase: turn >= 2 ? "expert" : role,
     completed: turn >= 3 || avg >= 80,
     offline: true,
-    maxTurns: 3
+    maxTurns: 2
   };
 }

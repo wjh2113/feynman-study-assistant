@@ -45,11 +45,12 @@ async function completeChat(config, messages, temperature, timeoutMs, jsonObject
   }
 }
 
-async function completeViaGateway(messages, temperature, timeoutMs, jsonObject, userId, capability) {
+async function completeViaGateway(messages, temperature, timeoutMs, jsonObject, userId, capability, maxTokens) {
   return gatewayChat({
     capability,
     messages,
     temperature,
+    max_tokens: maxTokens,
     response_format: jsonObject ? { type: "json_object" } : undefined,
     userId,
     timeoutMs
@@ -66,7 +67,8 @@ export async function chatJson(
     temperature = 0.35,
     userId,
     timeoutMs = Number(process.env.GENERATION_TIMEOUT_MS || 90_000),
-    capability = "quality-chat"
+    capability = "quality-chat",
+    maxTokens
   } = {}
 ) {
   const gateway = isGatewayEnabled();
@@ -75,7 +77,7 @@ export async function chatJson(
 
   const run = (jsonObject) =>
     gateway
-      ? completeViaGateway(messages, temperature, timeoutMs, jsonObject, userId, capability)
+      ? completeViaGateway(messages, temperature, timeoutMs, jsonObject, userId, capability, maxTokens)
       : completeChat(config, messages, temperature, timeoutMs, jsonObject);
 
   try {
@@ -95,14 +97,26 @@ export async function chatJson(
 }
 
 /** Deep / coaching JSON — quality-chat on gateway. */
-export async function deepseek(messages, temperature = 0.35, userId, timeoutMs = Number(process.env.GENERATION_TIMEOUT_MS || 90_000)) {
-  return chatJson(messages, { temperature, userId, timeoutMs, capability: "quality-chat" });
+export async function deepseek(
+  messages,
+  temperature = 0.35,
+  userId,
+  timeoutMs = Number(process.env.GENERATION_TIMEOUT_MS || 90_000),
+  maxTokens
+) {
+  return chatJson(messages, { temperature, userId, timeoutMs, capability: "quality-chat", maxTokens });
 }
 
-/** Ingestion / map-building JSON — fast-chat on gateway. */
-export async function fastJson(messages, temperature = 0.35, userId, timeoutMs = Number(process.env.INGESTION_GENERATION_TIMEOUT_MS || 180_000)) {
+/** Ingestion / map-building / mid-coach JSON — fast-chat on gateway. */
+export async function fastJson(
+  messages,
+  temperature = 0.35,
+  userId,
+  timeoutMs = Number(process.env.INGESTION_GENERATION_TIMEOUT_MS || 180_000),
+  maxTokens
+) {
   try {
-    return await chatJson(messages, { temperature, userId, timeoutMs, capability: "fast-chat" });
+    return await chatJson(messages, { temperature, userId, timeoutMs, capability: "fast-chat", maxTokens });
   } catch (error) {
     // If fast-chat upstream/fallback chain is unhealthy, fall back once to quality-chat.
     if (!isGatewayEnabled()) throw error;
@@ -110,7 +124,8 @@ export async function fastJson(messages, temperature = 0.35, userId, timeoutMs =
       temperature,
       userId,
       timeoutMs,
-      capability: "quality-chat"
+      capability: "quality-chat",
+      maxTokens
     });
   }
 }

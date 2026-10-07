@@ -6,7 +6,7 @@ import { getPreferences, putPreferences } from "../../api/settings.js";
 import { ModelSettingsPage } from "../settings/ModelSettingsPage.jsx";
 
 const DEFAULTS = {
-  coachMaxTurns: 3,
+  coachMaxTurns: 2,
   coachPassScore: 75,
   coachRoleMode: "auto",
   coachShowEvidence: true,
@@ -113,7 +113,7 @@ export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
                           <option value={value} key={value}>{value} 轮</option>
                         ))}
                       </select>
-                      <small>默认 3 轮。改大更深入，改小更适合快速过一遍。</small>
+                      <small>默认 2 轮（更省积分）。改大更深入，改小更适合快速过一遍。</small>
                     </label>
 
                     <label>

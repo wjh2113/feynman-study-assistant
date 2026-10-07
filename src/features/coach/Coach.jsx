@@ -95,7 +95,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
   const projectBlindspots = project.blindspots || [];
 
   const [prefs, setPrefs] = useState({
-    coachMaxTurns: 3,
+    coachMaxTurns: 2,
     coachPassScore: 75,
     coachRoleMode: "auto",
     coachShowEvidence: true
@@ -120,7 +120,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
   const [sessionsCache, setSessionsCache] = useState(null);
   const voiceSubmittedRef = useRef(false);
 
-  const maxTurns = prefs.coachMaxTurns || 3;
+  const maxTurns = prefs.coachMaxTurns || 2;
   const roleLocked = prefs.coachRoleMode === "auto";
 
   useEffect(() => {
