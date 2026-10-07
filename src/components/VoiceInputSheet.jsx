@@ -46,6 +46,9 @@ export const VoiceInputSheet = forwardRef(function VoiceInputSheet({
   const filledRef = useRef(false);
   const transcriptBoxRef = useRef(null);
   const openRef = useRef(open);
+  const skipCancelOnCloseRef = useRef(false);
+  const onConfirmRef = useRef(onConfirm);
+  const inlineRef = useRef(inline);
 
   const [recording, setRecording] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -56,6 +59,8 @@ export const VoiceInputSheet = forwardRef(function VoiceInputSheet({
   const [statusLine, setStatusLine] = useState("");
 
   openRef.current = open;
+  onConfirmRef.current = onConfirm;
+  inlineRef.current = inline;
 
   const setTranscriptSafe = (value) => {
     const next = String(value || "");
@@ -157,14 +162,18 @@ export const VoiceInputSheet = forwardRef(function VoiceInputSheet({
 
   useEffect(() => {
     if (!open) {
-      cancelledRef.current = true;
-      sessionRef.current += 1;
+      const keepTranscribe = skipCancelOnCloseRef.current;
+      skipCancelOnCloseRef.current = false;
+      if (!keepTranscribe) {
+        cancelledRef.current = true;
+        sessionRef.current += 1;
+        try { abortRef.current?.abort(); } catch { /* ignore */ }
+        abortRef.current = null;
+      }
       busyRef.current = false;
-      try { abortRef.current?.abort(); } catch { /* ignore */ }
-      abortRef.current = null;
       cleanupMedia();
       resetUi();
-      cancelledRef.current = false;
+      cancelledRef.current = keepTranscribe ? cancelledRef.current : false;
     }
   }, [open, cleanupMedia, resetUi]);
 
@@ -208,13 +217,18 @@ export const VoiceInputSheet = forwardRef(function VoiceInputSheet({
       const preview = `${finals}${live}`.trim();
       setLivePreviewSafe(preview);
       setTranscriptSafe(preview);
-      if (inline && preview) onConfirm?.(preview, { phase: "live" });
+      if (inlineRef.current && preview) onConfirmRef.current?.(preview, { phase: "live" });
     };
 
     recognition.onerror = (event) => {
       if (event.error === "aborted" || event.error === "no-speech") return;
       if (event.error === "not-allowed") {
         setVoiceTip("麦克风权限未开启，仍可录音后由 AI 识别");
+        if (inlineRef.current) showToast?.("麦克风权限未开启");
+        return;
+      }
+      if (event.error === "network" && inlineRef.current) {
+        showToast?.("实时听写暂时不可用，说完后会用 AI 转写");
       }
     };
 
@@ -233,10 +247,16 @@ export const VoiceInputSheet = forwardRef(function VoiceInputSheet({
     }
   };
 
+  const closeQuietly = () => {
+    skipCancelOnCloseRef.current = true;
+    onClose?.();
+  };
+
   const beginRecording = async () => {
     if (busyRef.current || recordingRef.current || processingRef.current) return;
     if (!window.isSecureContext) {
       setVoiceTip("当前不是安全连接。请使用 localhost 或 HTTPS，浏览器才会开放麦克风。");
+      showToast?.("当前不是安全连接，无法使用麦克风");
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
@@ -250,21 +270,32 @@ export const VoiceInputSheet = forwardRef(function VoiceInputSheet({
     setFilled(false);
     sessionRef.current += 1;
     busyRef.current = true;
+    openRef.current = true;
+    chunksRef.current = [];
+    finalBrowserTextRef.current = "";
+    setTranscriptSafe("");
+    setLivePreviewSafe("");
+    setStatusLine("");
+    setRecordingSafe(true);
+    setProcessingSafe(false);
+
+    // 必须在点击手势里立刻启动实时转写，await 麦克风之后浏览器会拒绝 SpeechRecognition.start()。
+    startBrowserRecognition();
+    if (inlineRef.current) {
+      showToast?.(getSpeechRecognition()
+        ? "正在听写，文字会实时出现在输入框"
+        : "正在录音，结束后由 AI 转写");
+    }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (cancelledRef.current || !openRef.current) {
+      if (cancelledRef.current) {
         stream.getTracks().forEach((track) => track.stop());
         busyRef.current = false;
         return;
       }
 
       streamRef.current = stream;
-      chunksRef.current = [];
-      finalBrowserTextRef.current = "";
-      setTranscriptSafe("");
-      setLivePreviewSafe("");
-      setStatusLine("");
 
       const preferred = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"]
         .find((type) => MediaRecorder.isTypeSupported(type));
@@ -281,22 +312,21 @@ export const VoiceInputSheet = forwardRef(function VoiceInputSheet({
         cleanupMedia();
       };
       recorder.start(200);
-      setRecordingSafe(true);
-      setProcessingSafe(false);
       setVoiceTip(
-        inline
+        inlineRef.current
           ? (getSpeechRecognition()
-            ? "正在录音… 文字会写进输入框；再点「语音」结束"
-            : "正在录音… 再点「语音」结束，随后由 AI 识别")
+            ? "正在听写… 文字会实时写进输入框，再点一次结束"
+            : "正在录音… 再点一次结束，随后由 AI 转写")
           : (getSpeechRecognition()
             ? "正在录音… 下方会实时显示转写；点结束后会显示最终识别结果"
             : "正在录音… 点结束后会在下方显示 AI 识别结果")
       );
-      if (inline) showToast?.("正在录音，再点「语音」结束");
-      startBrowserRecognition();
-      if (!inline) focusTranscript();
+      if (!recognitionRef.current) startBrowserRecognition();
+      if (!inlineRef.current) focusTranscript();
     } catch {
       busyRef.current = false;
+      setRecordingSafe(false);
+      setProcessingSafe(false);
       setVoiceTip("麦克风权限未开启。请点击地址栏左侧图标，允许本站使用麦克风。");
       showToast?.("麦克风权限未开启");
       cleanupMedia();
@@ -313,7 +343,7 @@ export const VoiceInputSheet = forwardRef(function VoiceInputSheet({
     if (!inline) {
       showToast?.(close ? "语音识别完成，已填入" : "识别结果已显示，并写入输入框");
     }
-    if (close) onClose?.();
+    if (close) closeQuietly();
     return true;
   };
 
@@ -323,13 +353,13 @@ export const VoiceInputSheet = forwardRef(function VoiceInputSheet({
     abortRef.current = controller;
     try {
       const data = await transcribeVoice(blob, { purpose, signal: controller.signal });
-      if (cancelledRef.current || session !== sessionRef.current) return;
+      if (cancelledRef.current) return;
       const text = String(data.text || data.raw || "").trim() || browserDraft;
       if (!text) return;
       onConfirm?.(text, { phase: "final", refined: Boolean(data.refined) });
       showToast?.(data.refined ? "AI 已优化语音识别结果" : "语音识别完成");
     } catch (error) {
-      if (error?.name === "AbortError" || cancelledRef.current || session !== sessionRef.current) return;
+      if (error?.name === "AbortError" || cancelledRef.current) return;
       if (browserDraft) {
         onConfirm?.(browserDraft, { phase: "final", refined: false });
       } else {
@@ -337,11 +367,23 @@ export const VoiceInputSheet = forwardRef(function VoiceInputSheet({
       }
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
+      setProcessingSafe(false);
+      busyRef.current = false;
     }
   };
 
   const stopRecording = async () => {
-    if (!recordingRef.current || !recorderRef.current || processingRef.current) return;
+    if (!recordingRef.current || processingRef.current) return;
+    if (!recorderRef.current) {
+      cancelledRef.current = true;
+      const draft = (livePreviewRef.current || transcriptRef.current || "").trim();
+      cleanupMedia();
+      setRecordingSafe(false);
+      busyRef.current = false;
+      if (draft) pushToTarget(draft, { close: false, phase: "draft" });
+      closeQuietly();
+      return;
+    }
     const session = sessionRef.current;
     setRecordingSafe(false);
     setProcessingSafe(true);
@@ -399,11 +441,9 @@ export const VoiceInputSheet = forwardRef(function VoiceInputSheet({
     streamRef.current = null;
     recorderRef.current = null;
 
-    if (cancelledRef.current || session !== sessionRef.current || !openRef.current) {
-      if (session === sessionRef.current) {
-        setProcessingSafe(false);
-        busyRef.current = false;
-      }
+    if (cancelledRef.current) {
+      setProcessingSafe(false);
+      busyRef.current = false;
       return;
     }
 
@@ -431,16 +471,18 @@ export const VoiceInputSheet = forwardRef(function VoiceInputSheet({
     }
 
     if (asyncMode) {
-      setProcessingSafe(false);
-      busyRef.current = false;
       if (browserDraft) {
-        pushToTarget(browserDraft, { close: true, phase: "draft" });
+        pushToTarget(browserDraft, { close: false, phase: "draft" });
+        setProcessingSafe(false);
+        busyRef.current = false;
+        void refineAudioInBackground(blob, browserDraft, session, mimeType);
+        closeQuietly();
       } else {
-        showToast?.("正在后台识别语音…");
-        onClose?.();
-        resetUi();
+        showToast?.("正在识别语音…");
+        void refineAudioInBackground(blob, browserDraft, session, mimeType).then(() => {
+          closeQuietly();
+        });
       }
-      void refineAudioInBackground(blob, browserDraft, session, mimeType);
       return;
     }
 
@@ -508,7 +550,6 @@ export const VoiceInputSheet = forwardRef(function VoiceInputSheet({
 
   useImperativeHandle(ref, () => ({
     toggleRecord() {
-      if (!openRef.current) return;
       if (recordingRef.current) void stopRecording();
       else if (!processingRef.current) void beginRecording();
     },

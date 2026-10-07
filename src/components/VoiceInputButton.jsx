@@ -17,7 +17,8 @@ export function VoiceInputButton({
   confirmLabel = "确认",
   purpose = "",
   asyncMode = false,
-  inline = false
+  inline = false,
+  onListening
 }) {
   const [open, setOpen] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -27,6 +28,7 @@ export function VoiceInputButton({
   const handleRecordingChange = (isRecording, isProcessing) => {
     setRecording(Boolean(isRecording));
     setProcessing(Boolean(isProcessing));
+    onListening?.(Boolean(isRecording), Boolean(isProcessing));
   };
 
   const handleClick = () => {
@@ -35,10 +37,8 @@ export function VoiceInputButton({
       setOpen(true);
       return;
     }
-    if (!open) {
-      setOpen(true);
-      return;
-    }
+    if (!open) setOpen(true);
+    // 必须在同一次点击里启动听写，延迟 autoStart 会被浏览器当成非用户手势而拒绝。
     sheetRef.current?.toggleRecord();
   };
 
@@ -73,7 +73,7 @@ export function VoiceInputButton({
         purpose={purpose}
         asyncMode={asyncMode}
         inline={inline}
-        autoStart={inline}
+        autoStart={false}
         onRecordingChange={handleRecordingChange}
         onConfirm={(text, meta) => onTranscript?.(text, meta)}
       />

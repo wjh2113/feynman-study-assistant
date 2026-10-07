@@ -119,6 +119,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
   const [sessionId, setSessionId] = useState(null);
   const [sessionsCache, setSessionsCache] = useState(null);
   const voiceSubmittedRef = useRef(false);
+  const [voiceListening, setVoiceListening] = useState(false);
 
   const maxTurns = prefs.coachMaxTurns || 2;
   const roleLocked = prefs.coachRoleMode === "auto";
@@ -721,7 +722,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
             </div>
           )}
 
-          <div className="answer-box">
+          <div className={`answer-box ${voiceListening ? "voice-live" : ""}`}>
             <textarea
               value={answer}
               onChange={(event) => setAnswer(event.target.value)}
@@ -732,7 +733,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
                 event.preventDefault();
                 submit();
               }}
-              placeholder={completed ? "本轮已结束，可点击右上角保存" : "用人话解释……"}
+              placeholder={completed ? "本轮已结束，可点击右上角保存" : voiceListening ? "正在听写，请直接说…" : "用人话解释……"}
             />
             <div className="answer-foot">
               <span>{completed ? "本轮不会继续追问" : "⌘ Enter 换行，Enter 发送"}</span>
@@ -742,6 +743,7 @@ export function Coach({ project, selectedDocumentIds = [], updateProject, savePr
                   asyncMode
                   disabled={loading || completed}
                   showToast={showToast}
+                  onListening={(listening) => setVoiceListening(listening)}
                   title="语音输入"
                   tip="录音结束后会立即填入并提交，AI 识别在后台继续优化"
                   placeholder="用人话解释概念… 识别结果会出现在这里"
