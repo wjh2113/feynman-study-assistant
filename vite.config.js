@@ -44,11 +44,20 @@ export default defineConfig({
             method: "GET"
           },
           {
-            urlPattern: ({ request }) => request.destination === "font" || request.destination === "style",
+            urlPattern: ({ request }) => request.destination === "font",
             handler: "CacheFirst",
             options: {
-              cacheName: "zhifan-static-assets",
-              expiration: { maxEntries: 64, maxAgeSeconds: 60 * 60 * 24 * 30 }
+              cacheName: "zhifan-font-assets",
+              expiration: { maxEntries: 32, maxAgeSeconds: 60 * 60 * 24 * 30 }
+            }
+          },
+          {
+            // Avoid sticky old CSS (e.g. citation line-clamp) after deploys.
+            urlPattern: ({ request }) => request.destination === "style",
+            handler: "StaleWhileRevalidate",
+            options: {
+              cacheName: "zhifan-style-assets",
+              expiration: { maxEntries: 32, maxAgeSeconds: 60 * 60 * 24 * 7 }
             }
           }
         ]

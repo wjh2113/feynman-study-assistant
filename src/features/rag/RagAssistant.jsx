@@ -39,6 +39,31 @@ function citationMeta(source) {
   return bits.join(" · ");
 }
 
+function citationTexts(source) {
+  const quote = String(source.quote || source.content || "").trim();
+  const parent = String(source.parentContent || "").trim();
+  const context = parent && parent !== quote ? parent : "";
+  return { quote, context };
+}
+
+function CitationBody({ source }) {
+  const { quote, context } = citationTexts(source);
+  if (!quote && !context) return null;
+  const body = quote || context;
+  return (
+    <div className="rag-cite-quote-block">
+      <p className="rag-cite-quote">{body}</p>
+      <em className="rag-cite-len">全文 {body.length} 字</em>
+      {context && quote && context !== quote ? (
+        <details className="rag-cite-context" open={context.length > quote.length * 1.2}>
+          <summary>完整上下文（{context.length} 字）</summary>
+          <p>{context}</p>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 function scoreLabel(candidate) {
   const raw = Number(candidate.fusionScore ?? candidate.rerankScore ?? 0);
   if (!Number.isFinite(raw) || raw <= 0) return "—";
@@ -194,10 +219,8 @@ export function RagAssistant({ project, navigate, showToast, refreshProject }) {
                         <span className="rag-cite-index">{index + 1}</span>
                         <div className="rag-cite-copy">
                           <strong title={source.filename}>{shortFilename(source.filename)}</strong>
-                          {meta ? <span>{meta}</span> : null}
-                          {source.quote || source.content ? (
-                            <q>{String(source.quote || source.content).trim()}</q>
-                          ) : null}
+                          {meta ? <span className="rag-cite-meta">{meta}</span> : null}
+                          <CitationBody source={source} />
                         </div>
                         <FileText size={14} className="rag-cite-icon" />
                       </li>
