@@ -7,6 +7,7 @@ import { getEmbeddingConfig } from "../model-config.mjs";
 import { isLlmConfigured } from "../gateway-client.mjs";
 import { parseFile } from "../document-parser.mjs";
 import { buildDocumentOutline } from "../document-outline.mjs";
+import { buildSourceFromPreparsed } from "../../src/lib/study-pack.mjs";
 import { getObject } from "../object-storage.mjs";
 import { enqueueTask } from "../task-queue.mjs";
 import { enqueueDocumentQuestionBanksLater } from "./document-question-bank.mjs";
@@ -632,14 +633,28 @@ export async function analyzeFiles({
   onProgress = () => {},
   deferContentAnalysis = false,
   ingestionId = null,
-  skipLlm = false
+  skipLlm = false,
+  preparsedByName = {}
 }) {
     const sources = checkpoint.sources || [];
     if (!files.length) throw new Error("请至少上传一份学习资料");
     if (!sources.length) {
-      await onProgress({ percent: 5, stage: "ocr", label: "正在解析文档与识别图片" });
+      const preparsedCount = files.filter((file) => preparsedByName?.[file.originalname]?.pages?.length).length;
+      await onProgress({
+        percent: 5,
+        stage: "ocr",
+        label: preparsedCount === files.length
+          ? "正在使用包内预解析正文"
+          : preparsedCount > 0
+            ? "正在导入预解析正文并补解析其余文件"
+            : "正在解析文档与识别图片"
+      });
       for (const [fileIndex, file] of files.entries()) {
-        const source = await parseFile(file, userId);
+        const preparsed = preparsedByName?.[file.originalname];
+        const source = preparsed?.pages?.length
+          ? buildSourceFromPreparsed(preparsed, file.originalname)
+          : await parseFile(file, userId);
+        if (!source) throw new Error(`无法解析资料：${file.originalname}`);
         source.documentKey = storedFiles[fileIndex]?.documentKey || randomUUID();
         source.summary = buildSourceSummary(source);
         source.parsedPreview = source.pages
@@ -648,7 +663,13 @@ export async function analyzeFiles({
           .slice(0, 30000);
         source.outline = buildDocumentOutline(source);
         sources.push(source);
-        await onProgress({ percent: 5 + Math.round(((fileIndex + 1) / files.length) * 35), stage: "ocr", label: "文档解析与 OCR 已完成" });
+        await onProgress({
+          percent: 5 + Math.round(((fileIndex + 1) / files.length) * 35),
+          stage: "ocr",
+          label: preparsed?.pages?.length
+            ? "包内预解析正文已就绪"
+            : "文档解析与 OCR 已完成"
+        });
       }
       await onCheckpoint({ sources });
     } else {

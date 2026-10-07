@@ -1,6 +1,7 @@
 export const STUDY_PACK_SCHEMA = "zhifan-study-pack/v1";
 export const MAX_PACK_FILES = 12;
 export const MAX_INNER_FILE_BYTES = 100 * 1024 * 1024;
+export const MAX_PREPARSED_CHARS = 2_000_000;
 
 export function basenamePath(value = "") {
   return String(value || "")
@@ -8,6 +9,11 @@ export function basenamePath(value = "") {
     .split("/")
     .filter(Boolean)
     .pop() || "";
+}
+
+export function preparsedTextPath(filename = "") {
+  const name = basenamePath(filename);
+  return name ? `text/${name}.json` : "";
 }
 
 function asArray(value) {
@@ -24,6 +30,54 @@ export function normalizeManifest(raw = {}) {
     schema: String(raw.schema || "").trim(),
     title: String(raw.title || "").trim(),
     files
+  };
+}
+
+/** External LLM pre-extracted page text: text/<filename>.json */
+export function normalizePreparsedDocument(raw = {}, fallbackName = "") {
+  const name = String(raw?.name || fallbackName || "").trim();
+  const pages = asArray(raw?.pages)
+    .map((page, index) => {
+      const text = String(page?.text || "").trim();
+      const pageNo = Number(page?.page);
+      return {
+        page: Number.isFinite(pageNo) && pageNo > 0 ? Math.floor(pageNo) : index + 1,
+        text,
+        nativeText: text,
+        ocrText: String(page?.ocrText || "").trim()
+      };
+    })
+    .filter((page) => page.text);
+  if (!name || !pages.length) return null;
+  const totalChars = pages.reduce((sum, page) => sum + page.text.length, 0);
+  if (totalChars > MAX_PREPARSED_CHARS) return null;
+  return { name, pages };
+}
+
+export function buildSourceFromPreparsed(preparsed, filename = "") {
+  const name = String(filename || preparsed?.name || "").trim();
+  if (!preparsed?.pages?.length || !name) return null;
+  const pages = preparsed.pages.map((page) => ({
+    page: page.page,
+    text: page.text,
+    nativeText: page.nativeText || page.text,
+    ocrText: page.ocrText || ""
+  }));
+  const merged = pages.map((page) => page.text).join("\n\n");
+  const ext = name.includes(".") ? name.split(".").pop().toUpperCase() : "TEXT";
+  return {
+    filename: name,
+    type: ext,
+    pages,
+    parseReport: {
+      format: ext,
+      nativeCharacters: merged.length,
+      ocrCharacters: pages.reduce((sum, page) => sum + String(page.ocrText || "").length, 0),
+      imagesFound: 0,
+      imagesOcrd: 0,
+      ocrStatus: "not_needed",
+      warnings: ["正文由外部学科包预解析导入，已跳过站内 OCR"]
+    }
   };
 }
 
@@ -72,7 +126,13 @@ export function importedQuestionBankMeta(targetCount = 0) {
   };
 }
 
-export function validateStudyPack({ manifest, pack, fileNames = [] } = {}) {
+export function validateStudyPack({
+  manifest,
+  pack,
+  fileNames = [],
+  preparsedNames = [],
+  requirePreparsed = false
+} = {}) {
   const errors = [];
   if (manifest.schema !== STUDY_PACK_SCHEMA) {
     errors.push(`学科包版本须为 ${STUDY_PACK_SCHEMA}`);
@@ -101,6 +161,14 @@ export function validateStudyPack({ manifest, pack, fileNames = [] } = {}) {
   const banks = pack.sources.reduce((sum, source) => sum + source.questionBank.length, 0);
   if (!banks && !pack.questions.length) {
     errors.push("学科包需要至少一份题库或项目级费曼题");
+  }
+  if (requirePreparsed) {
+    const preparsed = new Set(preparsedNames.map((name) => basenamePath(name)));
+    for (const entry of manifest.files) {
+      if (!preparsed.has(entry.name)) {
+        errors.push(`缺少预解析正文：${preparsedTextPath(entry.name)}`);
+      }
+    }
   }
   return errors;
 }

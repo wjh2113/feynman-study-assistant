@@ -100,13 +100,20 @@ export async function importStudyPack({
   projectId,
   pack,
   storedFiles = [],
+  preparsedByName = {},
   checkpoint = {},
   onCheckpoint = async () => {},
   onProgress = () => {}
 }) {
   const existing = await getProject(projectId, userId);
   if (!existing) throw new Error("学习项目不存在");
-  await onProgress({ percent: 4, stage: "ocr", label: "正在导入学科包" });
+  const allPreparsed = files.length > 0
+    && files.every((file) => preparsedByName?.[file.originalname]?.pages?.length);
+  await onProgress({
+    percent: 4,
+    stage: "ocr",
+    label: allPreparsed ? "正在导入学科包（使用包内预解析正文）" : "正在导入学科包"
+  });
   await removeSameNamedDocuments(projectId, userId, files.map((file) => file.originalname));
 
   const indexed = await analyzeFiles({
@@ -119,7 +126,8 @@ export async function importStudyPack({
     checkpoint,
     onCheckpoint,
     onProgress,
-    skipLlm: true
+    skipLlm: true,
+    preparsedByName
   });
 
   const latest = await getProject(projectId, userId);

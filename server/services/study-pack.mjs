@@ -8,6 +8,8 @@ import {
   buildPackFromProject,
   normalizeManifest,
   normalizePackAnalysis,
+  normalizePreparsedDocument,
+  preparsedTextPath,
   validateStudyPack
 } from "../../src/lib/study-pack.mjs";
 
@@ -80,6 +82,7 @@ export async function parseStudyPackZip(buffer) {
   const manifest = normalizeManifest(manifestRaw);
   const pack = normalizePackAnalysis(packRaw);
   const files = [];
+  const preparsedByName = {};
 
   for (const listed of manifest.files) {
     const entry = map.get(listed.path) || map.get(listed.name) || map.get(`files/${listed.name}`);
@@ -94,6 +97,19 @@ export async function parseStudyPackZip(buffer) {
       size: fileBuffer.length,
       buffer: fileBuffer
     });
+
+    const textPath = preparsedTextPath(listed.name);
+    const textEntry = map.get(textPath) || map.get(basenamePath(textPath));
+    if (!textEntry) continue;
+    try {
+      const preparsed = normalizePreparsedDocument(
+        JSON.parse(await textEntry.async("string")),
+        listed.name
+      );
+      if (preparsed) preparsedByName[listed.name] = preparsed;
+    } catch {
+      throw new Error(`预解析正文不是合法 JSON：${textPath}`);
+    }
   }
 
   if (!files.length) {
@@ -106,14 +122,17 @@ export async function parseStudyPackZip(buffer) {
   const errors = validateStudyPack({
     manifest,
     pack,
-    fileNames: files.map((file) => file.originalname)
+    fileNames: files.map((file) => file.originalname),
+    preparsedNames: Object.keys(preparsedByName),
+    // Prefer external preparse; still accept older packs without text/ and fall back to OCR.
+    requirePreparsed: false
   });
   if (errors.length) throw new Error(errors[0]);
 
-  return { manifest, pack, files };
+  return { manifest, pack, files, preparsedByName };
 }
 
-export async function buildStudyPackZip(project, originalFiles = [], { allowEmptyFiles = false } = {}) {
+export async function buildStudyPackZip(project, originalFiles = [], { allowEmptyFiles = false, preparsedByName = {} } = {}) {
   const files = originalFiles
     .map((item) => ({
       name: String(item.name || "").trim(),
@@ -130,6 +149,21 @@ export async function buildStudyPackZip(project, originalFiles = [], { allowEmpt
   zip.file("pack.json", JSON.stringify(pack, null, 2));
   for (const file of files) {
     zip.file(`files/${file.name}`, file.buffer);
+    const preparsed = preparsedByName[file.name] || normalizePreparsedDocument(
+      {
+        name: file.name,
+        pages: [{ page: 1, text: String(
+          (project.analysis?.sources || []).find((source) => (source.name || source.filename) === file.name)?.parsedPreview || ""
+        ) }]
+      },
+      file.name
+    );
+    if (preparsed) {
+      zip.file(preparsedTextPath(file.name), JSON.stringify({
+        name: preparsed.name,
+        pages: preparsed.pages.map((page) => ({ page: page.page, text: page.text }))
+      }, null, 2));
+    }
   }
   zip.file("README.md", `# ${manifest.title || project.title || "学科包"}\n\nschema: ${STUDY_PACK_SCHEMA}\n`);
   return zip.generateAsync({ type: "nodebuffer" });

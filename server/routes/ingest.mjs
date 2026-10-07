@@ -238,7 +238,7 @@ router.post(
         return res.status(409).json({ error: "当前项目已有资料正在后台处理，请完成后再导入学科包" });
       }
 
-      const { manifest, pack, files } = await parseStudyPackZip(req.file.buffer);
+      const { manifest, pack, files, preparsedByName = {} } = await parseStudyPackZip(req.file.buffer);
       const persisted = [];
       for (const file of files) persisted.push(await persistOriginalFile(req.params.projectId, file));
       const ingestionId = randomUUID();
@@ -257,6 +257,7 @@ router.post(
         title: manifest.title || existingProject.title,
         mode: existingProject.mode || "subject",
         pack,
+        preparsedByName,
         files: jobFiles
       };
       await createIngestionJob({ id: ingestionId, userId: req.userId, projectId: req.params.projectId, payload });

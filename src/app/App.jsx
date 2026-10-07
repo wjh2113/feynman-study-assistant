@@ -377,7 +377,9 @@ export function App() {
           const progress = typeof task.progress === "object" ? task.progress : { percent: Number(task.progress || 0), stage: task.stage };
           const stageLabels = {
             queued: "等待后台任务开始",
-            ocr: "正在解析文档与识别图片",
+            ocr: (task.kind || tracked.kind) === "import-pack"
+              ? "正在导入学科包正文"
+              : "正在解析文档与识别图片",
             embedding: "正在生成 Embedding 向量",
             storage: "正在写入资料与索引",
             content: "正在生成知识地图",
