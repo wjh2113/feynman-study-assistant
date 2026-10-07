@@ -1,3 +1,4 @@
+import { isImportedStudyPack } from "../../src/lib/study-pack.mjs";
 import {
   countDocumentChunks,
   deleteChunksByFilename,
@@ -12,6 +13,7 @@ import { resummarizeProject } from "./resummarize.mjs";
 
 /**
  * Physical cleanup + optional map rebuild after the project record was already updated.
+ * External study-pack imports skip auto LLM re-summarize (map/banks already came from the pack).
  */
 export async function completeDocumentDelete(
   {
@@ -20,7 +22,8 @@ export async function completeDocumentDelete(
     sourceId,
     sourceName,
     storedId = null,
-    filename = null
+    filename = null,
+    skipLlmRebuild = false
   },
   onProgress = () => {}
 ) {
@@ -45,45 +48,49 @@ export async function completeDocumentDelete(
     const remainingDocuments = await listDocumentsForProject(projectId, userId);
     const remainingChunks = await countDocumentChunks(projectId);
     let resummarize = null;
+    const project = await getProject(projectId, userId);
+    const preserveImported = skipLlmRebuild || isImportedStudyPack(project);
 
-    if (remainingDocuments.length) {
+    if (remainingDocuments.length && !preserveImported) {
       onProgress(45);
       const mapOnly = remainingChunks > 0;
       resummarize = await resummarizeProject(projectId, userId, (value) => {
         onProgress(45 + Math.round(Number(value || 0) * 0.55));
       }, { mapOnly });
-    } else {
-      const project = await getProject(projectId, userId);
-      if (project) {
-        await saveProject({
-          ...project,
-          userId,
-          analysis: {
-            ...(project.analysis || {}),
-            contentAnalysisStatus: "ready",
-            contentAnalysisError: null,
-            retrieval: {
-              ...(project.analysis?.retrieval || {}),
-              chunks: 0,
-              parents: 0
-            }
+    } else if (project) {
+      await saveProject({
+        ...project,
+        userId,
+        analysis: {
+          ...(project.analysis || {}),
+          contentAnalysisStatus: "ready",
+          contentAnalysisError: null,
+          needsResummarize: false,
+          retrieval: {
+            ...(project.analysis?.retrieval || {}),
+            chunks: remainingChunks,
+            ...(remainingDocuments.length
+              ? {}
+              : { parents: 0 })
           }
-        });
-      }
+        }
+      });
     }
 
     await recordEvent(userId, projectId, "document_delete_completed", {
       sourceId,
       filename: sourceName || filename,
       chunksDeleted,
-      mapOnly: Boolean(resummarize?.mapOnly)
+      mapOnly: Boolean(resummarize?.mapOnly),
+      skippedLlmRebuild: Boolean(preserveImported)
     });
     onProgress(100);
 
     return {
       chunksDeleted,
       resummarize,
-      remainingDocuments: remainingDocuments.length
+      remainingDocuments: remainingDocuments.length,
+      skippedLlmRebuild: Boolean(preserveImported)
     };
   } catch (error) {
     const project = await getProject(projectId, userId);
@@ -95,7 +102,7 @@ export async function completeDocumentDelete(
           ...(project.analysis || {}),
           contentAnalysisStatus: "failed",
           contentAnalysisError: error.message || "资料删除后重建知识地图失败",
-          needsResummarize: true
+          needsResummarize: !isImportedStudyPack(project)
         }
       });
     }

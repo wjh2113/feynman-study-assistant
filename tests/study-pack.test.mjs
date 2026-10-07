@@ -6,6 +6,7 @@ import test from "node:test";
 import JSZip from "jszip";
 import {
   STUDY_PACK_SCHEMA,
+  isImportedStudyPack,
   normalizeManifest,
   normalizePackAnalysis,
   normalizePreparsedDocument,
@@ -49,6 +50,8 @@ test("validates a complete study pack and rejects JSON-only archives", async () 
   assert.equal(preparsedTextPath(name), `text/${name}.json`);
   assert.equal(shouldApplyImportedTitle("新的学习项目"), true);
   assert.equal(shouldApplyImportedTitle("日语"), false);
+  assert.equal(isImportedStudyPack({ analysis: { importedPack: { schema: STUDY_PACK_SCHEMA } } }), true);
+  assert.equal(isImportedStudyPack({ analysis: {} }), false);
 });
 
 test("round-trips a ZIP pack with preparsed text and rejects legacy project.json exports", async () => {

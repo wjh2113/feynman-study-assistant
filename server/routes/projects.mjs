@@ -21,6 +21,7 @@ import {
 import { completeDocumentDelete } from "../services/document-delete.mjs";
 import { syncProjectSourcesFromDocuments } from "../services/document-dedupe.mjs";
 import { enqueueTaskLater } from "../task-queue.mjs";
+import { isImportedStudyPack } from "../../src/lib/study-pack.mjs";
 import { buildStudyPackZip } from "../services/study-pack.mjs";
 
 const router = Router();
@@ -210,28 +211,44 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
     const removedIds = new Set([source.id, stored?.id, req.params.documentId].filter(Boolean));
     const practiceDocumentIds = (project.practiceDocumentIds || []).filter((id) => !removedIds.has(id));
     const hasPersistedDocs = Number(project.documentCount || 0) > 0;
-    const willQueueRebuild = Boolean(stored?.id) || (remainingSources.length > 0 && hasPersistedDocs);
+    const preserveImportedMap = isImportedStudyPack(project);
+    const willQueueCleanup = Boolean(stored?.id) || (remainingSources.length > 0 && hasPersistedDocs);
+    const willQueueRebuild = willQueueCleanup && !preserveImportedMap;
 
-    const analysis = {
-      ...(project.analysis || {}),
-      sources: remainingSources,
-      summary: "",
-      highValue: [],
-      modules: [],
-      tacitKnowledge: [],
-      scenarios: [],
-      questions: [],
-      documentSummaries: (project.analysis?.documentSummaries || []).filter(
-        (item) => String(item.filename || item.name || "") !== deletedName
-      ),
-      needsResummarize: remainingSources.length > 0 && !willQueueRebuild,
-      contentAnalysisStatus: willQueueRebuild ? "pending" : "ready",
-      contentAnalysisError: null,
-      retrieval: {
-        ...(project.analysis?.retrieval || {}),
-        chunks: Number(project.analysis?.retrieval?.chunks || 0)
-      }
-    };
+    const prunedSummaries = (project.analysis?.documentSummaries || []).filter(
+      (item) => String(item.filename || item.name || "") !== deletedName
+    );
+    const analysis = preserveImportedMap
+      ? {
+          ...(project.analysis || {}),
+          sources: remainingSources,
+          documentSummaries: prunedSummaries,
+          needsResummarize: false,
+          contentAnalysisStatus: "ready",
+          contentAnalysisError: null,
+          retrieval: {
+            ...(project.analysis?.retrieval || {}),
+            chunks: Number(project.analysis?.retrieval?.chunks || 0)
+          }
+        }
+      : {
+          ...(project.analysis || {}),
+          sources: remainingSources,
+          summary: "",
+          highValue: [],
+          modules: [],
+          tacitKnowledge: [],
+          scenarios: [],
+          questions: [],
+          documentSummaries: prunedSummaries,
+          needsResummarize: remainingSources.length > 0 && !willQueueRebuild,
+          contentAnalysisStatus: willQueueRebuild ? "pending" : "ready",
+          contentAnalysisError: null,
+          retrieval: {
+            ...(project.analysis?.retrieval || {}),
+            chunks: Number(project.analysis?.retrieval?.chunks || 0)
+          }
+        };
 
     const nextProject = {
       ...project,
@@ -240,11 +257,21 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
       practiceDocumentIds,
       onePager: null,
       description: remainingSources.length
-        ? (willQueueRebuild
-          ? "资料已变更，正在后台清理向量并重建知识地图…"
-          : "资料已变更，知识地图已清空，请重新总结剩余资料。")
-        : (project.learningPlan?.summary || "上传学习资料后，AI 将生成学科知识地图。"),
-      progress: remainingSources.length ? Math.min(Number(project.progress || 0), 15) : 0,
+        ? (preserveImportedMap
+          ? (willQueueCleanup
+            ? "资料已移除，正在后台清理向量索引；已导入的知识地图保持不变。"
+            : project.description)
+          : (willQueueRebuild
+            ? "资料已变更，正在后台清理向量并重建知识地图…"
+            : "资料已变更，知识地图已清空，请重新总结剩余资料。"))
+        : (preserveImportedMap
+          ? (project.analysis?.summary || project.learningPlan?.summary || "学科包资料已全部移除。")
+          : (project.learningPlan?.summary || "上传学习资料后，AI 将生成学科知识地图。")),
+      progress: remainingSources.length
+        ? (preserveImportedMap
+          ? Math.max(Number(project.progress || 0), 80)
+          : Math.min(Number(project.progress || 0), 15))
+        : (preserveImportedMap ? Math.min(Number(project.progress || 0), 20) : 0),
       blindspots: (project.blindspots || []).filter((item) => {
         const ids = Array.isArray(item.documentIds) ? item.documentIds : [];
         if (ids.length) return ids.every((id) => !removedIds.has(id));
@@ -262,7 +289,8 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
         sourceId: source.id,
         sourceName: source.name,
         storedId: stored?.id || null,
-        filename: source.name
+        filename: source.name,
+        skipLlmRebuild: preserveImportedMap
       },
       (payload, progress) => completeDocumentDelete(payload, progress)
     );
@@ -270,8 +298,9 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
     void recordEvent(req.userId, req.params.projectId, "document_deleted", {
       documentId: stored?.id || source.id,
       filename: source.name,
-      mapCleared: true,
+      mapCleared: !preserveImportedMap,
       needsResummarize: analysis.needsResummarize,
+      skippedLlmRebuild: preserveImportedMap,
       async: true
     }).catch(() => {});
 
@@ -288,10 +317,11 @@ router.delete("/api/projects/:projectId/documents/:documentId", async (req, res)
         name: source.name,
         pending: true
       },
-      mapCleared: true,
+      mapCleared: !preserveImportedMap,
       needsResummarize: Boolean(nextProject.analysis?.needsResummarize),
-      queued: true,
-      resummarize: willQueueRebuild ? { queued: true, async: true } : null
+      queued: willQueueCleanup,
+      resummarize: willQueueRebuild ? { queued: true, async: true } : null,
+      skippedLlmRebuild: preserveImportedMap
     });
   } catch (error) {
     res.status(400).json({ error: error.message || "删除资料失败" });

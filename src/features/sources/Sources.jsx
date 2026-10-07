@@ -22,6 +22,7 @@ import { dedupeAnalysisSources } from "../../lib/analysis-sources.mjs";
 import { resolveMapAvailability } from "../../lib/map-availability.js";
 import { decodeUploadName } from "../../lib/filename-encoding.js";
 import { analyzeBackground, importStudyPackBackground } from "../../api/ingest.js";
+import { isImportedStudyPack } from "../../lib/study-pack.mjs";
 import { deleteDocument, getProject, reindexProject, resummarizeProjectBackground, syncProjectSources } from "../../api/projects.js";
 import { FileTypeIcon } from "./FileTypeIcon.jsx";
 
@@ -32,30 +33,47 @@ function projectAfterSourceDelete(project, source) {
   const remainingSources = sources.filter((item) => item.id !== source.id && item.name !== source.name);
   const deletedName = String(source.name || "");
   const removedIds = new Set([source.id].filter(Boolean));
-  const willQueueRebuild = remainingSources.length > 0;
+  const preserveImportedMap = isImportedStudyPack(project);
+  const willQueueRebuild = remainingSources.length > 0 && !preserveImportedMap;
+  const prunedSummaries = (project.analysis?.documentSummaries || []).filter(
+    (item) => String(item.filename || item.name || "") !== deletedName
+  );
   return {
     ...project,
     documentCount: Math.max(0, Number(project.documentCount || sources.length) - 1),
     description: remainingSources.length
-      ? "资料已变更，正在后台清理向量并重建知识地图…"
-      : (project.learningPlan?.summary || "上传学习资料后，AI 将生成学科知识地图。"),
-    progress: remainingSources.length ? Math.min(Number(project.progress || 0), 15) : 0,
-    analysis: {
-      ...(project.analysis || {}),
-      sources: remainingSources,
-      summary: "",
-      highValue: [],
-      modules: [],
-      tacitKnowledge: [],
-      scenarios: [],
-      questions: [],
-      documentSummaries: (project.analysis?.documentSummaries || []).filter(
-        (item) => String(item.filename || item.name || "") !== deletedName
-      ),
-      needsResummarize: remainingSources.length > 0 && !willQueueRebuild,
-      contentAnalysisStatus: willQueueRebuild ? "pending" : "ready",
-      contentAnalysisError: null
-    },
+      ? (preserveImportedMap
+        ? "资料已移除，正在后台清理向量索引；已导入的知识地图保持不变。"
+        : "资料已变更，正在后台清理向量并重建知识地图…")
+      : (preserveImportedMap
+        ? (project.analysis?.summary || project.learningPlan?.summary || "学科包资料已全部移除。")
+        : (project.learningPlan?.summary || "上传学习资料后，AI 将生成学科知识地图。")),
+    progress: remainingSources.length
+      ? (preserveImportedMap ? Math.max(Number(project.progress || 0), 80) : Math.min(Number(project.progress || 0), 15))
+      : (preserveImportedMap ? Math.min(Number(project.progress || 0), 20) : 0),
+    analysis: preserveImportedMap
+      ? {
+          ...(project.analysis || {}),
+          sources: remainingSources,
+          documentSummaries: prunedSummaries,
+          needsResummarize: false,
+          contentAnalysisStatus: "ready",
+          contentAnalysisError: null
+        }
+      : {
+          ...(project.analysis || {}),
+          sources: remainingSources,
+          summary: "",
+          highValue: [],
+          modules: [],
+          tacitKnowledge: [],
+          scenarios: [],
+          questions: [],
+          documentSummaries: prunedSummaries,
+          needsResummarize: remainingSources.length > 0 && !willQueueRebuild,
+          contentAnalysisStatus: willQueueRebuild ? "pending" : "ready",
+          contentAnalysisError: null
+        },
     practiceDocumentIds: (project.practiceDocumentIds || []).filter((id) => !removedIds.has(id)),
     blindspots: (project.blindspots || []).filter((item) => {
       const ids = Array.isArray(item.documentIds) ? item.documentIds : [];
@@ -325,7 +343,13 @@ export function Sources({
     try {
       const data = await deleteDocument(project.id, source.id);
       updateProject(data.project);
-      if (data.queued || data.resummarize?.queued) {
+      if (data.skippedLlmRebuild) {
+        showToast(
+          data.queued
+            ? `已移除「${source.name}」，正在清理向量；已导入的知识地图保持不变`
+            : `已删除「${source.name}」，已导入的知识地图保持不变`
+        );
+      } else if (data.queued || data.resummarize?.queued) {
         showToast(`已移除「${source.name}」，正在后台清理向量并重建知识地图`);
       } else if (data.mapCleared && data.needsResummarize) {
         showToast(`已删除「${source.name}」，知识地图已清空，请重新总结剩余资料`);

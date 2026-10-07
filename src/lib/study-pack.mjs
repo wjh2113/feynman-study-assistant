@@ -205,3 +205,8 @@ export function shouldApplyImportedTitle(currentTitle = "") {
   const title = String(currentTitle || "").trim();
   return !title || title === "新的学习项目";
 }
+
+/** Projects that arrived via external study-pack import keep map/banks; delete must not auto-call LLM. */
+export function isImportedStudyPack(project = {}) {
+  return Boolean(project?.analysis?.importedPack?.schema);
+}
