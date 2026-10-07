@@ -103,11 +103,32 @@ function mergeUniqueQuestions(existing, incoming, source, limit) {
   return merged;
 }
 
-export async function generateQuestionBankForSource(source, userId, capability = "fast-chat") {
-  const targetCount = resolveDocumentBankSize(source);
+export async function generateQuestionBankForSource(source, userId, capability = "fast-chat", options = {}) {
+  const seed = Array.isArray(options.seedBank) ? options.seedBank : [];
+  const resolved = resolveDocumentBankSize(source);
+  const targetCount = Math.max(
+    DOCUMENT_BANK_MIN,
+    Math.min(
+      DOCUMENT_BANK_MAX,
+      Number(options.targetCount) > 0 ? Math.round(Number(options.targetCount)) : resolved
+    ),
+    seed.length
+  );
   if (!(await isLlmConfigured(userId))) {
+    const heuristic = mergeUniqueQuestions(
+      [],
+      seed.length ? seed : buildHeuristicDocumentBank(source, targetCount),
+      source,
+      targetCount
+    );
+    const filled = mergeUniqueQuestions(
+      heuristic,
+      buildHeuristicDocumentBank(source, targetCount),
+      source,
+      targetCount
+    );
     return {
-      questionBank: buildHeuristicDocumentBank(source, targetCount),
+      questionBank: filled,
       questionBankMeta: {
         generated: false,
         capability: null,
@@ -119,9 +140,9 @@ export async function generateQuestionBankForSource(source, userId, capability =
   }
 
   try {
-    let questionBank = [];
+    let questionBank = mergeUniqueQuestions([], seed, source, targetCount);
     let batches = 0;
-    const maxBatches = Math.ceil(targetCount / BANK_BATCH_SIZE) + 1;
+    const maxBatches = Math.ceil((targetCount - questionBank.length) / BANK_BATCH_SIZE) + 2;
     while (questionBank.length < targetCount && batches < maxBatches) {
       const need = Math.min(BANK_BATCH_SIZE, targetCount - questionBank.length);
       const messages = bankMessages(source, need, questionBank);
@@ -145,11 +166,12 @@ export async function generateQuestionBankForSource(source, userId, capability =
       return {
         questionBank: filled,
         questionBankMeta: {
-          generated: questionBank.length > 0,
+          generated: questionBank.length > seed.length,
           fallback: true,
           capability,
           targetCount,
           batches,
+          toppedUpFrom: seed.length,
           contentChars: measureSourceChars(source),
           generatedAt: Date.now()
         }
@@ -163,13 +185,19 @@ export async function generateQuestionBankForSource(source, userId, capability =
         capability,
         targetCount,
         batches,
+        toppedUpFrom: seed.length || undefined,
         contentChars: measureSourceChars(source),
         generatedAt: Date.now()
       }
     };
   } catch (error) {
     return {
-      questionBank: buildHeuristicDocumentBank(source, targetCount),
+      questionBank: mergeUniqueQuestions(
+        seed,
+        buildHeuristicDocumentBank(source, targetCount),
+        source,
+        targetCount
+      ),
       questionBankMeta: {
         generated: false,
         fallback: true,
@@ -245,4 +273,81 @@ export function enqueueDocumentQuestionBanks(payload) {
 
 export function enqueueDocumentQuestionBanksLater(payload) {
   enqueueTaskLater("document-question-banks", payload, runDocumentQuestionBankJob);
+}
+
+/**
+ * Force-top-up document banks to at least minCount (keeps existing questions).
+ */
+export async function runTopUpDocumentQuestionBanksJob(payload, progress = () => {}) {
+  const {
+    projectId,
+    userId,
+    documentIds = [],
+    minCount = 50
+  } = payload || {};
+  const floor = Math.max(DOCUMENT_BANK_MIN, Math.min(DOCUMENT_BANK_MAX, Number(minCount) || 50));
+  const project = await getProject(projectId, userId);
+  if (!project) throw new Error("学习项目不存在");
+
+  const wanted = new Set((documentIds || []).map((id) => String(id || "").trim()).filter(Boolean));
+  const sources = project.analysis?.sources || [];
+  const targets = sources.filter((source) => {
+    if (!source?.id) return false;
+    if (wanted.size && !wanted.has(String(source.id))) return false;
+    const bank = Array.isArray(source.questionBank) ? source.questionBank : [];
+    const usable = bank.filter((item) => item && !isMetaDerivedQuestion(item)).length;
+    return usable < floor;
+  });
+  if (!targets.length) {
+    progress(100);
+    return { projectId, updated: 0, skipped: sources.length, minCount: floor };
+  }
+
+  const prefs = await getUserPreferences(userId);
+  const capability = prefs.practiceQuestionCapability === "quality-chat" ? "quality-chat" : "fast-chat";
+  const bankUpdates = new Map();
+  let done = 0;
+  for (const source of targets) {
+    const seed = (Array.isArray(source.questionBank) ? source.questionBank : [])
+      .filter((item) => item && !isMetaDerivedQuestion(item));
+    const generated = await generateQuestionBankForSource(source, userId, capability, {
+      targetCount: floor,
+      seedBank: seed
+    });
+    bankUpdates.set(String(source.id), {
+      questionBank: generated.questionBank,
+      questionBankMeta: {
+        ...generated.questionBankMeta,
+        pendingLlm: false,
+        toppedUpTo: floor
+      }
+    });
+    done += 1;
+    progress(Math.round((done / targets.length) * 100));
+  }
+
+  const latest = await getProject(projectId, userId);
+  if (!latest) throw new Error("学习项目不存在");
+  const nextSources = (latest.analysis?.sources || []).map((source) => {
+    const update = bankUpdates.get(String(source.id));
+    return update ? { ...source, ...update } : source;
+  });
+  await saveProject({
+    ...latest,
+    userId,
+    analysis: {
+      ...(latest.analysis || {}),
+      sources: nextSources
+    }
+  });
+  return {
+    projectId,
+    updated: bankUpdates.size,
+    minCount: floor,
+    capability,
+    details: [...bankUpdates.entries()].map(([id, update]) => ({
+      id,
+      count: update.questionBank?.length || 0
+    }))
+  };
 }
