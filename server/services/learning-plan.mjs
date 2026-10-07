@@ -1,5 +1,5 @@
 import { isLlmConfigured } from "../gateway-client.mjs";
-import { deepseek } from "./llm.mjs";
+import { fastJson } from "./llm.mjs";
 
 function demoLearningPlan({ title, goal, level }) {
   const subject = title || "该学科";
@@ -113,11 +113,11 @@ export async function generateLearningPlan({ userId, title, goal, level }) {
   }
 
   try {
-    const result = await deepseek([
+    const result = await fastJson([
       {
         role: "system",
         content:
-          "你是费曼学习教练。根据用户的学科、目标与基础，给出可执行的学习规划。不要空洞励志；周期与节奏要具体。只输出合法 JSON。"
+          "你是费曼学习教练。根据用户的学科、目标与基础，给出可执行的学习规划。不要空洞励志；周期与节奏要具体；字段尽量短。只输出合法 JSON。"
       },
       {
         role: "user",
@@ -139,7 +139,7 @@ export async function generateLearningPlan({ userId, title, goal, level }) {
 }
 要求：phases 3-4 个；总周期由你根据目标与基础推断，不要问用户再填时长；行动要能在本产品中落地（上传资料、勾选练习、费曼对练、盲区复测、一页纸）；摘要与阶段内容必须紧扣「${input.title}」。`
       }
-    ], 0.4, userId, Number(process.env.GENERATION_TIMEOUT_MS || 90_000));
+    ], 0.4, userId, Number(process.env.GENERATION_TIMEOUT_MS || 90_000), 1200);
 
     const plan = normalizePlan({ ...result, demo: false }, fallback);
     return { status: 200, body: { plan, demo: false } };

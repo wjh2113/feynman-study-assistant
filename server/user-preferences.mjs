@@ -5,10 +5,10 @@ const DEFAULT_OCR_MAX_IMAGES = Math.max(
   Math.min(200, Number(process.env.OCR_MAX_IMAGES || 40))
 );
 
-/** Raw source chars above this → split quality-chat (per-file then merge). */
+/** Raw source chars above this → split fast-chat (per-file then merge). */
 const DEFAULT_SPLIT_ANALYSIS_CHARS = Math.max(
   5_000,
-  Math.min(100_000, Number(process.env.SPLIT_ANALYSIS_CHARS || 24_000))
+  Math.min(100_000, Number(process.env.SPLIT_ANALYSIS_CHARS || 12_000))
 );
 
 export const PREFERENCE_DEFAULTS = {

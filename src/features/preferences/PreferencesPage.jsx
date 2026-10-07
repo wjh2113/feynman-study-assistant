@@ -14,7 +14,7 @@ const DEFAULTS = {
   practiceQuestionCapability: "fast-chat",
   ocrEnabled: true,
   ocrMaxImages: 40,
-  splitAnalysisChars: 24000
+  splitAnalysisChars: 12000
 };
 
 export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
@@ -216,7 +216,7 @@ export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
                         }))}
                       />
                       <small>
-                        默认 24000。资料原文总字数超过该值时，先按文件/分段摘要，再合并知识地图；调高更倾向单次分析，调低更早拆分。范围 5000–100000。
+                        默认 12000。资料原文总字数超过该值时，先按文件/分段用 fast-chat 摘要，再合并知识地图；调高更倾向单次分析，调低更早拆分。范围 5000–100000。
                       </small>
                     </label>
                   </div>

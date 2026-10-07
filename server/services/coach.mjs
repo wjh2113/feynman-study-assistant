@@ -879,11 +879,11 @@ export async function generateOnePager({ userId, project, chapter = null, docume
     const onePagerTimeoutMs = Number(process.env.ONE_PAGER_TIMEOUT_MS || process.env.GENERATION_TIMEOUT_MS || 180_000);
     let result;
     try {
-      result = await deepseek([
+      result = await fastJson([
         {
           role: "system",
           content:
-            "你负责把学习过程沉淀为简洁的一页纸和可直接写作的专业成果大纲。优先使用上传资料、知识地图、用户对练与盲区中形成的观点，不虚构资料、引文或用户经历。大纲必须体现底层逻辑、实战判断和认知修正，不要只罗列知识点。只输出JSON。"
+            "你负责把学习过程沉淀为简洁的一页纸和可直接写作的专业成果大纲。优先使用上传资料、知识地图、用户对练与盲区中形成的观点，不虚构资料、引文或用户经历。大纲必须体现底层逻辑、实战判断和认知修正，不要只罗列知识点。字段尽量短。只输出JSON。"
         },
         {
           role: "user",
@@ -895,7 +895,7 @@ ${JSON.stringify(slimProject)}
 "sections":[{"title":"","purpose":"","keyPoints":[""],"evidence":["仅填写项目数据中真实存在的文件、页码、对练或盲区"],"writingPrompt":""}]}}
 要求 outline.sections 为5至7章，每章都说明写作目的、2至4个核心论点、可核对依据和具体写作提示。若对练/盲区为 0，可写“待补充”，不要编造。`
         }
-      ], 0.35, userId, onePagerTimeoutMs);
+      ], 0.35, userId, onePagerTimeoutMs, 1800);
     } catch (error) {
       // Prefer a usable local outline over a hard failure when the gateway is slow.
       const payload = {

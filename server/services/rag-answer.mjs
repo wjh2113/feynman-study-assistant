@@ -2,10 +2,15 @@ import { embedTexts, embeddingStatus, pickAnswerSources, relevanceThreshold, rer
 import { getEmbeddingConfig } from "../model-config.mjs";
 import { isLlmConfigured } from "../gateway-client.mjs";
 import { hybridSearch, recordEvent } from "../storage.mjs";
-import { deepseek } from "./llm.mjs";
+import { deepseek, fastJson } from "./llm.mjs";
 import { expandRetrievalQuery } from "./rag-query-expand.mjs";
 
 const NO_EVIDENCE = "资料中没有找到相关内容。";
+const RAG_EVIDENCE_LIMIT = 3;
+const RAG_QUOTE_CHARS = 280;
+const RAG_PARENT_CHARS = 160;
+const RAG_FAST_MAX_TOKENS = 700;
+const RAG_QUALITY_MAX_TOKENS = 1100;
 
 function toCitation(source, index) {
   const content = String(source.content || source.quote || "").trim();
@@ -38,6 +43,36 @@ function citedIndexes(answer, max) {
 function isRefusal(answer) {
   const text = String(answer || "").trim();
   return !text || /资料中没有找到/.test(text);
+}
+
+function clipText(value, max) {
+  const text = String(value || "").trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}…`;
+}
+
+/** Hard questions keep quality-chat; most Q&A stays on fast-chat. */
+export function isHardRagQuery(query = "", sources = []) {
+  const q = String(query || "").trim();
+  if (q.length >= 80) return true;
+  if (/[?？].*[?？]/.test(q)) return true;
+  if (/比较|对比|区别|差异|优缺点|为什么|如何证明|请详细|系统地|分别说明|综合分析|推理/.test(q)) return true;
+  const top = Number(sources[0]?.rerankScore);
+  if (Number.isFinite(top) && top > 0 && top < 0.35) return true;
+  return false;
+}
+
+function buildEvidenceBlock(sources = []) {
+  return sources.map((source, index) => {
+    const quote = clipText(source.content, RAG_QUOTE_CHARS);
+    const parent = source.parentContent && source.parentContent !== source.content
+      ? clipText(source.parentContent, RAG_PARENT_CHARS)
+      : "";
+    return `[${index + 1}] 资料：${source.filename}
+页码：第${source.page}${source.pageEnd > source.page ? `-${source.pageEnd}` : ""}页
+位置：${clipText(source.headingPath || "未识别小节", 80)}
+引用原文：${quote}${parent ? `\n上下文：${parent}` : ""}`;
+  }).join("\n\n");
 }
 
 /**
@@ -79,7 +114,7 @@ export async function answerRagQuery({ userId, projectId, query }) {
     }
     const picked = pickAnswerSources(candidates, reranked, relevanceThreshold);
     if (picked.warning && !degraded) degraded = picked.warning;
-    const sources = picked.sources;
+    const sources = (picked.sources || []).slice(0, RAG_EVIDENCE_LIMIT);
     const rerankById = new Map(reranked.map((item) => [item.id, item.rerankScore]));
     for (const item of sources) {
       if (!rerankById.has(item.id)) rerankById.set(item.id, item.rerankScore);
@@ -90,6 +125,7 @@ export async function answerRagQuery({ userId, projectId, query }) {
       queryExpansion,
       embedding: embeddingStatus(retrievalConfig.embedding),
       degraded,
+      evidenceLimit: RAG_EVIDENCE_LIMIT,
       candidates: candidates.map((item, index) => ({
         rank: index + 1,
         id: item.id,
@@ -122,24 +158,22 @@ export async function answerRagQuery({ userId, projectId, query }) {
       };
     }
 
-    const evidenceBlock = sources.map((source, index) => `[${index + 1}] 资料文件名：${source.filename}
-页码：第${source.page}${source.pageEnd > source.page ? `-${source.pageEnd}` : ""}页
-位置：${source.headingPath || "未识别小节"}
-引用原文：${source.content}${source.parentContent && source.parentContent !== source.content ? `\n上下文：${source.parentContent}` : ""}`).join("\n\n");
+    const evidenceBlock = buildEvidenceBlock(sources);
+    const hard = isHardRagQuery(query, sources);
 
     let answer;
     const modelConfigured = await isLlmConfigured(userId);
     if (modelConfigured) {
       stage = "生成资料回答";
-      const result = await deepseek([
+      const messages = [
         {
           role: "system",
           content:
-            "你是严格的资料问答助手。规则：1) 只能依据用户消息中的「引用原文」作答；2) 禁止使用资料外知识、禁止补充、禁止举例发挥、禁止答非所问；3) 问题与原文无关或证据不足时，answer 必须恰好为「资料中没有找到相关内容。」；4) 有依据时，每个关键句末标注 [编号]，编号必须对应证据列表；5) 不要复述与问题无关的原文。只输出合法 JSON：{\"answer\":\"...\"}"
+            "你是严格的资料问答助手。规则：1) 只能依据用户消息中的「引用原文」作答；2) 禁止使用资料外知识、禁止补充、禁止举例发挥、禁止答非所问；3) 问题与原文无关或证据不足时，answer 必须恰好为「资料中没有找到相关内容。」；4) 有依据时，每个关键句末标注 [编号]，编号必须对应证据列表；5) 回答尽量短，通常不超过 120 字。只输出合法 JSON：{\"answer\":\"...\"}"
         },
         {
           role: "user",
-          content: `用户问题：${query}
+          content: `用户问题：${String(query).slice(0, 400)}
 
 ===== 唯一允许使用的证据（共 ${sources.length} 条）=====
 ${evidenceBlock}
@@ -147,9 +181,13 @@ ${evidenceBlock}
 
 请只根据上述证据回答用户问题。`
         }
-      ], 0.05, userId);
+      ];
+      const result = hard
+        ? await deepseek(messages, 0.05, userId, Number(process.env.GENERATION_TIMEOUT_MS || 90_000), RAG_QUALITY_MAX_TOKENS)
+        : await fastJson(messages, 0.05, userId, Number(process.env.GENERATION_TIMEOUT_MS || 90_000), RAG_FAST_MAX_TOKENS);
       if (!result?.answer) throw new Error("文本模型没有返回有效的资料回答");
       answer = String(result.answer).trim();
+      debug.answerCapability = hard ? "quality-chat" : "fast-chat";
 
       // 模型若给出回答却未标注引用，且不是拒答，则强制改为拒答，避免无依据扩展
       if (!isRefusal(answer) && citedIndexes(answer, sources.length).length === 0) {
@@ -157,6 +195,7 @@ ${evidenceBlock}
       }
     } else {
       answer = `（演示模式）以下为检索到的原文，未调用模型扩展：\n\n来自《${sources[0].filename}》第 ${sources[0].page} 页：\n“${sources[0].content.slice(0, 500)}${sources[0].content.length > 500 ? "……" : ""}”`;
+      debug.answerCapability = "demo";
     }
 
     const citations = sources.map((source, index) => toCitation(source, index));
@@ -171,7 +210,11 @@ ${evidenceBlock}
       visible = [];
     }
 
-    await recordEvent(userId, projectId, "rag_query", { query, sourceIds: sources.map((source) => source.id) });
+    await recordEvent(userId, projectId, "rag_query", {
+      query,
+      sourceIds: sources.map((source) => source.id),
+      answerCapability: debug.answerCapability
+    });
     return {
       body: {
         answer,
