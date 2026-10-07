@@ -15,6 +15,9 @@ const MIN_OCR_IMAGE_BYTES = Math.max(1024, Number(process.env.OCR_MIN_IMAGE_BYTE
 const OCR_CONCURRENCY = Math.max(1, Math.min(6, Number(process.env.OCR_CONCURRENCY || 3)));
 
 async function resolveOcrPolicy(userId) {
+  if (userId == null || userId === "__skip_ocr__") {
+    return { enabled: false, maxImages: 0 };
+  }
   const prefs = await getUserPreferences(userId);
   return {
     enabled: prefs.ocrEnabled !== false,
@@ -307,12 +310,13 @@ export function decodeUploadName(filename) {
   return raw;
 }
 
-export async function parseFile(file, userId) {
+export async function parseFile(file, userId, { skipOcr = false } = {}) {
   const filename = decodeUploadName(file.originalname);
   const ext = path.extname(filename).toLowerCase();
-  if (ext === ".pdf") return parsePdf(file.buffer, filename, userId);
-  if (ext === ".docx") return parseDocx(file.buffer, filename, userId);
-  if (IMAGE_EXTENSIONS.has(ext)) return parseImage(file, filename, ext, userId);
+  const ocrUserId = skipOcr ? "__skip_ocr__" : userId;
+  if (ext === ".pdf") return parsePdf(file.buffer, filename, ocrUserId);
+  if (ext === ".docx") return parseDocx(file.buffer, filename, ocrUserId);
+  if (IMAGE_EXTENSIONS.has(ext)) return parseImage(file, filename, ext, ocrUserId);
   if ([".txt", ".md", ".markdown"].includes(ext)) {
     const text = cleanText(file.buffer.toString("utf8"));
     const report = createReport(ext.slice(1).toUpperCase());

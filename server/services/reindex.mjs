@@ -13,7 +13,7 @@ import {
 } from "../storage.mjs";
 import { dedupeProjectDocuments } from "./document-dedupe.mjs";
 
-export async function reindexProject(projectId, userId, onProgress = () => {}) {
+export async function reindexProject(projectId, userId, onProgress = () => {}, { skipOcr = false } = {}) {
     const project = await getProject(projectId, userId);
     if (!project) throw new Error("学习项目不存在");
     const documents = await dedupeProjectDocuments(projectId, userId);
@@ -29,7 +29,7 @@ export async function reindexProject(projectId, userId, onProgress = () => {}) {
         mimetype: document.mime_type,
         size: Number(document.byte_size || buffer.length),
         buffer
-      }, userId);
+      }, userId, { skipOcr });
       source.documentKey = document.id;
       source.parsedPreview = source.pages.map((page) => `第 ${page.page} 页\n${page.text}`).join("\n\n").slice(0, 30000);
       const hierarchy = chunkSources([source]);
