@@ -17,3 +17,5 @@ android/local.properties
 *.apk
 *.aab
 *.keystore
+tests/fixtures/*.docx
+tests/fixtures/workplace-life.txt

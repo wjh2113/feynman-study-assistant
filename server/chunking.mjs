@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-const DEFAULT_CHILD_MIN = 500;
-const DEFAULT_CHILD_TARGET = 650;
-const DEFAULT_CHILD_MAX = 800;
+const DEFAULT_CHILD_MIN = 420;
+const DEFAULT_CHILD_TARGET = 700;
+const DEFAULT_CHILD_MAX = 900;
 const DEFAULT_PARENT_MAX = 3200;
+const COALESCE_MIN = 260;
 
 /** Normalize common query aliases before tokenization / embedding. */
 export function normalizeRetrievalQuery(value) {
@@ -25,23 +26,48 @@ export function keywordTokens(value) {
   return [...new Set([...latin, ...chinese])].slice(0, 320);
 }
 
-function headingInfo(line) {
-  const text = String(line || "").trim();
-  const markdown = text.match(/^(#{1,6})\s+(.+)$/);
-  if (markdown) return { level: markdown[1].length, title: markdown[2].trim() };
-  const numbered = text.match(/^(第[一二三四五六七八九十百0-9]+[章节篇部]|[一二三四五六七八九十]+[、.]|\d+(?:\.\d+){0,3}[、.\s]|[（(][一二三四五六七八九十0-9]+[）)])\s*(.+)$/);
-  if (numbered && text.length <= 90) {
-    const depth = /^\d+(?:\.\d+)+/.test(text) ? Math.min(6, (text.match(/\./g) || []).length + 1) : 2;
-    return { level: depth, title: text };
-  }
-  if (text.length >= 2 && text.length <= 36 && !/[。！？；，,;:：]$/.test(text) && !isTableLine(text)) {
-    return { level: 3, title: text };
-  }
-  return null;
-}
-
 function isTableLine(line) {
   return (String(line).match(/\|/g) || []).length >= 2 || /\S\s{2,}\S/.test(String(line)) || String(line).includes("\t");
+}
+
+function looksLikeTocLine(text) {
+  // "1.1 职场沟通 …… 3" / tab + page number
+  return /\t\d+\s*$/.test(text) || /\s{2,}\d{1,4}\s*$/.test(text) || /错误!\s*未定义书签/.test(text);
+}
+
+/** Exported for unit tests. */
+export function headingInfo(line) {
+  const text = String(line || "").trim();
+  if (!text || looksLikeTocLine(text) || isTableLine(text)) return null;
+
+  const markdown = text.match(/^(#{1,6})\s+(.+)$/);
+  if (markdown) return { level: markdown[1].length, title: markdown[2].trim() };
+
+  // Explicit chapter/section markers only — do not treat every short line as a heading.
+  const chapter = text.match(/^(第[一二三四五六七八九十百千0-9]+[章节篇部节])\s*(.*)$/);
+  if (chapter && text.length <= 40 && !/[。！？!?；;]/.test(text)) {
+    return { level: 1, title: text };
+  }
+
+  const numbered = text.match(
+    /^((?:[一二三四五六七八九十]+[、.])|(?:\d+(?:\.\d+){0,3}[、.\s])|(?:[（(][一二三四五六七八九十0-9]+[）)]))\s*(.+)$/
+  );
+  if (numbered) {
+    const titleBody = String(numbered[2] || "").trim();
+    // Skip sentence-like list items and ultra-short markers ("嗯", "会前").
+    if (
+      titleBody.length >= 2
+      && titleBody.length <= 40
+      && text.length <= 48
+      && !/[。！？!?；;]/.test(text)
+      && !/^(好嘞|收到|常见错误|基本原理|问出来|目录)$/.test(titleBody)
+    ) {
+      const depth = /^\d+(?:\.\d+)+/.test(text) ? Math.min(6, (text.match(/\./g) || []).length + 1) : 2;
+      return { level: depth, title: text };
+    }
+  }
+
+  return null;
 }
 
 function splitLongText(text, max = DEFAULT_CHILD_MAX) {
@@ -90,7 +116,13 @@ function pageBlocks(source) {
         if (heading) {
           headingStack.splice(Math.max(0, heading.level - 1));
           headingStack[heading.level - 1] = heading.title;
-          blocks.push({ type: "heading", text: heading.title, page: Number(page.page || 1), headingPath: headingStack.filter(Boolean) });
+          // Boundary only — do not emit heading-only body chunks.
+          blocks.push({
+            type: "heading",
+            text: "",
+            page: Number(page.page || 1),
+            headingPath: headingStack.filter(Boolean)
+          });
         } else {
           for (const part of splitLongText(line)) {
             blocks.push({ type: "paragraph", text: part, page: Number(page.page || 1), headingPath: headingStack.filter(Boolean) });
@@ -108,7 +140,14 @@ function buildParentSections(source) {
   let current = null;
   const flush = () => {
     if (!current?.blocks.length) return;
-    current.content = current.blocks.map((block) => block.text).join("\n\n");
+    // Drop parents that only contain empty heading markers.
+    const bodyBlocks = current.blocks.filter((block) => block.type !== "heading" || block.text);
+    if (!bodyBlocks.length) {
+      current = null;
+      return;
+    }
+    current.blocks = bodyBlocks;
+    current.content = current.blocks.map((block) => block.text).filter(Boolean).join("\n\n");
     current.pageEnd = current.blocks.at(-1).page;
     parents.push(current);
     current = null;
@@ -116,9 +155,9 @@ function buildParentSections(source) {
 
   for (const block of pageBlocks(source)) {
     const pathLabel = block.headingPath.join(" > ") || source.filename;
-    const currentLength = current?.blocks.reduce((sum, item) => sum + item.text.length + 2, 0) || 0;
+    const currentLength = current?.blocks.reduce((sum, item) => sum + String(item.text || "").length + 2, 0) || 0;
     const headingChanged = current && block.type === "heading" && pathLabel !== current.headingPath;
-    if (!current || headingChanged || currentLength + block.text.length > DEFAULT_PARENT_MAX) {
+    if (!current || headingChanged || currentLength + String(block.text || "").length > DEFAULT_PARENT_MAX) {
       flush();
       current = {
         id: randomUUID(),
@@ -130,22 +169,72 @@ function buildParentSections(source) {
         blocks: []
       };
     }
+    if (block.type === "heading" && !block.text) {
+      // Keep section boundary via headingPath on subsequent blocks; skip empty marker body.
+      continue;
+    }
     current.blocks.push(block);
   }
   flush();
   return parents;
 }
 
+function stripChapterPrefix(content = "") {
+  return String(content || "").replace(/^章节：[^\n]*\n/, "");
+}
+
+function coalesceTinyChunks(chunks) {
+  if (chunks.length <= 1) return chunks;
+  const merged = [];
+  for (const chunk of chunks) {
+    const prev = merged.at(-1);
+    if (prev && prev.content.length < COALESCE_MIN) {
+      const body = stripChapterPrefix(chunk.content);
+      if (prev.content.length + body.length + 2 <= DEFAULT_CHILD_MAX + 220) {
+        prev.content = `${prev.content}\n\n${body}`.trim();
+        prev.searchTokens = keywordTokens(prev.content).join(" ");
+        prev.pageEnd = chunk.pageEnd;
+        continue;
+      }
+    }
+    merged.push({ ...chunk });
+  }
+
+  // Merge remaining tiny tails into previous when possible.
+  if (merged.length > 1 && merged.at(-1).content.length < DEFAULT_CHILD_MIN) {
+    const tail = merged.pop();
+    const previous = merged.at(-1);
+    const body = stripChapterPrefix(tail.content);
+    if (previous.content.length + body.length + 2 <= DEFAULT_CHILD_MAX + 220) {
+      previous.content = `${previous.content}\n\n${body}`.trim();
+      previous.searchTokens = keywordTokens(previous.content).join(" ");
+      previous.pageEnd = tail.pageEnd;
+    } else {
+      merged.push(tail);
+    }
+  }
+  return merged;
+}
+
 function childrenForParent(parent, startIndex) {
   const chunks = [];
-  const atoms = parent.blocks.flatMap((block) => (
-    splitLongText(block.text).map((text) => ({ text, page: block.page }))
-  ));
+  const atoms = parent.blocks
+    .filter((block) => block.type !== "heading" && String(block.text || "").trim())
+    .flatMap((block) => (
+      splitLongText(block.text).map((text) => ({ text, page: block.page }))
+    ));
+  if (!atoms.length) return [];
+
   let current = [];
   let currentLength = 0;
   const flush = () => {
     if (!current.length) return;
     const raw = current.map((item) => item.text).join("\n\n").trim();
+    if (!raw) {
+      current = [];
+      currentLength = 0;
+      return;
+    }
     const prefix = parent.headingPath ? `章节：${parent.headingPath}\n` : "";
     chunks.push({
       documentKey: parent.documentKey,
@@ -173,18 +262,11 @@ function childrenForParent(parent, startIndex) {
   }
   flush();
 
-  if (chunks.length > 1 && chunks.at(-1).content.length < DEFAULT_CHILD_MIN) {
-    const tail = chunks.pop();
-    const previous = chunks.at(-1);
-    if (previous.content.length + tail.content.length <= DEFAULT_CHILD_MAX + 160) {
-      previous.content = `${previous.content}\n\n${tail.content.replace(/^章节：.*\n/, "")}`;
-      previous.searchTokens = keywordTokens(previous.content).join(" ");
-      previous.pageEnd = tail.pageEnd;
-    } else {
-      chunks.push(tail);
-    }
-  }
-  return chunks;
+  const coalesced = coalesceTinyChunks(chunks);
+  return coalesced.map((chunk, index) => ({
+    ...chunk,
+    chunkIndex: startIndex + index
+  }));
 }
 
 export function chunkSources(sources) {
@@ -201,4 +283,28 @@ export function chunkSources(sources) {
     }
   }
   return { parents, chunks };
+}
+
+/** Stats helper for rechunk comparisons / ops scripts. */
+export function summarizeChunks(chunks = []) {
+  const lens = chunks.map((chunk) => String(chunk.content || "").length).sort((a, b) => a - b);
+  if (!lens.length) {
+    return {
+      chunks: 0, p50: 0, p90: 0, avg: 0, min: 0, max: 0,
+      tiny_lt80: 0, small_80_300: 0, mid_301_800: 0, large_gt800: 0
+    };
+  }
+  const pct = (p) => lens[Math.floor((lens.length - 1) * p)];
+  return {
+    chunks: lens.length,
+    p50: pct(0.5),
+    p90: pct(0.9),
+    avg: Math.round(lens.reduce((sum, n) => sum + n, 0) / lens.length),
+    min: lens[0],
+    max: lens.at(-1),
+    tiny_lt80: lens.filter((n) => n < 80).length,
+    small_80_300: lens.filter((n) => n >= 80 && n <= 300).length,
+    mid_301_800: lens.filter((n) => n > 300 && n <= 800).length,
+    large_gt800: lens.filter((n) => n > 800).length
+  };
 }
