@@ -103,6 +103,43 @@ function mergeUniqueQuestions(existing, incoming, source, limit) {
   return merged;
 }
 
+/** Guarantee a floor count with unique, non-meta filler questions. */
+function padQuestionBankToCount(questionBank, source, targetCount) {
+  let merged = mergeUniqueQuestions([], questionBank, source, targetCount);
+  if (merged.length >= targetCount) return merged.slice(0, targetCount);
+  const filename = String(source.name || source.filename || "本资料").trim();
+  const concepts = [
+    ...new Set([
+      ...merged.map((item) => String(item.concept || "").trim()).filter(Boolean),
+      filename,
+      `${filename}核心概念`,
+      `${filename}应用场景`,
+      `${filename}常见误区`
+    ])
+  ];
+  let guard = 0;
+  while (merged.length < targetCount && guard < targetCount * 6) {
+    guard += 1;
+    const concept = concepts[merged.length % concepts.length] || filename;
+    const n = merged.length + 1;
+    const question = `结合本资料，说明「${concept}」的关键用法、一个正例和一个边界条件（补题 ${n}/${targetCount} · ${guard}）。`;
+    const next = mergeUniqueQuestions(
+      merged,
+      [{
+        id: `qb-pad-${source.id || "doc"}-${n}-${guard}`,
+        question,
+        concept,
+        why: "补齐题库：保证每份资料有足够对练题"
+      }],
+      source,
+      targetCount
+    );
+    if (next.length <= merged.length) break;
+    merged = next;
+  }
+  return merged.slice(0, targetCount);
+}
+
 export async function generateQuestionBankForSource(source, userId, capability = "fast-chat", options = {}) {
   const seed = Array.isArray(options.seedBank) ? options.seedBank : [];
   const resolved = resolveDocumentBankSize(source);
@@ -157,9 +194,13 @@ export async function generateQuestionBankForSource(source, userId, capability =
     }
 
     if (questionBank.length < targetCount) {
-      const filled = mergeUniqueQuestions(
-        questionBank,
-        buildHeuristicDocumentBank(source, targetCount),
+      const filled = padQuestionBankToCount(
+        mergeUniqueQuestions(
+          questionBank,
+          buildHeuristicDocumentBank(source, targetCount),
+          source,
+          targetCount
+        ),
         source,
         targetCount
       );
@@ -179,7 +220,7 @@ export async function generateQuestionBankForSource(source, userId, capability =
     }
 
     return {
-      questionBank: questionBank.slice(0, targetCount),
+      questionBank: padQuestionBankToCount(questionBank, source, targetCount),
       questionBankMeta: {
         generated: true,
         capability,
@@ -192,9 +233,13 @@ export async function generateQuestionBankForSource(source, userId, capability =
     };
   } catch (error) {
     return {
-      questionBank: mergeUniqueQuestions(
-        seed,
-        buildHeuristicDocumentBank(source, targetCount),
+      questionBank: padQuestionBankToCount(
+        mergeUniqueQuestions(
+          seed,
+          buildHeuristicDocumentBank(source, targetCount),
+          source,
+          targetCount
+        ),
         source,
         targetCount
       ),
