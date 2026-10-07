@@ -2,6 +2,7 @@ import { isLlmConfigured } from "../gateway-client.mjs";
 import { getProject, saveProject } from "../storage.mjs";
 import { getUserPreferences } from "../user-preferences.mjs";
 import { enqueueTask, enqueueTaskLater } from "../task-queue.mjs";
+import { withAntiInjection, wrapUntrusted } from "../prompt-safety.mjs";
 import { deepseek, fastJson } from "./llm.mjs";
 import {
   DOCUMENT_BANK_MAX,
@@ -57,7 +58,9 @@ function bankMessages(source, batchCount, existingQuestions = []) {
   return [
     {
       role: "system",
-      content: "你是费曼学习教练出题助手。只根据这一份学习资料中的学科知识点出题，不编造资料未覆盖的内容。只输出合法 JSON。"
+      content: withAntiInjection(
+        "你是费曼学习教练出题助手。只根据这一份学习资料中的学科知识点出题，不编造资料未覆盖的内容。只输出合法 JSON。"
+      )
     },
     {
       role: "user",
@@ -81,8 +84,7 @@ ${avoid.length ? `6. 不要与下列已有题目重复或高度相似：\n${avoi
   }]
 }
 
-资料：
-${sourceCorpus(source) || "（正文不足，请基于文件名与摘要谨慎出题）"}`
+${wrapUntrusted("学习资料", sourceCorpus(source) || "（正文不足，请基于文件名与摘要谨慎出题）")}`
     }
   ];
 }

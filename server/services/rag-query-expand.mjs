@@ -1,5 +1,6 @@
 import { normalizeRetrievalQuery } from "../chunking.mjs";
 import { isLlmConfigured } from "../gateway-client.mjs";
+import { withAntiInjection, wrapUntrusted } from "../prompt-safety.mjs";
 import { fastJson } from "./llm.mjs";
 
 const MAX_RETRIEVAL_QUERY_LEN = 480;
@@ -67,12 +68,13 @@ export async function expandRetrievalQuery(originalQuery, userId) {
       [
         {
           role: "system",
-          content:
+          content: withAntiInjection(
             "你是检索查询分析器。用户要在已上传的学习资料里检索，不要回答问题，不要补充资料外知识。请理解用户问题，给出用于混合检索（向量+关键词）的近似扩写。规则：1) keywords 输出 3-8 个可能在原资料中出现的词或短语，含同义说法、别称、常见缩写/数字写法（如 50音→五十音）；2) searchText 用 12-60 字浓缩检索意图，只含检索词；3) intent 用一句话说明用户在找什么；4) 可选 synonyms 输出 0-6 个近义检索词。只输出 JSON：{\"intent\":\"...\",\"keywords\":[\"...\"],\"synonyms\":[\"...\"],\"searchText\":\"...\"}"
+          )
         },
         {
           role: "user",
-          content: `用户问题：${query}`
+          content: wrapUntrusted("用户问题", query)
         }
       ],
       {

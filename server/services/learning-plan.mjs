@@ -1,4 +1,5 @@
 import { isLlmConfigured } from "../gateway-client.mjs";
+import { withAntiInjection, wrapUntrusted } from "../prompt-safety.mjs";
 import { fastJson } from "./llm.mjs";
 
 function demoLearningPlan({ title, goal, level }) {
@@ -116,15 +117,14 @@ export async function generateLearningPlan({ userId, title, goal, level }) {
     const result = await fastJson([
       {
         role: "system",
-        content:
+        content: withAntiInjection(
           "你是费曼学习教练。根据用户的学科、目标与基础，给出可执行的学习规划。不要空洞励志；周期与节奏要具体；字段尽量短。只输出合法 JSON。"
+        )
       },
       {
         role: "user",
         content: `请为以下学习者制定规划（以下三项已给定，禁止声称未提供）：
-学科：${input.title}
-学习目标：${input.goal}
-当前基础：${input.level}
+${wrapUntrusted("学习者信息", `学科：${input.title}\n学习目标：${input.goal}\n当前基础：${input.level}`)}
 
 返回 JSON：
 {

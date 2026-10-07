@@ -1,5 +1,6 @@
 import { gatewayTranscribe, isGatewayEnabled, isLlmConfigured } from "../gateway-client.mjs";
 import { getEmbeddingConfig, getVisionConfig } from "../model-config.mjs";
+import { withAntiInjection, wrapUntrusted } from "../prompt-safety.mjs";
 import { deepseek } from "./llm.mjs";
 
 const DEFAULT_ASR_MODEL = process.env.QWEN_ASR_MODEL || "qwen3-asr-flash";
@@ -118,13 +119,14 @@ async function refineTranscript(userId, rawText, purpose = "") {
     const result = await deepseek([
       {
         role: "system",
-        content:
+        content: withAntiInjection(
           "你是语音转写校对助手。根据口语识别结果，修正错别字、同音词、标点和明显不通顺处，保留原意与口语风格，不要扩写、不要总结、不要添加原文没有的信息。只输出合法JSON。"
+        )
       },
       {
         role: "user",
         content: `使用场景：${purpose || "通用输入"}
-原始识别：${text}
+${wrapUntrusted("原始识别", text)}
 
 返回：{"text":"修正后的完整文本"}`
       }

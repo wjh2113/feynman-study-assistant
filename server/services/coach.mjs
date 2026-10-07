@@ -7,6 +7,7 @@ import {
 } from "../embedding.mjs";
 import { getEmbeddingConfig } from "../model-config.mjs";
 import { isLlmConfigured } from "../gateway-client.mjs";
+import { withAntiInjection, wrapUntrusted } from "../prompt-safety.mjs";
 import {
   getCoachSession,
   getProject,
@@ -182,20 +183,21 @@ async function generateSessionDiagnosis({
     const result = await deepseek([
       {
         role: "system",
-        content:
+        content: withAntiInjection(
           "你是费曼学习诊断教练。根据用户对练表现，给出可执行的学习诊断。必须严格依据资料片段与评分，不编造原文没有的事实。字段尽量短：summary≤40字，各 note/detail≤40字，knowledgeGaps≤2条，knowledgeToMaster≤2条。只输出合法JSON。"
+        )
       },
       {
         role: "user",
         content: `题目：${String(question?.question || "").slice(0, 240)}
 概念：${concept?.title || ""}
 概念说明：${String(concept?.explanation || "").slice(0, 160)}
-用户最终解释：${String(userAnswer || "").slice(0, 500)}
+${wrapUntrusted("用户最终解释", String(userAnswer || "").slice(0, 500))}
 四维评分：${JSON.stringify(evaluation)}
 评分短评：${JSON.stringify(evaluationNotes || {})}
 已识别盲区：${JSON.stringify(blindspot || null)}
 偏低维度：${JSON.stringify(weak)}
-资料片段：${JSON.stringify(slimEvidence)}
+${wrapUntrusted("资料片段", JSON.stringify(slimEvidence))}
 
 返回：
 {
@@ -540,8 +542,9 @@ export async function runCoachTurn({
     const coachMessages = [
       {
         role: "system",
-        content:
+        content: withAntiInjection(
           `你是费曼学习教练。一轮对练最多包含${maxTurns}个问题，初始问题算第1个。前几轮不要替用户完善答案，一次只追问一个最关键的问题；发现黑话就要求用人话，发现逻辑跳跃就追问因果。第${maxTurns}轮用户回答后必须结束本轮，只给简短总结、评分和盲区，不得再提出任何问题。reply≤80字；evaluationNotes每项≤20字；blindspot各字段≤40字。只输出合法JSON。`
+        )
       },
       {
         role: "user",
@@ -549,9 +552,9 @@ export async function runCoachTurn({
 对应概念：${JSON.stringify(slimConceptForPrompt(concept))}
 当前角色：${effectiveRole === "child" ? "好奇的12岁小孩" : "严厉的行业专家"}
 对话轮次：${turnNumber}/${maxTurns}
-既有对话（含初始问题）：${JSON.stringify(historyForPrompt(priorMessages))}
-用户本轮解释：${String(answer || "").slice(0, 600)}
-可用于核对的资料片段：${JSON.stringify(evidencePayload)}
+${wrapUntrusted("既有对话", JSON.stringify(historyForPrompt(priorMessages)))}
+${wrapUntrusted("用户本轮解释", String(answer || "").slice(0, 600))}
+${wrapUntrusted("资料片段", JSON.stringify(evidencePayload))}
 本轮是否应结束：${finalTurn ? "是。不得继续追问，reply必须是陈述式总结。" : "否。reply只包含一个追问。"}
 
 评分量规（0-100）：
@@ -715,15 +718,15 @@ export async function generateVariantQuestion(project, blindspot, concept, userI
     const result = await fastJson([
       {
         role: "system",
-        content: "你是费曼学习教练。根据概念和盲区，生成一个能检验该盲区的变式追问。question≤60字。只输出合法JSON。"
+        content: withAntiInjection(
+          "你是费曼学习教练。根据概念和盲区，生成一个能检验该盲区的变式追问。question≤60字。只输出合法JSON。"
+        )
       },
       {
         role: "user",
         content: `概念：${concept?.title || ""}
 概念解释：${String(concept?.explanation || "").slice(0, 160)}
-盲区标题：${blindspot.title}
-盲区诊断：${String(blindspot.problem || "").slice(0, 200)}
-最小补漏动作：${String(blindspot.action || "").slice(0, 120)}
+${wrapUntrusted("盲区", `标题：${blindspot.title}\n诊断：${String(blindspot.problem || "").slice(0, 200)}\n动作：${String(blindspot.action || "").slice(0, 120)}`)}
 
 返回：{"question":"一个具体的变式追问"}`
       }
@@ -892,13 +895,14 @@ export async function generateOnePager({ userId, project, chapter = null, docume
       result = await fastJson([
         {
           role: "system",
-          content:
+          content: withAntiInjection(
             "你负责把学习过程沉淀为简洁的一页纸和可直接写作的专业成果大纲。优先使用上传资料、知识地图、用户对练与盲区中形成的观点，不虚构资料、引文或用户经历。大纲必须体现底层逻辑、实战判断和认知修正，不要只罗列知识点。字段尽量短。只输出JSON。"
+          )
         },
         {
           role: "user",
           content: `根据以下项目数据生成“一页纸学习卡 + 深度复盘/项目拆解文章大纲”：
-${JSON.stringify(slimProject)}
+${wrapUntrusted("项目数据", JSON.stringify(slimProject))}
 返回：
 {"title":"","thesis":"","takeaways":["","",""],"action":"","reflection":"",
 "outline":{"title":"","format":"深度复盘 / 项目拆解文章","audience":"","coreArgument":"",

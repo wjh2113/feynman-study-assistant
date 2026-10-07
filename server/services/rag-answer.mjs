@@ -14,6 +14,7 @@ import { getEmbeddingConfig } from "../model-config.mjs";
 import { isLlmConfigured } from "../gateway-client.mjs";
 import { hybridSearch, recordEvent } from "../storage.mjs";
 import { deepseek, fastJson, pickModelAnswer } from "./llm.mjs";
+import { withAntiInjection, wrapUntrusted } from "../prompt-safety.mjs";
 import { expandRetrievalQuery } from "./rag-query-expand.mjs";
 
 const NO_EVIDENCE = "资料中没有找到相关内容。";
@@ -196,15 +197,16 @@ export async function answerRagQuery({ userId, projectId, query }) {
       const messages = [
         {
           role: "system",
-          content:
+          content: withAntiInjection(
             "你是严格的资料问答助手。规则：1) 只能依据用户消息中的「引用原文」作答；2) 禁止使用资料外知识、禁止补充、禁止举例发挥、禁止答非所问；3) 问题与原文无关或证据不足时，answer 必须恰好为「资料中没有找到相关内容。」；4) 有依据时，每个关键句末标注 [编号]，编号必须对应证据列表；5) 回答尽量短，通常不超过 120 字。只输出合法 JSON：{\"answer\":\"...\"}"
+          )
         },
         {
           role: "user",
-          content: `用户问题：${String(query).slice(0, 400)}
+          content: `${wrapUntrusted("用户问题", String(query).slice(0, 400))}
 
 ===== 唯一允许使用的证据（共 ${sources.length} 条）=====
-${evidenceBlock}
+${wrapUntrusted("引用原文", evidenceBlock)}
 ===== 证据结束 =====
 
 请只根据上述证据回答用户问题。`
