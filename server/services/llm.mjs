@@ -12,6 +12,41 @@ export const cleanJson = (value) => {
   }
 };
 
+function pushText(parts, value) {
+  if (value == null) return;
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (text) parts.push(text);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) pushText(parts, item);
+    return;
+  }
+  if (typeof value === "object") {
+    pushText(parts, value.text || value.content || value.output_text || value.transcript);
+  }
+}
+
+/** 兼容字符串、多段 content、以及思考模型把正文放在 reasoning 里的情况。 */
+export function extractChatContent(data) {
+  const message = data?.choices?.[0]?.message || {};
+  const parts = [];
+  pushText(parts, message.content);
+  if (!parts.length) pushText(parts, message.reasoning_content);
+  if (!parts.length) pushText(parts, data?.output_text);
+  return parts.join("\n").trim();
+}
+
+export function pickModelAnswer(parsed) {
+  if (!parsed || typeof parsed !== "object") return "";
+  for (const key of ["answer", "text", "content"]) {
+    const value = parsed[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
 async function completeChat(config, messages, temperature, timeoutMs, jsonObject) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -82,15 +117,18 @@ export async function chatJson(
 
   try {
     const data = await run(true);
-    return cleanJson(data.choices?.[0]?.message?.content || "{}");
+    const raw = extractChatContent(data);
+    return raw ? cleanJson(raw) : {};
   } catch (error) {
     if (!gateway && error.status === 400) {
       const data = await run(false);
-      return cleanJson(data.choices?.[0]?.message?.content || "{}");
+      const raw = extractChatContent(data);
+      return raw ? cleanJson(raw) : {};
     }
     if (gateway && /json|format|400/i.test(error.message)) {
       const data = await run(false);
-      return cleanJson(data.choices?.[0]?.message?.content || "{}");
+      const raw = extractChatContent(data);
+      return raw ? cleanJson(raw) : {};
     }
     throw error;
   }

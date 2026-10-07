@@ -2,15 +2,15 @@ import { embedTexts, embeddingStatus, pickAnswerSources, relevanceThreshold, rer
 import { getEmbeddingConfig } from "../model-config.mjs";
 import { isLlmConfigured } from "../gateway-client.mjs";
 import { hybridSearch, recordEvent } from "../storage.mjs";
-import { deepseek, fastJson } from "./llm.mjs";
+import { deepseek, fastJson, pickModelAnswer } from "./llm.mjs";
 import { expandRetrievalQuery } from "./rag-query-expand.mjs";
 
 const NO_EVIDENCE = "资料中没有找到相关内容。";
 const RAG_EVIDENCE_LIMIT = 3;
 const RAG_QUOTE_CHARS = 280;
 const RAG_PARENT_CHARS = 160;
-const RAG_FAST_MAX_TOKENS = 700;
-const RAG_QUALITY_MAX_TOKENS = 1100;
+const RAG_FAST_MAX_TOKENS = 3200;
+const RAG_QUALITY_MAX_TOKENS = 4000;
 
 function toCitation(source, index) {
   const content = String(source.content || source.quote || "").trim();
@@ -182,12 +182,27 @@ ${evidenceBlock}
 请只根据上述证据回答用户问题。`
         }
       ];
-      const result = hard
-        ? await deepseek(messages, 0.05, userId, Number(process.env.GENERATION_TIMEOUT_MS || 90_000), RAG_QUALITY_MAX_TOKENS)
-        : await fastJson(messages, 0.05, userId, Number(process.env.GENERATION_TIMEOUT_MS || 90_000), RAG_FAST_MAX_TOKENS);
-      if (!result?.answer) throw new Error("文本模型没有返回有效的资料回答");
-      answer = String(result.answer).trim();
-      debug.answerCapability = hard ? "quality-chat" : "fast-chat";
+      const timeoutMs = Number(process.env.GENERATION_TIMEOUT_MS || 90_000);
+      const generate = (capability) => capability === "quality-chat"
+        ? deepseek(messages, 0.05, userId, timeoutMs, RAG_QUALITY_MAX_TOKENS)
+        : fastJson(messages, 0.05, userId, timeoutMs, RAG_FAST_MAX_TOKENS);
+
+      let capability = hard ? "quality-chat" : "fast-chat";
+      let result = await generate(capability);
+      answer = pickModelAnswer(result);
+      if (!answer && capability === "fast-chat") {
+        capability = "quality-chat";
+        result = await generate(capability);
+        answer = pickModelAnswer(result);
+        debug.answerRetry = "quality-chat";
+      }
+      if (!answer) {
+        const quote = clipText(sources[0]?.content, RAG_QUOTE_CHARS);
+        if (!quote) throw new Error("文本模型没有返回有效的资料回答");
+        answer = `${quote}[1]`;
+        debug.answerFallback = "extractive";
+      }
+      debug.answerCapability = capability;
 
       // 模型若给出回答却未标注引用，且不是拒答，则强制改为拒答，避免无依据扩展
       if (!isRefusal(answer) && citedIndexes(answer, sources.length).length === 0) {
