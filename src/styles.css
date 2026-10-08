@@ -2541,8 +2541,8 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 
 @media (max-width: 980px) {
   .page-wrap { padding: 35px 28px 60px; }
-  .overview-grid { grid-template-columns: 1fr; }
-  .overview-grid.lower { grid-template-columns: 1fr 1fr; }
+  .overview-grid { grid-template-columns: minmax(0, 1fr); }
+  .overview-grid.lower { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .map-layout { grid-template-columns: 1fr; }
   .concept-detail { position: static; }
   .coach-layout { grid-template-columns: 1fr; }
@@ -2554,15 +2554,31 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 }
 
 @media (max-width: 760px) {
+  html, body {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+  .app-shell {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+    position: relative;
+  }
   .sidebar {
-    transform: translateX(-102%);
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: min(280px, 86vw);
+    transform: translate3d(-105%, 0, 0);
     transition: transform .25s ease, visibility 0s linear .25s;
     box-shadow: 10px 0 35px rgba(18,29,23,.2);
     pointer-events: none;
     visibility: hidden;
   }
   .sidebar.open {
-    transform: translateX(0);
+    transform: translate3d(0, 0, 0);
     transition: transform .25s ease, visibility 0s;
     pointer-events: auto;
     visibility: visible;
@@ -2597,8 +2613,27 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
     pointer-events: none;
   }
   .sidebar-backdrop.is-ready { pointer-events: auto; }
-  .main-area { margin-left: 0; width: 100%; }
-  .topbar { padding: 0 16px; z-index: 22; }
+  .main-area {
+    margin-left: 0 !important;
+    width: 100% !important;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden;
+  }
+  .page-wrap {
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden;
+  }
+  .topbar {
+    padding: 0 16px;
+    z-index: 22;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  .learning-plan-phases.timeline .learning-plan-phase:not(:last-child)::after {
+    display: none;
+  }
   .breadcrumbs > span, .breadcrumbs > svg { display: none; }
   .chapter-switcher { margin-left: 0; padding: 4px 6px; }
   .chapter-switcher > span { display: none; }
@@ -2610,8 +2645,36 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
   .journey-top { gap: 15px; }
   .time-est { display: none; }
   .stage span { font-size: 8px; }
-  .overview-grid.lower, .tacit-grid, .blind-stats, .mode-cards { grid-template-columns: 1fr; }
-  .donut-row { justify-content: flex-start; }
+  .overview-grid,
+  .overview-grid.lower,
+  .tacit-grid,
+  .blind-stats,
+  .mode-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .overview-grid > *,
+  .journey-card,
+  .mastery-card,
+  .next-task-card,
+  .recent-learning,
+  .blind-preview,
+  .learning-plan-card {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .journey-card,
+  .mastery-card,
+  .recent-learning,
+  .blind-preview {
+    padding: 18px 16px;
+  }
+  .mastery-legend { min-width: 0; }
+  .donut-row {
+    justify-content: flex-start;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .stage-track { margin-left: 0; margin-right: 0; }
   .map-tree { padding: 15px; }
   .concept-list { margin-left: 22px; }
   .coach-main { min-height: 0; max-height: none; height: auto; }
@@ -4027,8 +4090,12 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
   .practice-doc-grid, .learning-plan-phases.timeline, .plan-metrics, .tacit-grid.four, .map-workspace, .rag-layout, .blind-columns, .blind-card-grid {
     grid-template-columns: 1fr;
   }
+  .learning-plan-phases.timeline .learning-plan-phase:not(:last-child)::after {
+    display: none;
+  }
   .blind-col-status { justify-content: flex-start; }
   .blind-col-actions { align-items: flex-start; }
+  .rag-history-side { position: static; min-height: 0; }
 }
 @media (max-width: 760px) {
   .outline-section-head { gap: 8px; }
