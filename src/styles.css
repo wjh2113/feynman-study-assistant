@@ -2543,14 +2543,14 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
   .page-wrap { padding: 35px 28px 60px; }
   .overview-grid { grid-template-columns: minmax(0, 1fr); }
   .overview-grid.lower { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .map-layout { grid-template-columns: 1fr; }
+  .map-layout { grid-template-columns: minmax(0, 1fr); }
   .concept-detail { position: static; }
-  .coach-layout { grid-template-columns: 1fr; }
-  .coach-side { grid-template-columns: 1fr 1fr; }
-  .one-pager-shell { grid-template-columns: 1fr; }
-  .settings-layout { grid-template-columns: 1fr; }
-  .settings-aside { grid-template-columns: 1fr 1fr; }
-  .output-side { grid-template-columns: 1fr 1fr 1fr; }
+  .coach-layout { grid-template-columns: minmax(0, 1fr); }
+  .coach-side { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .one-pager-shell { grid-template-columns: minmax(0, 1fr); }
+  .settings-layout { grid-template-columns: minmax(0, 1fr); }
+  .settings-aside { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .output-side { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 760px) {
@@ -2634,6 +2634,21 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
   .learning-plan-phases.timeline .learning-plan-phase:not(:last-child)::after {
     display: none;
   }
+  .notification-panel {
+    position: fixed;
+    top: calc(64px + env(safe-area-inset-top, 0px));
+    right: 12px;
+    left: 12px;
+    width: auto;
+    max-width: none;
+  }
+  .journey-card,
+  .mastery-card,
+  .learning-plan-card,
+  .next-task-card,
+  .panel {
+    overflow-wrap: anywhere;
+  }
   .breadcrumbs > span, .breadcrumbs > svg { display: none; }
   .chapter-switcher { margin-left: 0; padding: 4px 6px; }
   .chapter-switcher > span { display: none; }
@@ -2682,24 +2697,24 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
   .coach-top-meta { width: 100%; justify-content: space-between; }
   .coach-prompt strong { font-size: 18px; }
   .role-switch { width: auto; }
-  .coach-side { grid-template-columns: 1fr; position: static; }
-  .rag-input-row { grid-template-columns: 1fr; }
+  .coach-side { grid-template-columns: minmax(0, 1fr); position: static; }
+  .rag-input-row { grid-template-columns: minmax(0, 1fr); }
   .rag-input-row .primary-btn { width: 100%; }
   .source-item .file-row { flex-wrap: wrap; padding: 10px 0; }
   .source-item .file-copy { min-width: calc(100% - 55px); }
   .parse-detail { margin-left: 0; }
-  .parse-stats { grid-template-columns: 1fr 1fr; }
+  .parse-stats { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .message > div:last-child { max-width: 88%; }
   .analysis-task-card { grid-template-columns: auto minmax(0, 1fr) auto; }
   .analysis-task-progress { grid-column: 1 / -1; grid-row: 2; }
   .analysis-stage-list { grid-column: 1 / -1; }
-  .blind-card { grid-template-columns: 1fr; }
-  .diagnosis, .repair { grid-template-columns: 1fr; gap: 4px; }
+  .blind-card { grid-template-columns: minmax(0, 1fr); }
+  .diagnosis, .repair { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .one-pager { padding: 28px 22px; }
-  .one-pager section { grid-template-columns: 35px 1fr; gap: 9px; }
+  .one-pager section { grid-template-columns: 35px minmax(0, 1fr); gap: 9px; }
   .output-mind-map { padding: 23px 18px; }
-  .output-side { grid-template-columns: 1fr; }
-  .settings-aside { grid-template-columns: 1fr; }
+  .output-side { grid-template-columns: minmax(0, 1fr); }
+  .settings-aside { grid-template-columns: minmax(0, 1fr); }
   .settings-actions { align-items: stretch; flex-direction: column; }
   .settings-actions .text-btn { margin-right: 0; }
   .settings-actions .primary-btn, .settings-actions .secondary-btn { width: 100%; }
@@ -3046,7 +3061,7 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 
 .plan-metrics {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
   margin: 18px 0 22px;
 }
@@ -3056,7 +3071,7 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 .plan-metrics b { color: #0f172a; font-size: 15px; margin-top: 3px; font-weight: 700; }
 .learning-plan-phases.timeline {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 20px;
   margin-bottom: 18px;
 }
@@ -4088,7 +4103,7 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
 
 @media (max-width: 1100px) {
   .practice-doc-grid, .learning-plan-phases.timeline, .plan-metrics, .tacit-grid.four, .map-workspace, .rag-layout, .blind-columns, .blind-card-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .learning-plan-phases.timeline .learning-plan-phase:not(:last-child)::after {
     display: none;
@@ -4283,7 +4298,7 @@ kbd { border: 1px solid #dedfd7; background: #f3f3ee; border-radius: 4px; paddin
   color: #0f172a;
 }
 @media (max-width: 980px) {
-  .archive-layout.has-detail { grid-template-columns: 1fr; }
+  .archive-layout.has-detail { grid-template-columns: minmax(0, 1fr); }
   .archive-scores { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
