@@ -954,7 +954,7 @@ export function ModelSettingsPage({ showToast, embedded = false }) {
               <div className="concept-note">
                 <span className="section-kicker">能力路由</span>
                 <h3>用 capability 不用模型名</h3>
-                <p>文本走 quality-chat / fast-chat，向量走 embedding，OCR 走 vision，语音走 speech；换模型由 AIapiMgr 管理台调整。</p>
+                <p>知识地图与多数对练走快速文本，难题问答与终评可用精准文本；向量走 embedding，OCR 走 vision，语音走 speech。具体上游模型在 AIapiMgr 管理台调整。</p>
               </div>
             </>
           ) : (

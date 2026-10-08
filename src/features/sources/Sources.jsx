@@ -430,13 +430,13 @@ export function Sources({
     const bankPendingLlm = isQuestionBankUiPending(source);
     const importedBank = bankMeta.capability === "external-import";
     const bankStatusLabel = bankPendingLlm
-      ? `题库 ${bank.length} 题 · 正式题生成中`
+      ? `题库 ${bank.length} 题 · 生成中`
       : importedBank
         ? `题库 ${bank.length} 题 · 已导入`
         : bankMeta.generated
           ? `题库 ${bank.length} 题`
           : bank.length
-            ? `题库 ${bank.length} 题 · 临时`
+            ? `题库 ${bank.length} 题 · 预置`
             : "暂无题库";
     const ocrLabel =
       report.ocrStatus === "ready" ? `OCR ${report.imagesOcrd || 0}/${report.imagesFound || report.imagesOcrd || 0} 张`
@@ -640,7 +640,7 @@ export function Sources({
               ? "正在后台重嵌剩余资料并重建知识地图…"
               : project.description?.includes("重新总结")
                 ? "正在后台重新总结知识地图…"
-                : "资料已可检索，知识地图正在后台用 fast-chat 生成…"}
+                : "资料已可检索，知识地图正在后台生成…"}
           </span>
         </div>
       )}
@@ -648,7 +648,7 @@ export function Sources({
       {bankPending && (
         <div className="request-warning" role="status">
           <Spinner />
-          <span>资料题库正在后台生成正式题目，可先在资料列表中查看临时题。</span>
+          <span>资料题库正在后台生成，可先在资料列表中查看已有题目。</span>
         </div>
       )}
 
@@ -751,13 +751,13 @@ export function Sources({
                   {bankViewerSource.name}
                   {" · "}
                   {isQuestionBankUiPending(bankViewerSource)
-                    ? `${(bankViewerSource.questionBank || []).length} 题 · 正式题生成中`
+                    ? `${(bankViewerSource.questionBank || []).length} 题 · 生成中`
                     : bankViewerSource.questionBankMeta?.capability === "external-import"
                       ? `${(bankViewerSource.questionBank || []).length} 题 · 已导入`
                       : bankViewerSource.questionBankMeta?.generated
                         ? `${(bankViewerSource.questionBank || []).length} 题`
                         : (bankViewerSource.questionBank || []).length
-                          ? `${(bankViewerSource.questionBank || []).length} 题 · 临时`
+                          ? `${(bankViewerSource.questionBank || []).length} 题 · 预置`
                           : "暂无题目"}
                 </small>
               </div>
@@ -775,7 +775,7 @@ export function Sources({
               {isQuestionBankUiPending(bankViewerSource) && (
                 <div className="request-warning" role="status">
                   <Spinner />
-                  <span>正式题库正在后台生成，可先查看临时题目。</span>
+                  <span>题库正在后台生成，可先查看已有题目。</span>
                 </div>
               )}
               {(Array.isArray(bankViewerSource.questionBank) ? bankViewerSource.questionBank : []).length ? (

@@ -155,10 +155,10 @@ export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
                           practiceQuestionCapability: event.target.value
                         }))}
                       >
-                        <option value="fast-chat">fast-chat · 更快更省积分（推荐）</option>
-                        <option value="quality-chat">quality-chat · 更准，更慢且更耗积分</option>
+                        <option value="fast-chat">快速模型 · 更快更省积分（推荐）</option>
+                        <option value="quality-chat">精准模型 · 更准，更慢且更耗积分</option>
                       </select>
-                      <small>上传资料后会为每份资料生成 30–100 道题库存档；费曼对练只从题库随机抽 5–15 题，不再实时调用大模型出题。大批量入库请用 fast-chat。</small>
+                      <small>上传资料后会为每份资料生成 30–100 道题库存档；费曼对练只从题库随机抽 5–15 题，不再实时出题。大批量入库建议选快速模型。</small>
                     </label>
 
                     <label>
@@ -196,7 +196,7 @@ export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
                       <FileText size={20} />
                       <div>
                         <strong>知识地图分析</strong>
-                        <span>超长资料自动拆分调用 fast-chat，再合并成地图</span>
+                        <span>超长资料自动拆分摘要，再合并成地图</span>
                       </div>
                     </div>
                   </div>
@@ -216,7 +216,7 @@ export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
                         }))}
                       />
                       <small>
-                        默认 12000。资料原文总字数超过该值时，先按文件/分段用 fast-chat 摘要，再合并知识地图；调高更倾向单次分析，调低更早拆分。范围 5000–100000。
+                        默认 12000。资料原文总字数超过该值时，先按文件/分段做摘要，再合并知识地图；调高更倾向单次分析，调低更早拆分。范围 5000–100000。
                       </small>
                     </label>
                   </div>
@@ -287,7 +287,7 @@ export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
             <div className="concept-note">
               <span className="section-kicker">拆分分析</span>
               <h3>长文更稳</h3>
-              <p>超过阈值走「分段摘要 → 合并地图」；短文仍一次 fast-chat。入库仍是两阶段，先可检索再出地图。</p>
+              <p>超过阈值走「分段摘要 → 合并地图」；短文仍一次生成完整地图。入库仍是两阶段，先可检索再出地图。</p>
             </div>
             <div className="concept-note">
               <span className="section-kicker">OCR 说明</span>
