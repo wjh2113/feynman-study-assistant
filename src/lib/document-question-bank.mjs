@@ -142,11 +142,33 @@ export function questionBankHasMetaPollution(bank = []) {
   return bad >= 3 || bad / list.length >= 0.15;
 }
 
+function usableBankCount(source = {}) {
+  const bank = Array.isArray(source.questionBank) ? source.questionBank : [];
+  return bank.filter((item) => item && !isMetaDerivedQuestion(item)).length;
+}
+
+/**
+ * UI / banner: whether this source should show “题库生成中”.
+ * Ignores stuck pendingLlm when a finished or full-size bank is already present.
+ */
+export function isQuestionBankUiPending(source = {}) {
+  const meta = source?.questionBankMeta || {};
+  if (!meta.pendingLlm) return false;
+  if (meta.generated) return false;
+  const usable = usableBankCount(source);
+  const target = Math.max(
+    DOCUMENT_BANK_MIN,
+    Math.min(DOCUMENT_BANK_MAX, Number(meta.targetCount) || DOCUMENT_BANK_MIN)
+  );
+  if (usable >= target && !questionBankHasMetaPollution(source.questionBank)) return false;
+  return true;
+}
+
 export function sourcesNeedQuestionBank(sources = []) {
   return (sources || []).filter((source) => {
     if (!source?.id) return false;
     const bank = Array.isArray(source.questionBank) ? source.questionBank : [];
-    const usable = bank.filter((item) => item && !isMetaDerivedQuestion(item)).length;
+    const usable = usableBankCount(source);
     const meta = source.questionBankMeta || {};
     // 导入或 LLM 已经产出可用题库后，不要每次对练都当成“还在生成”。
     if (meta.generated && usable >= PRACTICE_DRAW_MIN && !questionBankHasMetaPollution(bank)) {
@@ -157,6 +179,30 @@ export function sourcesNeedQuestionBank(sources = []) {
     if (meta.pendingLlm) return true;
     return false;
   });
+}
+
+/** Clear stuck pendingLlm flags when the bank is already usable/finished. */
+export function healStuckQuestionBankMeta(source = {}) {
+  const meta = source?.questionBankMeta || {};
+  if (!meta.pendingLlm) return source;
+  const bank = Array.isArray(source.questionBank) ? source.questionBank : [];
+  const usable = usableBankCount(source);
+  const target = Math.max(
+    DOCUMENT_BANK_MIN,
+    Math.min(DOCUMENT_BANK_MAX, Number(meta.targetCount) || DOCUMENT_BANK_MIN)
+  );
+  const finished = Boolean(meta.generated) && usable >= PRACTICE_DRAW_MIN && !questionBankHasMetaPollution(bank);
+  const fullSeed = !meta.generated && usable >= target && !questionBankHasMetaPollution(bank);
+  if (!finished && !fullSeed) return source;
+  return {
+    ...source,
+    questionBankMeta: {
+      ...meta,
+      pendingLlm: false,
+      generated: meta.generated || fullSeed,
+      healedStuckPending: true
+    }
+  };
 }
 
 export {

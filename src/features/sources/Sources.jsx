@@ -23,6 +23,7 @@ import { resolveMapAvailability } from "../../lib/map-availability.js";
 import { decodeUploadName } from "../../lib/filename-encoding.js";
 import { analyzeBackground, importStudyPackBackground } from "../../api/ingest.js";
 import { isImportedStudyPack } from "../../lib/study-pack.mjs";
+import { isQuestionBankUiPending } from "../../lib/document-question-bank.mjs";
 import { deleteDocument, getProject, reindexProject, resummarizeProjectBackground, syncProjectSources } from "../../api/projects.js";
 import { FileTypeIcon } from "./FileTypeIcon.jsx";
 
@@ -139,7 +140,7 @@ export function Sources({
   }, [analysisTask?.stage]);
   const listSourceCount = sources.length + ingestingFilenames.length;
   const bankPending = useMemo(
-    () => sources.some((source) => source.questionBankMeta?.pendingLlm),
+    () => sources.some((source) => isQuestionBankUiPending(source)),
     [sources]
   );
   const bankTotal = useMemo(
@@ -175,7 +176,7 @@ export function Sources({
           }
         }
         const stillPending = (data.project.analysis?.sources || []).some(
-          (source) => source.questionBankMeta?.pendingLlm
+          (source) => isQuestionBankUiPending(source)
         );
         if (bankPending && !stillPending && bankNotifyRef.current !== "ready") {
           bankNotifyRef.current = "ready";
@@ -426,7 +427,7 @@ export function Sources({
     const stats = outline.stats || {};
     const bank = Array.isArray(source.questionBank) ? source.questionBank : [];
     const bankMeta = source.questionBankMeta || {};
-    const bankPendingLlm = Boolean(bankMeta.pendingLlm);
+    const bankPendingLlm = isQuestionBankUiPending(source);
     const importedBank = bankMeta.capability === "external-import";
     const bankStatusLabel = bankPendingLlm
       ? `题库 ${bank.length} 题 · 正式题生成中`
@@ -749,7 +750,7 @@ export function Sources({
                 <small>
                   {bankViewerSource.name}
                   {" · "}
-                  {bankViewerSource.questionBankMeta?.pendingLlm
+                  {isQuestionBankUiPending(bankViewerSource)
                     ? `${(bankViewerSource.questionBank || []).length} 题 · 正式题生成中`
                     : bankViewerSource.questionBankMeta?.capability === "external-import"
                       ? `${(bankViewerSource.questionBank || []).length} 题 · 已导入`
@@ -771,7 +772,7 @@ export function Sources({
               </button>
             </div>
             <div className="question-bank-modal-body">
-              {bankViewerSource.questionBankMeta?.pendingLlm && (
+              {isQuestionBankUiPending(bankViewerSource) && (
                 <div className="request-warning" role="status">
                   <Spinner />
                   <span>正式题库正在后台生成，可先查看临时题目。</span>

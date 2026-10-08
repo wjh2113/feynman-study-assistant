@@ -12,6 +12,7 @@ import {
   measureSourceChars,
   normalizeBankQuestion,
   resolveDocumentBankSize,
+  healStuckQuestionBankMeta,
   sourcesNeedQuestionBank,
   stripStudyMetaContent
 } from "../../src/lib/document-question-bank.mjs";
@@ -270,25 +271,70 @@ export async function runDocumentQuestionBankJob(payload, progress = () => {}) {
     if (wanted.size && !wanted.has(String(source.id))) return false;
     return true;
   });
-  const pending = sourcesNeedQuestionBank(targets);
+
+  // Heal stuck pendingLlm when a full/finished bank is already present.
+  const healedUpdates = new Map();
+  for (const source of targets) {
+    const healed = healStuckQuestionBankMeta(source);
+    if (healed !== source) {
+      healedUpdates.set(String(source.id), {
+        questionBank: healed.questionBank,
+        questionBankMeta: healed.questionBankMeta
+      });
+    }
+  }
+
+  const pending = sourcesNeedQuestionBank(
+    targets.map((source) => healedUpdates.get(String(source.id))
+      ? { ...source, ...healedUpdates.get(String(source.id)) }
+      : source)
+  );
   if (!pending.length) {
+    if (healedUpdates.size) {
+      const latest = await getProject(projectId, userId);
+      if (!latest) throw new Error("学习项目不存在");
+      const nextSources = (latest.analysis?.sources || []).map((source) => {
+        const update = healedUpdates.get(String(source.id));
+        return update ? { ...source, ...update } : source;
+      });
+      await saveProject({
+        ...latest,
+        userId,
+        analysis: { ...(latest.analysis || {}), sources: nextSources }
+      });
+    }
     progress(100);
-    return { projectId, updated: 0, skipped: targets.length };
+    return { projectId, updated: healedUpdates.size, skipped: targets.length, healed: healedUpdates.size };
   }
 
   const prefs = await getUserPreferences(userId);
   const capability = prefs.practiceQuestionCapability === "quality-chat" ? "quality-chat" : "fast-chat";
-  const bankUpdates = new Map();
+  const bankUpdates = new Map(healedUpdates);
   let done = 0;
   for (const source of pending) {
-    const generated = await generateQuestionBankForSource(source, userId, capability);
-    bankUpdates.set(String(source.id), {
-      questionBank: generated.questionBank,
-      questionBankMeta: {
-        ...generated.questionBankMeta,
-        pendingLlm: false
-      }
-    });
+    try {
+      const generated = await generateQuestionBankForSource(source, userId, capability);
+      bankUpdates.set(String(source.id), {
+        questionBank: generated.questionBank,
+        questionBankMeta: {
+          ...generated.questionBankMeta,
+          pendingLlm: false
+        }
+      });
+    } catch (error) {
+      // Never leave the UI spinning forever if one document fails.
+      bankUpdates.set(String(source.id), {
+        questionBank: Array.isArray(source.questionBank) ? source.questionBank : [],
+        questionBankMeta: {
+          ...(source.questionBankMeta || {}),
+          pendingLlm: false,
+          generated: Boolean(source.questionBankMeta?.generated),
+          fallback: true,
+          error: error.message || "题库生成失败",
+          generatedAt: Date.now()
+        }
+      });
+    }
     done += 1;
     progress(Math.round((done / pending.length) * 100));
   }

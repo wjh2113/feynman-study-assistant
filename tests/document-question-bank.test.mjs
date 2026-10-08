@@ -6,6 +6,8 @@ import {
   PRACTICE_DRAW_MAX,
   PRACTICE_DRAW_MIN,
   buildHeuristicDocumentBank,
+  healStuckQuestionBankMeta,
+  isQuestionBankUiPending,
   questionBankHasMetaPollution,
   resolveDocumentBankSize,
   resolvePracticeDrawCount,
@@ -140,7 +142,26 @@ test("heuristic seed banks still need the async LLM job", () => {
     name: "讲义.md",
     summary: { keyPoints: ["金字塔原理"] },
     questionBank: buildHeuristicDocumentBank({ id: "d1", name: "讲义.md", summary: { keyPoints: ["金字塔原理"] } }, 32),
-    questionBankMeta: { generated: false, pendingLlm: true }
+    questionBankMeta: { generated: false, pendingLlm: true, targetCount: 80 }
   };
   assert.equal(sourcesNeedQuestionBank([source]).length, 1);
+  assert.equal(isQuestionBankUiPending(source), true);
+});
+
+test("full-size stuck pendingLlm is healed and hidden from UI", () => {
+  const bank = Array.from({ length: 50 }, (_, index) => ({
+    id: `q-${index}`,
+    concept: `概念${index + 1}`,
+    question: `请解释概念 ${index + 1}`
+  }));
+  const source = {
+    id: "d1",
+    name: "讲义.docx",
+    questionBank: bank,
+    questionBankMeta: { generated: false, pendingLlm: true, targetCount: 50 }
+  };
+  assert.equal(isQuestionBankUiPending(source), false);
+  const healed = healStuckQuestionBankMeta(source);
+  assert.equal(healed.questionBankMeta.pendingLlm, false);
+  assert.equal(healed.questionBankMeta.generated, true);
 });
