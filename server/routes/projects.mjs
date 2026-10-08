@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { projectForPersistence } from "../../src/lib/progress.mjs";
+import { mergeProjectPut } from "../../src/lib/project-put-merge.mjs";
 import { getObject } from "../object-storage.mjs";
 import {
   deleteChapter,
@@ -79,7 +80,9 @@ router.get("/api/projects/:projectId", async (req, res) => {
 
 router.put("/api/projects/:projectId", async (req, res) => {
   try {
-    const project = projectForPersistence({ ...(req.body || {}), id: req.params.projectId, userId: req.userId });
+    const existing = await getProject(req.params.projectId, req.userId);
+    const incoming = projectForPersistence({ ...(req.body || {}), id: req.params.projectId, userId: req.userId });
+    const project = projectForPersistence(mergeProjectPut(existing, incoming));
     await saveProject(project);
     await ensureDefaultChapter(req.params.projectId, req.userId);
     res.json({ project });

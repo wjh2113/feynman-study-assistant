@@ -799,20 +799,36 @@ export async function analyzeFiles({
     const existingAnalysis = existingProject?.analysis || {};
     const replaceMap = Boolean(existingAnalysis.needsResummarize) || !(existingAnalysis.modules || []).length;
     const pendingLabel = `已入库 ${interimSources.length} 份资料，知识地图生成中…`;
+    // skipLlm (study-pack import): do not advertise map generation or wipe map fields;
+    // overlayImportedAnalysis writes the pack map immediately after this save.
+    const mapFields = skipLlm
+      ? {
+        summary: existingAnalysis.summary || `已入库 ${interimSources.length} 份资料`,
+        highValue: existingAnalysis.highValue || [],
+        modules: existingAnalysis.modules || [],
+        questions: existingAnalysis.questions || [],
+        tacitKnowledge: existingAnalysis.tacitKnowledge || [],
+        scenarios: existingAnalysis.scenarios || [],
+        contentAnalysisStatus: existingAnalysis.contentAnalysisStatus || "ready",
+        contentAnalysisError: existingAnalysis.contentAnalysisError || null
+      }
+      : {
+        summary: replaceMap ? pendingLabel : (existingAnalysis.summary || demo.summary),
+        highValue: replaceMap ? [] : (existingAnalysis.highValue || []),
+        modules: replaceMap ? [] : (existingAnalysis.modules || []),
+        questions: replaceMap ? [] : (existingAnalysis.questions || []),
+        tacitKnowledge: replaceMap ? [] : (existingAnalysis.tacitKnowledge || []),
+        scenarios: replaceMap ? [] : (existingAnalysis.scenarios || []),
+        contentAnalysisStatus: modelConfigured ? (deferContentAnalysis ? "pending" : "running") : "ready",
+        contentAnalysisError: null
+      };
     const interimAnalysis = {
       ...demo,
-      summary: replaceMap ? pendingLabel : (existingAnalysis.summary || demo.summary),
-      highValue: replaceMap ? [] : (existingAnalysis.highValue || []),
-      modules: replaceMap ? [] : (existingAnalysis.modules || []),
-      questions: replaceMap ? [] : (existingAnalysis.questions || []),
-      tacitKnowledge: replaceMap ? [] : (existingAnalysis.tacitKnowledge || []),
-      scenarios: replaceMap ? [] : (existingAnalysis.scenarios || []),
+      ...mapFields,
       documentSummaries: heuristicSummaries,
       sources: mergeAnalysisSources(existingAnalysis.sources, interimSources),
       projectId,
       needsResummarize: false,
-      contentAnalysisStatus: modelConfigured ? (deferContentAnalysis ? "pending" : "running") : "ready",
-      contentAnalysisError: null,
       retrieval: {
         chunks: allChunks.length,
         parents: hierarchy.parents.length,
