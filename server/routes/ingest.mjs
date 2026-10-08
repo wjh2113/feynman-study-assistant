@@ -265,7 +265,11 @@ router.post(
       res.status(202).json({ task: job, ingestionId, filenames: jobFiles.map((file) => file.originalname) });
     } catch (error) {
       logError(error, { requestId: req.requestId, route: "import-pack", projectId: req.params.projectId, userId: req.userId });
-      res.status(400).json({ error: error.message || "导入学科包失败" });
+      const message = String(error?.message || "");
+      const friendly = /unsupported Unicode escape sequence|\\u0000|NUL/i.test(message)
+        ? "学科包正文含非法控制字符（如空字节），已无法写入数据库。请重新导出学科包后再试；若仍失败请联系管理员。"
+        : (message || "导入学科包失败");
+      res.status(400).json({ error: friendly });
     }
   }
 );

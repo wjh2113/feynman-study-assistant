@@ -1,3 +1,5 @@
+import { sanitizeJsonbString } from "./jsonb-safe.mjs";
+
 export const STUDY_PACK_SCHEMA = "zhifan-study-pack/v1";
 export const MAX_PACK_FILES = 12;
 export const MAX_INNER_FILE_BYTES = 100 * 1024 * 1024;
@@ -35,16 +37,16 @@ export function normalizeManifest(raw = {}) {
 
 /** External LLM pre-extracted page text: text/<filename>.json */
 export function normalizePreparsedDocument(raw = {}, fallbackName = "") {
-  const name = String(raw?.name || fallbackName || "").trim();
+  const name = sanitizeJsonbString(String(raw?.name || fallbackName || "")).trim();
   const pages = asArray(raw?.pages)
     .map((page, index) => {
-      const text = String(page?.text || "").trim();
+      const text = sanitizeJsonbString(String(page?.text || "")).trim();
       const pageNo = Number(page?.page);
       return {
         page: Number.isFinite(pageNo) && pageNo > 0 ? Math.floor(pageNo) : index + 1,
         text,
         nativeText: text,
-        ocrText: String(page?.ocrText || "").trim()
+        ocrText: sanitizeJsonbString(String(page?.ocrText || "")).trim()
       };
     })
     .filter((page) => page.text);

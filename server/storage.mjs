@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { projectForPersistence } from "../src/lib/progress.mjs";
+import { stringifyJsonb } from "../src/lib/jsonb-safe.mjs";
 import { deleteObject, putObject } from "./object-storage.mjs";
 import { dataDir, uploadDir, getDatabase, databaseStatus } from "./db/client.mjs";
 import { hybridSearch } from "./repos/search.mjs";
@@ -67,7 +68,7 @@ export async function consumePasswordResetToken(tokenHash) {
 
 export async function createReminder(reminder) {
   const db = await getDatabase();
-  await db.query("INSERT INTO review_reminders(id,user_id,project_id,concept_id,due_at,channel,payload) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)", [reminder.id, reminder.userId, reminder.projectId, reminder.conceptId || null, reminder.dueAt, reminder.channel || "in_app", JSON.stringify(reminder.payload || {})]);
+  await db.query("INSERT INTO review_reminders(id,user_id,project_id,concept_id,due_at,channel,payload) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)", [reminder.id, reminder.userId, reminder.projectId, reminder.conceptId || null, reminder.dueAt, reminder.channel || "in_app", stringifyJsonb(reminder.payload || {})]);
   return reminder;
 }
 
@@ -79,7 +80,7 @@ export async function listReminders(userId, status = "pending") {
 
 export async function saveOrder(order) {
   const db = await getDatabase();
-  await db.query("INSERT INTO orders(id,user_id,plan_id,provider,external_id,amount_fen,currency,status,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)", [order.id, order.userId, order.planId, order.provider, order.externalId || null, order.amountFen, order.currency, order.status, JSON.stringify(order.metadata || {})]);
+  await db.query("INSERT INTO orders(id,user_id,plan_id,provider,external_id,amount_fen,currency,status,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)", [order.id, order.userId, order.planId, order.provider, order.externalId || null, order.amountFen, order.currency, order.status, stringifyJsonb(order.metadata || {})]);
   return order;
 }
 
@@ -177,7 +178,7 @@ export async function saveProject(project) {
       payload.userId,
       payload.title || "新的学习项目",
       payload.mode || "subject",
-      JSON.stringify(payload),
+      stringifyJsonb(payload),
       Number(payload.createdAt || Date.now())
     ]
   );
@@ -255,7 +256,7 @@ export async function saveChapter(chapter) {
       payload.userId,
       payload.title,
       payload.sortOrder,
-      JSON.stringify(payload),
+      stringifyJsonb(payload),
       Number(payload.createdAt || Date.now())
     ]
   );
@@ -357,8 +358,8 @@ export async function saveDocument({ projectId, userId, chapterId = null, source
       file.size || file.buffer.length,
       source.pages.length,
       chunks.length,
-      JSON.stringify(source.summary || {}),
-      JSON.stringify(source.parseReport || {})
+      stringifyJsonb(source.summary || {}),
+      stringifyJsonb(source.parseReport || {})
     ]
   );
 
@@ -384,7 +385,7 @@ export async function saveDocument({ projectId, userId, chapterId = null, source
         chunk.content,
         chunk.searchTokens,
         vectorLiteral(embeddings[index]),
-        JSON.stringify({ filename: source.filename, type: source.type, chunking: "semantic-parent-child-v1" })
+        stringifyJsonb({ filename: source.filename, type: source.type, chunking: "semantic-parent-child-v1" })
       ]
     );
   }
@@ -412,7 +413,7 @@ export async function updateDocumentInsights(documentId, summary, parseReport) {
         SET summary = $2::jsonb,
             parse_report = $3::jsonb
       WHERE id = $1`,
-    [documentId, JSON.stringify(summary || {}), JSON.stringify(parseReport || {})]
+    [documentId, stringifyJsonb(summary || {}), stringifyJsonb(parseReport || {})]
   );
 }
 
@@ -478,13 +479,13 @@ export async function replaceDocumentIndex({ projectId, userId, document, source
         randomUUID(), userId, document.id, projectId, chapterId, chunk.page, chunk.pageEnd || chunk.page,
         chunk.chunkIndex, chunk.parentId, chunk.parentContent, chunk.headingPath,
         chunk.content, chunk.searchTokens, vectorLiteral(embeddings[index]),
-        JSON.stringify({ filename: document.filename, type: source.type, chunking: "semantic-parent-child-v1" })
+        stringifyJsonb({ filename: document.filename, type: source.type, chunking: "semantic-parent-child-v1" })
       ]
     );
   }
   await db.query(
     `UPDATE documents SET page_count = $2, chunk_count = $3, parse_report = $4::jsonb WHERE id = $1 AND project_id = $5`,
-    [document.id, source.pages.length, chunks.length, JSON.stringify(source.parseReport || {}), projectId]
+    [document.id, source.pages.length, chunks.length, stringifyJsonb(source.parseReport || {}), projectId]
   );
   return { documentId: document.id, chunks: chunks.length };
 }
@@ -546,7 +547,7 @@ export async function recordEvent(userId, projectId, eventType, payload) {
   const db = await getDatabase();
   await db.query(
     "INSERT INTO learning_events(id, user_id, project_id, event_type, payload) VALUES ($1,$2,$3,$4,$5::jsonb)",
-    [randomUUID(), userId, projectId, eventType, JSON.stringify(payload || {})]
+    [randomUUID(), userId, projectId, eventType, stringifyJsonb(payload || {})]
   );
 }
 
@@ -554,7 +555,7 @@ export async function createIngestionJob({ id, userId, projectId, payload }) {
   const db = await getDatabase();
   await db.query(
     `INSERT INTO ingestion_jobs(id, user_id, project_id, payload) VALUES ($1,$2,$3,$4::jsonb)`,
-    [id, userId, projectId, JSON.stringify(payload || {})]
+    [id, userId, projectId, stringifyJsonb(payload || {})]
   );
   return getIngestionJob(id, userId);
 }
@@ -617,7 +618,7 @@ export async function updateIngestionJob(id, userId, patch = {}) {
        checkpoint=$7::jsonb, updated_at=NOW() WHERE id=$1 AND user_id=$2`,
     [id, userId, patch.status || current.status, patch.stage || current.stage,
       Number(patch.progress ?? current.progress), patch.error === undefined ? current.error : patch.error,
-      JSON.stringify(checkpoint)]
+      stringifyJsonb(checkpoint)]
   );
   return getIngestionJob(id, userId);
 }
@@ -634,7 +635,7 @@ export async function saveUserAppSetting(userId, key, value) {
     `INSERT INTO app_settings(key, value, updated_at)
      VALUES ($1, $2::jsonb, NOW())
      ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
-    [`${key}:${userId}`, JSON.stringify(value || {})]
+    [`${key}:${userId}`, stringifyJsonb(value || {})]
   );
   return value;
 }
@@ -684,16 +685,16 @@ export async function saveCoachSession(session) {
       session.userId,
       session.projectId,
       session.chapterId || null,
-      JSON.stringify(documentIds),
+      stringifyJsonb(documentIds),
       session.conceptId || null,
       session.concept || null,
       session.questionId || null,
       session.question || null,
-      JSON.stringify(session.messages || []),
-      JSON.stringify(session.evaluations || []),
+      stringifyJsonb(session.messages || []),
+      stringifyJsonb(session.evaluations || []),
       session.score ?? null,
       session.status || null,
-      JSON.stringify(session.meta || {}),
+      stringifyJsonb(session.meta || {}),
       Number(session.createdAt || Date.now()),
       hasDocumentIds
     ]
@@ -773,8 +774,8 @@ export async function saveRagHistory(record) {
       record.projectId,
       record.query,
       record.answer || null,
-      JSON.stringify(record.sources || []),
-      JSON.stringify(record.debug || null),
+      stringifyJsonb(record.sources || []),
+      stringifyJsonb(record.debug || null),
       Boolean(record.insufficient),
       Boolean(record.demo),
       Number(record.createdAt || Date.now())

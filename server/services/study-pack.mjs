@@ -1,4 +1,5 @@
 import JSZip from "jszip";
+import { sanitizeForJsonb } from "../../src/lib/jsonb-safe.mjs";
 import {
   MAX_INNER_FILE_BYTES,
   MAX_PACK_FILES,
@@ -80,7 +81,7 @@ export async function parseStudyPackZip(buffer) {
   }
 
   const manifest = normalizeManifest(manifestRaw);
-  const pack = normalizePackAnalysis(packRaw);
+  const pack = sanitizeForJsonb(normalizePackAnalysis(packRaw));
   const files = [];
   const preparsedByName = {};
 
