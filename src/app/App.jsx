@@ -83,6 +83,7 @@ export function App() {
   const [projectBusy, setProjectBusy] = useState(false);
   const [logoutOpen, setLogoutOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarBackdropReady, setSidebarBackdropReady] = useState(false);
   const [toast, setToast] = useState("");
   const [persistenceReady, setPersistenceReady] = useState(false);
   const [analysisTasks, setAnalysisTasks] = useState([]);
@@ -95,6 +96,7 @@ export function App() {
   const pollInFlightRef = useRef(false);
   const finalizedTaskIdsRef = useRef(new Set());
   const toastTimerRef = useRef(0);
+  const sidebarBackdropTimerRef = useRef(0);
 
   projectsRef.current = projects;
   analysisTasksRef.current = analysisTasks;
@@ -428,9 +430,27 @@ export function App() {
     }
   };
 
+  const closeSidebar = useCallback(() => {
+    window.clearTimeout(sidebarBackdropTimerRef.current);
+    setSidebarBackdropReady(false);
+    setSidebarOpen(false);
+  }, []);
+
+  const openSidebar = useCallback(() => {
+    window.clearTimeout(sidebarBackdropTimerRef.current);
+    setSidebarBackdropReady(false);
+    setSidebarOpen(true);
+    // Android WebView synthesizes a late click at the same point; arm backdrop close after it settles.
+    sidebarBackdropTimerRef.current = window.setTimeout(() => {
+      setSidebarBackdropReady(true);
+    }, 360);
+  }, []);
+
+  useEffect(() => () => window.clearTimeout(sidebarBackdropTimerRef.current), []);
+
   const changeView = (id) => {
     setActiveView(id);
-    setSidebarOpen(false);
+    closeSidebar();
   };
 
   const handleCreate = async (newProject) => {
@@ -532,7 +552,7 @@ export function App() {
             <strong>知练</strong>
             <small>费曼型学习助手</small>
           </div>
-          <button className="icon-btn sidebar-close" onClick={() => setSidebarOpen(false)} aria-label="关闭菜单"><X size={19} /></button>
+          <button className="icon-btn sidebar-close" onClick={closeSidebar} aria-label="关闭菜单"><X size={19} /></button>
         </div>
 
         <button className="new-project-btn" onClick={() => setCreateOpen(true)}>
@@ -615,11 +635,28 @@ export function App() {
           </div>
         </div>
       </aside>
-      {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
+      {sidebarOpen && (
+        <div
+          className={`sidebar-backdrop${sidebarBackdropReady ? " is-ready" : ""}`}
+          onClick={sidebarBackdropReady ? closeSidebar : undefined}
+          aria-hidden="true"
+        />
+      )}
 
       <main className="main-area">
         <header className="topbar">
-          <button className="icon-btn mobile-menu" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
+          <button
+            type="button"
+            className="icon-btn mobile-menu"
+            aria-label="打开菜单"
+            aria-expanded={sidebarOpen}
+            onClick={(event) => {
+              event.stopPropagation();
+              openSidebar();
+            }}
+          >
+            <Menu size={20} />
+          </button>
           <div className="breadcrumbs">
             <span>学科</span>
             <ChevronRight size={14} />
