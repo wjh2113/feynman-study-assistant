@@ -12,6 +12,7 @@ import {
   Sparkles
 } from "../../components/icons.jsx";
 import { askRag, getRagHistory, saveRagHistory } from "../../api/rag.js";
+import { supportsMaterialUpload } from "../../lib/runtime.js";
 
 function groupHistory(items) {
   const groups = { 今天: [], 昨天: [], 更早: [] };
@@ -161,7 +162,13 @@ export function RagAssistant({ project, navigate, showToast, refreshProject }) {
                 onKeyDown={(event) => {
                   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") ask();
                 }}
-                placeholder={hasSources ? "输入问题，按 ⌘/Ctrl+Enter 检索并回答" : "请先上传资料并完成解析"}
+                placeholder={
+                  hasSources
+                    ? "输入问题，按 ⌘/Ctrl+Enter 检索并回答"
+                    : supportsMaterialUpload()
+                      ? "请先上传资料并完成解析"
+                      : "请先在电脑网页端上传并完成解析"
+                }
                 disabled={!hasSources || loading}
               />
               <VoiceInputButton
@@ -273,11 +280,13 @@ export function RagAssistant({ project, navigate, showToast, refreshProject }) {
             <p>
               {hasSources
                 ? "例如「五十音怎么记」「は和が有什么区别」。回答会严格依据原文并标注引用。"
-                : "先到「学科资料」上传并完成解析，再回到这里提问。"}
+                : supportsMaterialUpload()
+                  ? "先到「学科资料」上传并完成解析，再回到这里提问。"
+                  : "手机端不支持上传。请先在电脑网页端上传并完成解析，再回手机提问。"}
             </p>
             {!hasSources && (
               <button type="button" className="secondary-btn" onClick={() => navigate?.("sources")}>
-                去上传资料
+                {supportsMaterialUpload() ? "去上传资料" : "查看学习资料"}
               </button>
             )}
           </section>

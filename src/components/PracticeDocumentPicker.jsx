@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, FileText } from "./icons.jsx";
 import { dedupeAnalysisSources } from "../lib/analysis-sources.mjs";
+import { supportsMaterialUpload } from "../lib/runtime.js";
 
 function summarizeSelection(visibleSources, selectedIds) {
   const selected = visibleSources.filter((source) => selectedIds.includes(source.id));
@@ -72,7 +73,11 @@ export function PracticeDocumentPicker({
       </div>
 
       {!visibleSources.length ? (
-        <p className="practice-doc-picker-empty">还没有可练习的资料，请先在「学习资料」上传并完成解析。</p>
+        <p className="practice-doc-picker-empty">
+          {supportsMaterialUpload()
+            ? "还没有可练习的资料，请先在「学习资料」上传并完成解析。"
+            : "还没有可练习的资料，请先在电脑网页端「学习资料」上传并完成解析。"}
+        </p>
       ) : open ? (
         <ul className="practice-doc-dropdown" role="listbox" aria-multiselectable="true">
           {visibleSources.map((source) => {

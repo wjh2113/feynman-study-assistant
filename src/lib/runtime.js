@@ -12,6 +12,11 @@ export function isNativeApp() {
   }
 }
 
+/** Material upload / study-pack import: web only; native app is practice-first. */
+export function supportsMaterialUpload() {
+  return !isNativeApp();
+}
+
 /** Absolute API origin for native builds; empty string keeps relative URLs on web. */
 export function apiOrigin() {
   const fromEnv = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");

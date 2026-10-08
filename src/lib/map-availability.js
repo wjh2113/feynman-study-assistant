@@ -1,3 +1,5 @@
+import { supportsMaterialUpload } from "./runtime.js";
+
 export function resolveMapAvailability(project) {
   const analysis = project?.analysis || {};
   const modules = Array.isArray(analysis.modules) ? analysis.modules : [];
@@ -8,6 +10,7 @@ export function resolveMapAvailability(project) {
   const hasIndexedSources = sources.some(
     (source) => Number(source.chunks || 0) > 0 || String(source.status || "").toLowerCase() === "ready"
   );
+  const canUpload = supportsMaterialUpload();
 
   if (status === "pending" || status === "running") {
     return {
@@ -39,7 +42,9 @@ export function resolveMapAvailability(project) {
     return {
       kind: "needs-resummarize",
       title: "知识地图已清空，待重新总结",
-      description: "删除资料后，学科知识地图会一并清空。可在「学习资料」中点「重新总结」，或再上传资料后自动重建。",
+      description: canUpload
+        ? "删除资料后，学科知识地图会一并清空。可在「学习资料」中点「重新总结」，或再上传资料后自动重建。"
+        : "删除资料后，学科知识地图会一并清空。可在「学习资料」中点「重新总结」；补充新资料请在电脑网页端上传。",
       actionLabel: "去重新总结",
       actionView: "sources"
     };
@@ -58,8 +63,10 @@ export function resolveMapAvailability(project) {
   return {
     kind: "no-sources",
     title: "知识地图还没有生成",
-    description: "先上传学习资料，AI 才能根据你的内容建立知识骨架。",
-    actionLabel: "去上传资料",
+    description: canUpload
+      ? "先上传学习资料，AI 才能根据你的内容建立知识骨架。"
+      : "手机端不支持上传资料。请先在电脑网页端上传课件或导入学科包，再回手机练习。",
+    actionLabel: canUpload ? "去上传资料" : "查看学习资料",
     actionView: "sources"
   };
 }

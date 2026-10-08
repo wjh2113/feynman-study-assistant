@@ -25,6 +25,7 @@ import { analyzeBackground, importStudyPackBackground } from "../../api/ingest.j
 import { isImportedStudyPack } from "../../lib/study-pack.mjs";
 import { isQuestionBankUiPending } from "../../lib/document-question-bank.mjs";
 import { deleteDocument, getProject, reindexProject, resummarizeProjectBackground, syncProjectSources } from "../../api/projects.js";
+import { supportsMaterialUpload } from "../../lib/runtime.js";
 import { FileTypeIcon } from "./FileTypeIcon.jsx";
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -275,11 +276,16 @@ export function Sources({
     }
   };
 
+  const canUpload = supportsMaterialUpload();
+
   const analyze = async (overrideFiles) => {
     const selectedFiles = Array.isArray(overrideFiles) ? overrideFiles : files;
     if (!selectedFiles.length && hasPersistedSources) {
       navigate("map");
       return;
+    }
+    if (!canUpload) {
+      return showToast("手机端不支持上传资料，请在电脑网页端完成");
     }
     if (!selectedFiles.length) return showToast("请先添加至少一份学习资料");
     const oversized = selectedFiles.filter((file) => file.size > MAX_UPLOAD_BYTES);
@@ -314,6 +320,9 @@ export function Sources({
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
+    if (!canUpload) {
+      return showToast("手机端不支持导入学科包，请在电脑网页端完成");
+    }
     if (analysisTask || loading || packLoading) {
       return showToast("当前项目已有资料正在处理");
     }
@@ -547,42 +556,71 @@ export function Sources({
       <PageHeading
         eyebrow="构建专属语料库"
         title="学科资料"
-        description="上传课件与笔记，或导入外部生成的学科包（原文 + 知识地图 + 题库）。解析完成后可查看大纲与费曼题库。"
-        action={<button className="primary-btn" onClick={analyze} disabled={loading || packLoading || !!analysisTask}>{loading ? <Spinner /> : <Sparkles size={17} />}{loading ? "正在上传…" : analysisTask ? "后台解析中" : files.length ? `分析 ${files.length} 份新资料` : "查看知识地图"}</button>}
+        description={
+          canUpload
+            ? "上传课件与笔记，或导入外部生成的学科包（原文 + 知识地图 + 题库）。解析完成后可查看大纲与费曼题库。"
+            : "手机端可查看已入库资料与大纲；上传课件或导入学科包请在电脑网页端完成。"
+        }
+        action={
+          canUpload || hasPersistedSources ? (
+            <button
+              className="primary-btn"
+              onClick={analyze}
+              disabled={loading || packLoading || !!analysisTask || (!canUpload && !hasPersistedSources)}
+            >
+              {loading ? <Spinner /> : <Sparkles size={17} />}
+              {loading
+                ? "正在上传…"
+                : analysisTask
+                  ? "后台解析中"
+                  : canUpload && files.length
+                    ? `分析 ${files.length} 份新资料`
+                    : "查看知识地图"}
+            </button>
+          ) : null
+        }
       />
 
-      <div
-        className="upload-zone"
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => { event.preventDefault(); addFiles(event.dataTransfer.files); }}
-        onClick={() => fileInput.current?.click()}
-      >
-        <input ref={fileInput} type="file" multiple accept=".pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg,.webp" onChange={(event) => addFiles(event.target.files)} />
-        <div className="upload-icon"><UploadCloud size={28} /></div>
-        <h3>拖入学习资料，或点击选择文件</h3>
-        <p>支持 PDF、DOCX、TXT、Markdown、PNG、JPG、WebP · 单个文件不超过 100 MB</p>
-        <div className="upload-hint"><Zap size={14} /> PDF 扫描页、文档截图和单独图片会进入 OCR 识别流程</div>
-        <button
-          type="button"
-          className="secondary-btn pack-import-btn"
-          disabled={loading || packLoading || !!analysisTask}
-          onClick={(event) => {
-            event.stopPropagation();
-            packInput.current?.click();
-          }}
+      {canUpload ? (
+        <div
+          className="upload-zone"
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={(event) => { event.preventDefault(); addFiles(event.dataTransfer.files); }}
+          onClick={() => fileInput.current?.click()}
         >
-          {packLoading ? <Spinner /> : <Archive size={16} />}
-          {packLoading ? "正在上传学科包…" : "导入学科包"}
-        </button>
-        <input
-          ref={packInput}
-          type="file"
-          accept=".zip,application/zip"
-          hidden
-          onClick={(event) => event.stopPropagation()}
-          onChange={importPack}
-        />
-      </div>
+          <input ref={fileInput} type="file" multiple accept=".pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg,.webp" onChange={(event) => addFiles(event.target.files)} />
+          <div className="upload-icon"><UploadCloud size={28} /></div>
+          <h3>拖入学习资料，或点击选择文件</h3>
+          <p>支持 PDF、DOCX、TXT、Markdown、PNG、JPG、WebP · 单个文件不超过 100 MB</p>
+          <div className="upload-hint"><Zap size={14} /> PDF 扫描页、文档截图和单独图片会进入 OCR 识别流程</div>
+          <button
+            type="button"
+            className="secondary-btn pack-import-btn"
+            disabled={loading || packLoading || !!analysisTask}
+            onClick={(event) => {
+              event.stopPropagation();
+              packInput.current?.click();
+            }}
+          >
+            {packLoading ? <Spinner /> : <Archive size={16} />}
+            {packLoading ? "正在上传学科包…" : "导入学科包"}
+          </button>
+          <input
+            ref={packInput}
+            type="file"
+            accept=".zip,application/zip"
+            hidden
+            onClick={(event) => event.stopPropagation()}
+            onChange={importPack}
+          />
+        </div>
+      ) : (
+        <div className="upload-zone upload-zone-native-disabled" role="note">
+          <div className="upload-icon"><UploadCloud size={28} /></div>
+          <h3>手机端不提供资料上传</h3>
+          <p>请在电脑打开 study.aidigitcloud.cn，上传课件或导入学科包后再回手机练习。</p>
+        </div>
+      )}
 
       {packLoading && (
         <div className="analysis-task-card" role="status">

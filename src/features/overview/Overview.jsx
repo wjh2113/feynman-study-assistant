@@ -16,6 +16,7 @@ import {
 } from "../../components/icons.jsx";
 import { stageLabels } from "../../lib/nav.js";
 import { generateLearningPlan } from "../../api/projects.js";
+import { supportsMaterialUpload } from "../../lib/runtime.js";
 
 const STAGE_CAPTIONS = [
   "上传并梳理学科资料",
@@ -184,10 +185,27 @@ export function Overview({ project, selectedDocumentIds = [], navigate, updatePr
         <div className="overview-stack">
           <section className="next-task-card">
             <span className="section-kicker">下一步</span>
-            <h2>{sourceCount ? "下一步：开始费曼对练" : "先上传学习资料"}</h2>
-            <p>{sourceCount ? "向一个好奇的 12 岁小孩讲清楚" : "学科资料用于知识地图与问答；上传后即可开始对练。"}</p>
+            <h2>
+              {sourceCount
+                ? "下一步：开始费曼对练"
+                : supportsMaterialUpload()
+                  ? "先上传学习资料"
+                  : "先在电脑端准备资料"}
+            </h2>
+            <p>
+              {sourceCount
+                ? "向一个好奇的 12 岁小孩讲清楚"
+                : supportsMaterialUpload()
+                  ? "学科资料用于知识地图与问答；上传后即可开始对练。"
+                  : "手机端不支持上传。请在电脑网页端上传课件后，再回手机开始对练。"}
+            </p>
             <button className="primary-btn" type="button" onClick={() => navigate(sourceCount ? "coach" : "sources")}>
-              <Play size={15} /> {sourceCount ? "开始费曼对练" : "去上传资料"}
+              <Play size={15} />
+              {sourceCount
+                ? "开始费曼对练"
+                : supportsMaterialUpload()
+                  ? "去上传资料"
+                  : "查看学习资料"}
             </button>
           </section>
 
