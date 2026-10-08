@@ -258,14 +258,15 @@ export function RagAssistant({ project, navigate, showToast, refreshProject }) {
                 <div className="rag-debug-list compact">
                   {debugCandidates.map((candidate) => {
                     const heading = candidate.headingPath || candidate.heading || "";
+                    const label = [
+                      shortFilename(candidate.filename),
+                      candidate.page != null ? `第 ${candidate.page} 页` : "",
+                      heading
+                    ].filter(Boolean).join(" · ");
                     return (
-                      <article key={candidate.id}>
-                        <strong title={candidate.filename}>
-                          {shortFilename(candidate.filename)}
-                          {candidate.page != null ? ` · 第 ${candidate.page} 页` : ""}
-                          {heading ? ` · ${heading}` : ""}
-                        </strong>
-                        <em>{scoreLabel(candidate)}</em>
+                      <article className="rag-debug-row" key={candidate.id}>
+                        <strong title={label}>{label}</strong>
+                        <span className="rag-debug-score">{scoreLabel(candidate)}</span>
                       </article>
                     );
                   })}
