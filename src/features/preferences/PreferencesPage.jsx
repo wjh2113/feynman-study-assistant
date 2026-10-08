@@ -196,7 +196,7 @@ export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
                       <FileText size={20} />
                       <div>
                         <strong>知识地图分析</strong>
-                        <span>超长资料自动拆分调用 quality-chat，再合并成地图</span>
+                        <span>超长资料自动拆分调用 fast-chat，再合并成地图</span>
                       </div>
                     </div>
                   </div>
@@ -287,7 +287,7 @@ export function PreferencesPage({ showToast, user, initialTab = "learning" }) {
             <div className="concept-note">
               <span className="section-kicker">拆分分析</span>
               <h3>长文更稳</h3>
-              <p>超过阈值走「分段摘要 → 合并地图」；短文仍一次 quality-chat。入库仍是两阶段，先可检索再出地图。</p>
+              <p>超过阈值走「分段摘要 → 合并地图」；短文仍一次 fast-chat。入库仍是两阶段，先可检索再出地图。</p>
             </div>
             <div className="concept-note">
               <span className="section-kicker">OCR 说明</span>

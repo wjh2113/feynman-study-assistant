@@ -639,7 +639,7 @@ export function Sources({
               ? "正在后台重嵌剩余资料并重建知识地图…"
               : project.description?.includes("重新总结")
                 ? "正在后台重新总结知识地图…"
-                : "资料已可检索，知识地图正在后台用 quality-chat 生成…"}
+                : "资料已可检索，知识地图正在后台用 fast-chat 生成…"}
           </span>
         </div>
       )}
