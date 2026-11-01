@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import { ArrowRight, X } from "./icons.jsx";
 import { Spinner } from "./Spinner.jsx";
-import { generateLearningPlan } from "../api/projects.js";
 
 function localFallbackPlan({ title, goal, level }) {
   const subject = String(title || "").trim() || "该学科";
@@ -32,7 +31,8 @@ function localFallbackPlan({ title, goal, level }) {
     materialAdvice: ["优先上传能讲清原理的资料", "笔记与教材对照上传"],
     practiceAdvice: ["先解释是什么与为什么，再给失效边界", "对练时尽量关掉原文"],
     milestones: [`能讲清「${subject}」的核心问题`, "完成至少 3 次费曼对练"],
-    warnings: ["先锁高价值概念，不要追求一次覆盖全部"]
+    warnings: ["先锁高价值概念，不要追求一次覆盖全部"],
+    demo: true
   };
 }
 
@@ -49,34 +49,33 @@ export function CreateProjectModal({ onClose, onCreate, showToast }) {
     if (busy) return;
     setBusy(true);
     try {
-      let plan = null;
-      try {
-        const planResponse = await generateLearningPlan({
-          title: form.title,
+      const plan = localFallbackPlan(form);
+      await onCreate(
+        {
+          id: `project-${Date.now()}`,
+          title: form.title.trim() || "新的学科",
+          description: plan?.summary || "上传学习资料后，AI 将生成学科知识地图；勾选资料后即可开始费曼对练。",
+          mode: "subject",
           goal: form.goal,
-          level: form.level
-        });
-        plan = planResponse.plan;
-      } catch (error) {
-        plan = localFallbackPlan(form);
-        showToast?.(error.message || "规划服务暂不可用，已使用本地建议规划");
-      }
-      await onCreate({
-        id: `project-${Date.now()}`,
-        title: form.title.trim() || "新的学科",
-        description: plan?.summary || "上传学习资料后，AI 将生成学科知识地图；勾选资料后即可开始费曼对练。",
-        mode: "subject",
-        goal: form.goal,
-        level: form.level,
-        createdAt: Date.now(),
-        progress: 0,
-        analysis: { summary: "", highValue: [], modules: [], tacitKnowledge: [], scenarios: [], sources: [] },
-        blindspots: [],
-        sessions: [],
-        onePager: null,
-        learningPlan: plan || null,
-        practiceDocumentIds: []
-      });
+          level: form.level,
+          createdAt: Date.now(),
+          progress: 0,
+          analysis: { summary: "", highValue: [], modules: [], tacitKnowledge: [], scenarios: [], sources: [] },
+          blindspots: [],
+          sessions: [],
+          onePager: null,
+          learningPlan: plan || null,
+          practiceDocumentIds: []
+        },
+        {
+          refinePlan: true,
+          planInput: {
+            title: form.title.trim() || "新的学科",
+            goal: form.goal,
+            level: form.level
+          }
+        }
+      );
     } catch (error) {
       showToast?.(error.message || "创建学科失败");
     } finally {
@@ -90,14 +89,14 @@ export function CreateProjectModal({ onClose, onCreate, showToast }) {
         <div className="modal-head">
           <div>
             <span>新建学科</span>
-            <small>{busy ? "正在生成学习规划…" : `第 ${step} 步，共 2 步`}</small>
+            <small>{busy ? "正在创建…" : `第 ${step} 步，共 2 步`}</small>
           </div>
           <button className="icon-btn" onClick={onClose} disabled={busy}><X size={19} /></button>
         </div>
         <div className="modal-progress"><i style={{ width: busy ? "100%" : `${step * 50}%` }} /></div>
         {busy ? (
           <div className="modal-body">
-            <div className="settings-loading"><Spinner /> 正在根据你的目标与基础生成学习规划与建议…</div>
+            <div className="settings-loading"><Spinner /> 正在创建学科…</div>
           </div>
         ) : step === 1 ? (
           <div className="modal-body">
@@ -139,7 +138,7 @@ export function CreateProjectModal({ onClose, onCreate, showToast }) {
                 <option>有一些经验</option>
               </select>
             </div>
-            <p className="field-hint">创建后会由 AI 根据目标与基础推断周期、节奏与阶段安排，无需你再选投入时长。</p>
+            <p className="field-hint">创建后会立即生成可用规划，并在后台用快速模型精炼周期与阶段安排。</p>
           </div>
         )}
         <div className="modal-foot">
@@ -152,7 +151,7 @@ export function CreateProjectModal({ onClose, onCreate, showToast }) {
             onClick={() => (step === 1 ? setStep(2) : create())}
             disabled={busy || (step === 1 && !form.title.trim())}
           >
-            {busy ? <><Spinner /> 生成规划中</> : step === 1 ? <>下一步 <ArrowRight size={16} /></> : <>创建并生成规划 <ArrowRight size={16} /></>}
+            {busy ? <><Spinner /> 创建中</> : step === 1 ? <>下一步 <ArrowRight size={16} /></> : <>创建学科 <ArrowRight size={16} /></>}
           </button>
         </div>
       </div>

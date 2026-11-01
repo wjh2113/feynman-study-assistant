@@ -27,7 +27,8 @@ import {
   listProjects,
   listSessions,
   putProject,
-  deleteProject
+  deleteProject,
+  generateLearningPlan
 } from "../api/projects.js";
 import { getIngestion, listIngestions, retryIngestion as retryIngestionApi } from "../api/ingest.js";
 import { useAuth } from "../features/auth/useAuth.js";
@@ -453,7 +454,7 @@ export function App() {
     closeSidebar();
   };
 
-  const handleCreate = async (newProject) => {
+  const handleCreate = async (newProject, options = {}) => {
     try {
       await putProject(newProject.id, newProject);
       setProjects((items) => [newProject, ...items]);
@@ -461,7 +462,23 @@ export function App() {
       setSelectedDocumentIdsState([]);
       setActiveView("overview");
       setCreateOpen(false);
-      showToast("学科已创建，已生成学习规划");
+      showToast("学科已创建");
+      if (options.refinePlan && options.planInput) {
+        const projectId = newProject.id;
+        generateLearningPlan(options.planInput)
+          .then(async (data) => {
+            if (!data?.plan || data.demo) return;
+            const patch = {
+              learningPlan: data.plan,
+              description: data.plan.summary || newProject.description
+            };
+            await saveProjectPatch(patch, projectId);
+            showToast("学习规划已生成");
+          })
+          .catch(() => {
+            /* 本地规划已可用，精炼失败时保持现状 */
+          });
+      }
     } catch (error) {
       showToast(error.message || "创建学科失败");
     }

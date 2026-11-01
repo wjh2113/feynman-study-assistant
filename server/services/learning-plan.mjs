@@ -2,6 +2,11 @@ import { isLlmConfigured } from "../gateway-client.mjs";
 import { withAntiInjection, wrapUntrusted } from "../prompt-safety.mjs";
 import { fastJson } from "./llm.mjs";
 
+/** Prefer a non-reasoning fast model so新建学科不会卡在思考链上。 */
+const LEARNING_PLAN_MODEL = String(process.env.LEARNING_PLAN_MODEL || "Qwen/Qwen2.5-7B-Instruct").trim();
+const LEARNING_PLAN_TIMEOUT_MS = Number(process.env.LEARNING_PLAN_TIMEOUT_MS || 20_000);
+const LEARNING_PLAN_MAX_TOKENS = Number(process.env.LEARNING_PLAN_MAX_TOKENS || 450);
+
 function demoLearningPlan({ title, goal, level }) {
   const subject = title || "该学科";
   const horizon =
@@ -114,16 +119,17 @@ export async function generateLearningPlan({ userId, title, goal, level }) {
   }
 
   try {
-    const result = await fastJson([
-      {
-        role: "system",
-        content: withAntiInjection(
-          "你是费曼学习教练。根据用户的学科、目标与基础，给出可执行的学习规划。不要空洞励志；周期与节奏要具体；字段尽量短。只输出合法 JSON。"
-        )
-      },
-      {
-        role: "user",
-        content: `请为以下学习者制定规划（以下三项已给定，禁止声称未提供）：
+    const result = await fastJson(
+      [
+        {
+          role: "system",
+          content: withAntiInjection(
+            "你是费曼学习教练。根据用户的学科、目标与基础，给出可执行的学习规划。不要空洞励志；周期与节奏要具体；字段尽量短。只输出合法 JSON。"
+          )
+        },
+        {
+          role: "user",
+          content: `请为以下学习者制定规划（以下三项已给定，禁止声称未提供）：
 ${wrapUntrusted("学习者信息", `学科：${input.title}\n学习目标：${input.goal}\n当前基础：${input.level}`)}
 
 返回 JSON：
@@ -137,9 +143,18 @@ ${wrapUntrusted("学习者信息", `学科：${input.title}\n学习目标：${in
   "milestones": ["可检验里程碑"],
   "warnings": ["常见坑"]
 }
-要求：phases 3-4 个；总周期由你根据目标与基础推断，不要问用户再填时长；行动要能在本产品中落地（上传资料、勾选练习、费曼对练、盲区复测、一页纸）；摘要与阶段内容必须紧扣「${input.title}」。`
+要求：phases 正好 3 个；总周期由你根据目标与基础推断，不要问用户再填时长；行动要能在本产品中落地（上传资料、勾选练习、费曼对练、盲区复测、一页纸）；摘要与阶段内容必须紧扣「${input.title}」；不要输出思考过程。`
+        }
+      ],
+      0.35,
+      userId,
+      LEARNING_PLAN_TIMEOUT_MS,
+      LEARNING_PLAN_MAX_TOKENS,
+      {
+        model: LEARNING_PLAN_MODEL || undefined,
+        allowQualityFallback: false
       }
-    ], 0.4, userId, Number(process.env.GENERATION_TIMEOUT_MS || 90_000), 1200);
+    );
 
     const plan = normalizePlan({ ...result, demo: false }, fallback);
     return { status: 200, body: { plan, demo: false } };

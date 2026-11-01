@@ -49,6 +49,18 @@ if sudo grep -q '^ONE_PAGER_TIMEOUT_MS=' .env; then
 else
   echo 'ONE_PAGER_TIMEOUT_MS=180000' | sudo tee -a .env >/dev/null
 fi
+# 新建学科学习规划：固定快模型，避免思考链拖慢
+upsert_env() {
+  local key="\$1" value="\$2"
+  if sudo grep -q "^\$key=" .env; then
+    sudo sed -i "s|^\$key=.*|\$key=\$value|" .env
+  else
+    echo "\$key=\$value" | sudo tee -a .env >/dev/null
+  fi
+}
+upsert_env LEARNING_PLAN_MODEL 'Qwen/Qwen2.5-7B-Instruct'
+upsert_env LEARNING_PLAN_TIMEOUT_MS '20000'
+upsert_env LEARNING_PLAN_MAX_TOKENS '450'
 sudo pm2 restart zhifan-feynman-study --update-env
 sleep 3
 PORT=\$(sudo grep -E '^PORT=' .env | cut -d= -f2 || echo 8787)

@@ -80,9 +80,10 @@ async function completeChat(config, messages, temperature, timeoutMs, jsonObject
   }
 }
 
-async function completeViaGateway(messages, temperature, timeoutMs, jsonObject, userId, capability, maxTokens) {
+async function completeViaGateway(messages, temperature, timeoutMs, jsonObject, userId, capability, maxTokens, model) {
   return gatewayChat({
     capability,
+    model,
     messages,
     temperature,
     max_tokens: maxTokens,
@@ -103,7 +104,8 @@ export async function chatJson(
     userId,
     timeoutMs = Number(process.env.GENERATION_TIMEOUT_MS || 90_000),
     capability = "quality-chat",
-    maxTokens
+    maxTokens,
+    model
   } = {}
 ) {
   const gateway = isGatewayEnabled();
@@ -112,7 +114,7 @@ export async function chatJson(
 
   const run = (jsonObject) =>
     gateway
-      ? completeViaGateway(messages, temperature, timeoutMs, jsonObject, userId, capability, maxTokens)
+      ? completeViaGateway(messages, temperature, timeoutMs, jsonObject, userId, capability, maxTokens, model)
       : completeChat(config, messages, temperature, timeoutMs, jsonObject);
 
   try {
@@ -151,13 +153,24 @@ export async function fastJson(
   temperature = 0.35,
   userId,
   timeoutMs = Number(process.env.INGESTION_GENERATION_TIMEOUT_MS || 180_000),
-  maxTokens
+  maxTokens,
+  {
+    model,
+    allowQualityFallback = true
+  } = {}
 ) {
   try {
-    return await chatJson(messages, { temperature, userId, timeoutMs, capability: "fast-chat", maxTokens });
+    return await chatJson(messages, {
+      temperature,
+      userId,
+      timeoutMs,
+      capability: "fast-chat",
+      maxTokens,
+      model
+    });
   } catch (error) {
     // If fast-chat upstream/fallback chain is unhealthy, fall back once to quality-chat.
-    if (!isGatewayEnabled()) throw error;
+    if (!allowQualityFallback || !isGatewayEnabled()) throw error;
     return chatJson(messages, {
       temperature,
       userId,

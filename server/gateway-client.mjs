@@ -117,6 +117,7 @@ async function gatewayFetch(path, { method = "POST", body, headers = {}, timeout
 
 export async function gatewayChat({
   capability = "quality-chat",
+  model,
   messages,
   temperature,
   max_tokens,
@@ -137,6 +138,7 @@ export async function gatewayChat({
   if (tenantId) payload.tenantId = tenantId;
   if (userId) payload.userId = String(userId);
   if (idempotencyKey) payload.idempotencyKey = idempotencyKey;
+  if (model) payload.model = String(model).trim();
   if (temperature !== undefined) payload.temperature = temperature;
   if (max_tokens !== undefined) payload.max_tokens = max_tokens;
   if (response_format) payload.response_format = response_format;
