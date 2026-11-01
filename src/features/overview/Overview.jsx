@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { PageHeading } from "../../components/PageHeading.jsx";
 import { EmptyMini } from "../../components/EmptyMini.jsx";
 import { Spinner } from "../../components/Spinner.jsx";
@@ -48,7 +48,11 @@ function priorityClass(priority = "") {
 
 export function Overview({ project, selectedDocumentIds = [], navigate, updateProject, saveProjectPatch, refreshProject, showToast }) {
   const [planBusy, setPlanBusy] = useState(false);
+  const planPollRef = useRef(0);
   const plan = project.learningPlan;
+  const planRunning = project.learningPlanStatus === "running"
+    || project.learningPlanMeta?.status === "running"
+    || planBusy;
   const concepts = project.analysis?.modules?.flatMap((module) => module.concepts) || [];
   const mastered = concepts.filter((item) => item.mastery >= 3).length;
   const inProgress = concepts.filter((item) => item.mastery === 2).length;
@@ -65,30 +69,64 @@ export function Overview({ project, selectedDocumentIds = [], navigate, updatePr
     ? `${plan.phases?.length || 3} 阶段 · ${plan.moduleCount} 个核心模块`
     : `${plan?.phases?.length || 3} 阶段 · ${concepts.length || 8} 个核心模块`;
 
+  useEffect(() => {
+    const running = project.learningPlanStatus === "running" || project.learningPlanMeta?.status === "running";
+    if (!running || !refreshProject || !project.id) return undefined;
+    let stopped = false;
+    const tick = async () => {
+      if (stopped) return;
+      planPollRef.current += 1;
+      if (planPollRef.current > 40) {
+        setPlanBusy(false);
+        return;
+      }
+      try {
+        const updated = await refreshProject(project.id);
+        const stillRunning = updated?.learningPlanStatus === "running"
+          || updated?.learningPlanMeta?.status === "running";
+        if (!stillRunning) {
+          setPlanBusy(false);
+          if (updated?.learningPlanMeta?.status === "ready") {
+            showToast?.("学习规划已更新");
+          }
+          return;
+        }
+      } catch {
+        /* keep polling */
+      }
+      window.setTimeout(tick, 2500);
+    };
+    const timer = window.setTimeout(tick, 2000);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, [project.id, project.learningPlanStatus, project.learningPlanMeta?.status, refreshProject, showToast]);
+
   const refreshPlan = async () => {
-    if (planBusy) return;
+    if (planRunning) return;
     setPlanBusy(true);
+    planPollRef.current = 0;
     try {
-      const data = await generateLearningPlan({
+      updateProject?.({
+        learningPlanStatus: "running",
+        learningPlanMeta: { status: "running", updatedAt: Date.now(), queuedAt: Date.now() }
+      });
+      await generateLearningPlan({
         title: project.title,
         goal: project.goal,
-        level: project.level
+        level: project.level,
+        projectId: project.id,
+        background: true
       });
-      const patch = {
-        learningPlan: data.plan,
-        description: data.plan?.summary || project.description
-      };
-      if (saveProjectPatch) {
-        await saveProjectPatch(patch);
-      } else {
-        updateProject?.(patch);
-      }
-      await refreshProject?.(project.id);
-      showToast?.("学习规划已更新");
+      showToast?.("学习规划已在后台生成");
     } catch (error) {
-      showToast?.(error.message || "更新规划失败");
-    } finally {
       setPlanBusy(false);
+      updateProject?.({
+        learningPlanStatus: "ready",
+        learningPlanMeta: { status: "ready", updatedAt: Date.now(), error: error.message }
+      });
+      showToast?.(error.message || "提交规划任务失败");
     }
   };
 
@@ -99,12 +137,18 @@ export function Overview({ project, selectedDocumentIds = [], navigate, updatePr
         title={project.title}
         description={project.description || plan?.summary}
         action={(
-          <button className="secondary-btn" type="button" onClick={refreshPlan} disabled={planBusy}>
-            {planBusy ? <Spinner /> : <RotateCcw size={14} />}
-            {planBusy ? "生成中…" : "重新规划"}
+          <button className="secondary-btn" type="button" onClick={refreshPlan} disabled={planRunning}>
+            {planRunning ? <Spinner /> : <RotateCcw size={14} />}
+            {planRunning ? "后台生成中…" : "重新规划"}
           </button>
         )}
       />
+
+      {planRunning && (
+        <div className="banner info-banner" style={{ marginBottom: 14 }}>
+          <Spinner /> 学习规划正在后台生成，当前可先按现有规划学习，完成后会自动更新。
+        </div>
+      )}
 
       {plan && (
         <section className="panel learning-plan-card">

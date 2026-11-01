@@ -138,7 +138,7 @@ export function CreateProjectModal({ onClose, onCreate, showToast }) {
                 <option>有一些经验</option>
               </select>
             </div>
-            <p className="field-hint">创建后会立即生成可用规划，并在后台用快速模型精炼周期与阶段安排。</p>
+            <p className="field-hint">创建后立刻可用；学习规划在后台生成，完成后概览页会自动更新。</p>
           </div>
         )}
         <div className="modal-foot">

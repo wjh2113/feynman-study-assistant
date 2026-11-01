@@ -1,5 +1,7 @@
 import { isLlmConfigured } from "../gateway-client.mjs";
 import { withAntiInjection, wrapUntrusted } from "../prompt-safety.mjs";
+import { getProject, saveProject } from "../storage.mjs";
+import { enqueueTask } from "../task-queue.mjs";
 import { fastJson } from "./llm.mjs";
 
 /** Prefer a non-reasoning fast model so新建学科不会卡在思考链上。 */
@@ -168,4 +170,68 @@ ${wrapUntrusted("学习者信息", `学科：${input.title}\n学习目标：${in
       }
     };
   }
+}
+
+async function markLearningPlanStatus(projectId, userId, status, extra = {}) {
+  const project = await getProject(projectId, userId);
+  if (!project) return null;
+  const next = {
+    ...project,
+    userId,
+    learningPlanStatus: status,
+    learningPlanMeta: {
+      ...(project.learningPlanMeta || {}),
+      status,
+      updatedAt: Date.now(),
+      ...extra
+    }
+  };
+  await saveProject(next);
+  return next;
+}
+
+export async function runLearningPlanJob(payload = {}, progress = () => {}) {
+  const { projectId, userId, title, goal, level } = payload;
+  if (!projectId || !userId) throw new Error("缺少 projectId 或 userId");
+  try {
+    progress(10);
+    await markLearningPlanStatus(projectId, userId, "running", { error: null });
+    progress(25);
+    const result = await generateLearningPlan({
+      userId,
+      title,
+      goal,
+      level
+    });
+    progress(80);
+    const project = await getProject(projectId, userId);
+    if (!project) throw new Error("学习项目不存在");
+    const plan = result.body?.plan;
+    const demo = Boolean(result.body?.demo);
+    await saveProject({
+      ...project,
+      userId,
+      description: plan?.summary || project.description,
+      learningPlan: plan || project.learningPlan || null,
+      learningPlanStatus: "ready",
+      learningPlanMeta: {
+        status: "ready",
+        updatedAt: Date.now(),
+        demo,
+        warning: result.body?.warning || null
+      }
+    });
+    progress(100);
+    return { projectId, demo, warning: result.body?.warning || null };
+  } catch (error) {
+    await markLearningPlanStatus(projectId, userId, "failed", { error: error.message }).catch(() => {});
+    throw error;
+  }
+}
+
+export async function enqueueLearningPlanJob(payload) {
+  const { projectId, userId } = payload;
+  if (!projectId || !userId) throw new Error("缺少 projectId 或 userId");
+  await markLearningPlanStatus(projectId, userId, "running", { error: null, queuedAt: Date.now() });
+  return enqueueTask("learning-plan", payload, runLearningPlanJob);
 }

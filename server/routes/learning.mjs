@@ -15,7 +15,7 @@ import {
 } from "../storage.mjs";
 import { rateLimit } from "../middleware/security.mjs";
 import { generateOnePager, generateVariantQuestion, diagnoseCoachSession, runCoachTurn } from "../services/coach.mjs";
-import { generateLearningPlan } from "../services/learning-plan.mjs";
+import { enqueueLearningPlanJob, generateLearningPlan } from "../services/learning-plan.mjs";
 import { generatePracticeQuestions } from "../services/practice-questions.mjs";
 
 const router = Router();
@@ -246,10 +246,32 @@ router.post("/api/one-pager", async (req, res) => {
 });
 
 router.post("/api/learning-plan", rateLimit({ windowMs: 60_000, max: 20, keyPrefix: "learning-plan" }), async (req, res) => {
-  const { title, goal, level } = req.body || {};
+  const { title, goal, level, projectId, background } = req.body || {};
   if (!String(title || "").trim()) {
     return res.status(400).json({ error: "请先填写学科名称" });
   }
+
+  // 有 projectId 时默认后台执行，避免新建学科 / 重新规划卡住页面
+  const runInBackground = Boolean(projectId) && background !== false;
+  if (runInBackground) {
+    const project = await getProject(projectId, req.userId);
+    if (!project) return res.status(404).json({ error: "学习项目不存在" });
+    const job = await enqueueLearningPlanJob({
+      projectId,
+      userId: req.userId,
+      title: title || project.title,
+      goal: goal || project.goal,
+      level: level || project.level
+    });
+    return res.status(202).json({
+      queued: true,
+      jobId: job.id,
+      status: job.status || "waiting",
+      projectId,
+      learningPlanStatus: "running"
+    });
+  }
+
   const result = await generateLearningPlan({
     userId: req.userId,
     title,

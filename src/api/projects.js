@@ -140,10 +140,15 @@ export function generateOnePager(project, { chapter, documentIds, practiceDocume
   }, 200_000, "一页纸生成");
 }
 
-export function generateLearningPlan({ title, goal, level }) {
-  return apiFetch("/api/learning-plan", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, goal, level })
-  });
+export function generateLearningPlan({ title, goal, level, projectId, background = Boolean(projectId) }) {
+  return fetchJsonWithTimeout(
+    "/api/learning-plan",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, goal, level, projectId, background })
+    },
+    background ? 15_000 : 60_000,
+    background ? "提交学习规划任务" : "生成学习规划"
+  );
 }

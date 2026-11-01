@@ -456,28 +456,23 @@ export function App() {
 
   const handleCreate = async (newProject, options = {}) => {
     try {
-      await putProject(newProject.id, newProject);
-      setProjects((items) => [newProject, ...items]);
-      setActiveProjectId(newProject.id);
+      const seeded = options.refinePlan
+        ? {
+          ...newProject,
+          learningPlanStatus: "running",
+          learningPlanMeta: { status: "running", updatedAt: Date.now(), queuedAt: Date.now() }
+        }
+        : newProject;
+      await putProject(seeded.id, seeded);
+      setProjects((items) => [seeded, ...items]);
+      setActiveProjectId(seeded.id);
       setSelectedDocumentIdsState([]);
       setActiveView("overview");
       setCreateOpen(false);
-      showToast("学科已创建");
+      showToast(options.refinePlan ? "学科已创建，学习规划正在后台生成" : "学科已创建");
       if (options.refinePlan && options.planInput) {
-        const projectId = newProject.id;
-        generateLearningPlan(options.planInput)
-          .then(async (data) => {
-            if (!data?.plan || data.demo) return;
-            const patch = {
-              learningPlan: data.plan,
-              description: data.plan.summary || newProject.description
-            };
-            await saveProjectPatch(patch, projectId);
-            showToast("学习规划已生成");
-          })
-          .catch(() => {
-            /* 本地规划已可用，精炼失败时保持现状 */
-          });
+        // 服务端任务队列执行；概览页会按 learningPlanStatus 轮询刷新
+        generateLearningPlan({ ...options.planInput, projectId: seeded.id, background: true }).catch(() => {});
       }
     } catch (error) {
       showToast(error.message || "创建学科失败");
